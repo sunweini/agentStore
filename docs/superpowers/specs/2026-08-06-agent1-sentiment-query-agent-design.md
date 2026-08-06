@@ -44,9 +44,10 @@
 agents/agent1/
 ├── CLAUDE.md                    # 按 dev-standards §6 模板
 ├── __init__.py
-├── agent.py                     # 图构建:6 步流水线 + SqliteSaver
+├── agent.py                     # 图构建:6 步流水线 + AsyncSqliteSaver
 ├── api.py                       # FastAPI:提交/进度/方案/勾选/入库/导出
-├── auth.py                      # apikey 鉴权 + 计费
+├── auth.py                      # apikey 鉴权 + 资源归属校验
+├── billing.py                   # 计费:创建 group 记 pending,commit 转正式
 ├── graph/
 │   ├── __init__.py
 │   ├── state.py                 # 数据模型:方案组/方案/轨/步骤状态
@@ -60,8 +61,6 @@ agents/agent1/
 │       ├── references/          # 方法论 4 件 + output-formats.md(6 步格式契约)
 │       ├── assets/              # task_spec_example.json
 │       └── scripts/             # step1..6 分步脚本 + build_task_xlsx.py
-├── prompts/
-│   ├── step1.md … step6.md      # 每步节点 prompt(该步做什么 + 输出格式)
 ├── tools/
 │   ├── __init__.py
 │   └── websearch.py             # gateway MCP 池封装(3 引擎自动切换)
@@ -103,6 +102,8 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 - 步骤 4+5+6 合并 = 完整 tasks 行;步骤 3 = keywords 行;拼图式组装,导出零转换。
 - 每步脚本:校验字段、标准化、补默认值、缺字段记 GAP(编号 GAP00N)。
 - 格式定义唯一来源:skill `references/output-formats.md`,节点 prompt 引用它。
+- **两机制职责分离**:`load_skill` 取方法论知识(SKILL.md/references,喂 LLM 理解怎么干);`stepN.py` 只做格式契约(LLM 原始输出 → 固定 JSON 标准化)。互不替代。
+- **LLM 输出形式**:每步节点强制 LLM 输出 JSON(节点 prompt 规定),stepN.py 接收 JSON 做校验/补默认/记 GAP。LLM 输出非 JSON → 脚本返回格式错误,节点重试 2 次,仍错标 error + GAP。
 
 ## 6. Skill 目录策略与加载(用户指定 + 官方 skill 架构 + 分步脚本改造)
 
@@ -137,9 +138,8 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 
 ## 8. 鉴权与计费
 
-- apikey:`Authorization: Bearer <apikey>`,合法 key 列表配 `.env`/JSON 文件,标识用户。
-- **资源归属校验**:每个 group 记录 `owner`(apikey 标识的用户)。所有 `/groups/{id}/*` 接口校验归属,越权返回 403。apikey 模型也必须防跨用户访问。
-- 计费:一次完整流程 = 1 计费单位。**每次提交生成(创建 group)计一次**,commit 时冻结计费记录(防"重新生成"刷计费)。进度查询/勾选不重复计费。
+- **鉴权**(`auth.py`):apikey 校验(`Authorization: Bearer <apikey>`,合法 key 列表配 `.env`/JSON 文件)+ 资源归属校验(每个 group 记录 `owner`,所有 `/groups/{id}/*` 接口校验归属,越权 403)。apikey 模型防跨用户访问。
+- **计费**(`billing.py`,独立于 auth):一次完整流程 = 1 计费单位。创建 group 时记 pending 计费记录,commit 时转正式计费(1 单位);未 commit(失败/取消/过期)不计费。防刷:同一 apikey 的 pending 记录限并发数(如最多 5 个)。进度查询/勾选不重复计费。
 - 计费记录:`data/billing/<user>.json`,commit 时记 `{group_id, user, created_at, committed_at}`。
 
 ## 9. OpenTelemetry 全链路(已写入 dev-standards §5)
@@ -164,7 +164,7 @@ fastapi / uvicorn / langchain-mcp-adapters / opentelemetry-sdk / opentelemetry-e
 
 ## 12. 测试
 
-- skill 分步脚本单测(6 个脚本格式契约/缺字段记 GAP)/ skill loader 单测 / websearch 池单测(mock)/ 数据模型单测 / 图单测(mock LLM+websearch)/ API 单测(鉴权/归属/计费/入库)/ 端到端(有 key+MCP)。
+- skill 分步脚本单测(6 个脚本格式契约/缺字段记 GAP)/ skill loader 单测 / websearch 池单测(mock)/ 数据模型单测 / 图单测(mock LLM+websearch)/ API 单测(鉴权/资源归属校验 403/计费 pending→commit/入库冻结)/ 端到端(有 key+MCP)。
 
 ## 13. 范围外
 
