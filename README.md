@@ -22,6 +22,7 @@
 ## 设计文档
 
 - [Agent1 目录架构设计](docs/superpowers/specs/2026-08-06-agent1-langgraph-design.md)
+- [AI Agent 开发规范](docs/dev-standards.md)(所有 agent 开发必须依据 LangChain 官方文档与 API 指引)
 
 ## 快速开始(待实现后)
 
