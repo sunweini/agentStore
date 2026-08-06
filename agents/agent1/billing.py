@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "billing"
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "billing"
 _MAX_PENDING = 5  # 同一用户最多并发 pending 数
 _PENDING_TTL = timedelta(hours=24)  # pending 超时自动视为放弃
 

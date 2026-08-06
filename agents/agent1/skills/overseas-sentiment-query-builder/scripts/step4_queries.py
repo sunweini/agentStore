@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import TRACK_KEYS, emit, gap, load_input, norm_list, norm_str, with_gaps  # noqa: E402
+from _common import TRACK_KEYS, emit, fail, gap, load_input, norm_list, norm_str, with_gaps  # noqa: E402
 
 
 def main() -> None:
@@ -54,6 +54,8 @@ def main() -> None:
             "tracks": normed_tracks,
             "selected": True,
         })
+    if not normed:
+        fail("schemes 为空或全部无有效轨:LLM 未按格式输出轨(检查 key 是否在 a/b/c/快讯/司法/招标)")
     emit(with_gaps({"schemes": normed}))
 
 

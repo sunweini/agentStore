@@ -104,6 +104,8 @@ _STEP_PROMPTS = {
        '"terms": "\\"中文全称\\" \\"ABBR\\"", "lang": "全", "guard": "", "note": ""}}]}}',
     4: "你是检索式构建专家。基于关键词字典,按国别×项目群分组,写双轨(布尔+Google)检索式。"
        "先 websearch 验证,再输出 JSON。\n"
+       "重要:每轨的 key 字段只允许这 6 个值之一: a(全量轨) b(精准轨) c(不点名轨) 快讯 司法 招标。"
+       "boolean 字段是检索式本身,不是 key。\n"
        "输出格式(JSON,schemes 数组,每项含 tracks 数组):\n"
        '{{"schemes": [{{"id": "Q0", "name": "集团层", "region": "全语种", "lang": "中/英", '
        '"desc": "", "gaps": [], "tracks": [{{"key": "a", "boolean": "(...)", "google": "(...)"}}]}}]}}',

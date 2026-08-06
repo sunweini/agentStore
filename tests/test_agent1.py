@@ -23,6 +23,14 @@ from agents.agent1.graph.nodes import _extract_json
 from agents.agent1.store import converter, scheme_store
 from common import config
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_data_paths():
+    """运行时数据目录必须落在项目根 data/(防路径层级错)。"""
+    assert str(scheme_store._DATA_DIR).endswith(f"{_PROJECT_ROOT}/data/schemes")
+    assert str(billing._DATA_DIR).endswith(f"{_PROJECT_ROOT}/data/billing")
+
 _SCRIPTS = (
     Path(__file__).resolve().parent.parent
     / "agents" / "agent1" / "skills" / "overseas-sentiment-query-builder" / "scripts"

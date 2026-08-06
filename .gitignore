@@ -1,6 +1,9 @@
 # 环境变量(真实密钥,不提交)
 .env
 
+# 运行时数据(方案组/计费/checkpoint,不提交)
+data/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "schemes"
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "schemes"
 
 
 def _ensure_dir() -> None:
