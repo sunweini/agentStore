@@ -2,9 +2,20 @@
 langchain>=0.3
 langchain-core
 langgraph>=0.2
+langgraph-checkpoint-sqlite   # AsyncSqliteSaver(checkpointer,需单独安装)
 langchain-openai        # DeepSeek 经 ChatOpenAI 接入(OpenAI 兼容 API)
 langchain-anthropic     # 预留:后续接 Claude
 python-dotenv           # .env 加载
 
 # 开发/测试
 pytest
+
+# agent1(舆情方案生成 Agent)
+fastapi
+uvicorn
+langchain-mcp-adapters
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+openpyxl
+pydantic

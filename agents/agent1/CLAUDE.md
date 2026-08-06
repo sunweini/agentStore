@@ -1,38 +1,49 @@
 # agent1 开发指南
 
-通用多步骤任务 Agent(LangGraph 循环图),基于 LangChain/LangGraph 开发。
+海外舆情检索方案生成 Agent:用户输入一个中文公司名,自动完成 6 步流水线(实体测绘→主体画像→关键词字典→双轨检索式→属地信源→频次定级),产出方案组 + 组内多方案,经 API 勾选确认后固化入库。
 
 ## 本 agent 是什么
 
-- 职责:拆解任务 → 调用工具 → 汇总结果(当前为通用骨架,工具是 mock 占位)
-- 开发前必读:根目录 [CLAUDE.md](../../CLAUDE.md) 和 [docs/dev-standards.md](../../docs/dev-standards.md)(必须依据 langchain MCP 文档/API 开发)
+- 职责:把"监测某公司海外舆情"的模糊需求,变成可勾选确认的检索方案组,固化入库、可导出 Excel。
+- 开发前必读:根目录 [CLAUDE.md](../../CLAUDE.md) 和 [docs/dev-standards.md](../../docs/dev-standards.md)(必须依据 langchain MCP 文档/API 开发)。
 
 ## 架构
 
+6 步流水线顺序图,每步「websearch → LLM 生成 → 调 skill 分步脚本按格式传回」:
+
 ```
-START → agent_node ──有 tool_calls──→ tools_node
-              │                          │
-              └──────无 tool_calls───────┘
-                     → END
+START → step1 → step2 → step3 → step4 → step5 → step6 → END
+ 实体测绘  画像   关键词   检索式   信源   频次定级
 ```
 
 | 文件 | 职责 |
 |---|---|
-| [agent.py](agent.py) | 图构建:`build_agent()` 返回编译图。`langgraph.json` 注册入口 `agent1:build_agent` |
-| [utils/state.py](utils/state.py) | `AgentState`:`messages`(add_messages 自动追加)/ `task` / `result` |
-| [utils/nodes.py](utils/nodes.py) | `agent_node`(LLM 决策,加载 prompt、绑工具、发消息)、`should_continue`(官方标准路由) |
-| [utils/tools.py](utils/tools.py) | 工具定义 + `TOOLS` 列表(图绑定的工具清单) |
-| [prompts/system.md](prompts/system.md) | 系统提示词,`common/prompts.py` 的 `load_prompt("agent1")` 加载 |
+| [agent.py](agent.py) | 图构建入口:`run_pipeline()` 跑完整流水线,AsyncSqliteSaver checkpointer(thread_id=group_id) |
+| [api.py](api.py) | FastAPI:提交/进度/方案/勾选/入库/导出 6 接口 |
+| [auth.py](auth.py) | apikey 鉴权 + 资源归属校验(越权 403) |
+| [billing.py](billing.py) | 计费:创建记 pending,commit 转正式(1 单位),限并发 |
+| [graph/state.py](graph/state.py) | 数据模型:SchemeGroup→Scheme→Track 三级 + AgentState |
+| [graph/nodes.py](graph/nodes.py) | 6 步节点:每步内联 prompt + LLM(强制 JSON)+ 调 skill 脚本标准化 |
+| [graph/flows.py](graph/flows.py) | 图构建:顺序边,单步失败标 error 不中断 |
+| [tools/websearch.py](tools/websearch.py) | gateway MCP websearch 池(3 引擎自动切换,单例连接) |
+| [skills/loader.py](skills/loader.py) | load_skill 工具(渐进式披露,agent→common 查找) |
+| [store/scheme_store.py](store/scheme_store.py) | JSON 文件库(草稿/正式/索引) |
+| [store/converter.py](store/converter.py) | 勾选后的方案组 → skill spec 格式 → Excel |
 
 ## 常用操作
 
-- **加工具**:`utils/tools.py` 加 `@tool` 函数 → 加入 `TOOLS` 列表。图结构/节点不动。
-- **改提示词**:改 `prompts/system.md`。要按 node 拆多 prompt 时,在 `prompts/` 加 `xxx.md`,`load_prompt("agent1", "xxx")` 加载。
-- **接真实业务**:替换工具函数内部实现(mock → 真实 API),签名和图结构不动。
-- **跑测试**:`pytest tests/test_agent1.py`(端到端需 `.env` 配 `DEEPSEEK_API_KEY`,无 key 自动跳过)。
+- **改 6 步 prompt**:`graph/nodes.py` 的 `_STEP_PROMPTS`(内联,每步做什么 + 输出格式)。
+- **改 6 步格式契约**:`skills/overseas-sentiment-query-builder/references/output-formats.md` + 对应 `scripts/stepN.py`(校验/标准化/GAP)。
+- **加 skill**:复制到 `skills/`(agent 专属)或 `common/skills/`(共享),`loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要。
+- **接真实搜索**:`tools/websearch.py` 已接 gateway MCP 池;改 `.env` 的 `MCP_GATEWAY_URL/TOKEN`。
+- **配 apikey**:`.env` 的 `API_KEYS_JSON`(apikey→用户映射)。
+- **跑测试**:`pytest tests/test_agent1.py`(脚本/store/鉴权/计费单测;图/端到端需外部服务)。
+- **启动 API**:`uvicorn agents.agent1.api:app --reload`。
 
 ## 约束
 
-- LLM 经 `common/llm.py` 工厂获取(DeepSeek 默认,经 ChatOpenAI),不直接 new 模型。
-- prompt 从文件加载,不硬编码在代码里。
-- 日志结构化(key=value),遵循可观测性规范。
+- LLM 经 `common/llm.py` 工厂,不直接 new。
+- skill 分步脚本是格式契约唯一执行器,节点不手写格式化逻辑。
+- 用户标识(apikey)只进日志/计费,不进 span label(OTel 高基数约束)。
+- commit 后方案组冻结,改勾选须重新生成。
+- skill 原样保留在项目内(agent 专属),不依赖 ~/.claude/skills/。

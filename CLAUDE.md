@@ -24,9 +24,9 @@
 
 ## 项目状态
 
-- agent1 通用骨架完成,5 测试全过(端到端需 `DEEPSEEK_API_KEY`,无 key 自动跳过)。
-- 设计文档:`docs/superpowers/specs/2026-08-06-agent1-langgraph-design.md`
-- 后续:接真实业务工具(如金蝶)、新增 agent2、交互式试跑。
+- agent1 已重构为**海外舆情检索方案生成 Agent**:输入中文公司名 → 6 步流水线(skill 分步脚本按格式传回)→ 方案组 → API 勾选确认 → JSON 入库。10 测试全过。
+- 设计文档:`docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md`
+- 后续:接真实业务工具(如金蝶)、交互式试跑(需 MCP gateway + DeepSeek key)、真实监控主体验证。
 
 ## 技术栈
 

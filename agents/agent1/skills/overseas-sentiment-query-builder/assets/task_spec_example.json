@@ -1,0 +1,133 @@
+{
+  "_说明": "spec 模板。复制后替换为实际内容。tasks 每项=清单一行；keywords 每项=字典一行；extra_notes 追加到调度说明 sheet 末尾。",
+  "title": "XX集团舆情爬虫检索任务清单 · 使用说明",
+
+  "tasks": [
+    {
+      "_注释": "Q0 集团层全量轨。集团层通常只需 a+b 两式，不需要不点名轨。",
+      "id": "Q0",
+      "group": "集团层",
+      "region": "全语种",
+      "lang": "zh/en",
+      "boolean": "(\"公司英文注册名\" OR \"英文常用名\" OR \"英文缩写\" OR \"中文全称\" OR \"中文简称\") NOT (同名干扰词1 OR 同名干扰词2 OR 同名集团)",
+      "google": "(\"公司英文注册名\" OR \"英文缩写\" OR \"中文全称\") -同名干扰词1 -同名干扰词2 -同名集团",
+      "sources": ["reuters.com", "行业垂直媒体.com", "属地主流媒体.com"],
+      "frequency": "周级",
+      "risk": "medium",
+      "relevance": "direct",
+      "note": "全量轨。缩写噪音大时加 AND (行业词 OR 所在国)。母语检索式须附地域词隔离本国招采噪音"
+    },
+    {
+      "_注释": "Q0b 集团层精准轨：实体键 AND 风险词，只抓负面，可高频。",
+      "id": "Q0b",
+      "group": "集团层·负面精准",
+      "region": "全语种",
+      "lang": "zh/en",
+      "boolean": "(Q0实体簇) AND (strike OR protest OR accident OR death OR lawsuit OR court OR pollution OR arrest OR \"unpaid wages\" OR corruption)",
+      "google": "(\"英文缩写\" OR \"英文常用名\") (strike OR protest OR accident OR lawsuit OR pollution) -同名干扰词1",
+      "sources": ["reuters.com", "行业垂直媒体.com"],
+      "frequency": "日级",
+      "risk": "high",
+      "relevance": "direct",
+      "note": "精准轨。集团层任何负面直接升客户指标"
+    },
+    {
+      "_注释": "区域组不点名轨示例：地名键 AND 行业词 AND 外资标识，抓早期未点名信号。",
+      "id": "Q1c",
+      "group": "某国·某项目群·不点名",
+      "region": "某国",
+      "lang": "en",
+      "boolean": "(地名1 OR 地名2 OR 水系名 OR 设施名) AND (mine OR mining OR smelter OR tailings) AND (Chinese OR China-owned OR \"Chinese contractor\")",
+      "google": "(地名1 OR 地名2) (tailings OR spill OR acid) Chinese mine",
+      "sources": ["属地主流媒体.com", "属地调查报道媒体.org", "属地判例库.org", "主管部门.gov.xx"],
+      "frequency": "周级",
+      "risk": "high",
+      "relevance": "context",
+      "note": "context 捕捉，抓同区域未点名的外资企业负面。命中不计入客户自身负面指标"
+    },
+    {
+      "_注释": "人员安全级示例：涉战乱/治安，走快讯管道。",
+      "id": "Q6",
+      "group": "某国·高风险项目",
+      "region": "某国",
+      "lang": "en",
+      "boolean": "(\"项目名\" OR (产品词 AND (地名1 OR 地名2))) AND (attack OR clash OR seized OR casualties OR kidnap)",
+      "google": "\"项目名\" (attack OR seized OR shutdown)",
+      "sources": ["属地媒体.com", "境外流亡媒体.org", "rfa.org"],
+      "frequency": "快讯/小时级",
+      "risk": "critical",
+      "relevance": "direct",
+      "note": "人员安全级，命中即推送应急联系人。主源为境外媒体，核实困难须标注"
+    }
+  ],
+
+  "keywords": [
+    {
+      "layer": "A",
+      "category": "A1集团/公司名称簇",
+      "terms": "\"中文全称\" \"中文简称\" \"English Registered Name\" \"English Common Name\" \"ABBR\"",
+      "lang": "全",
+      "guard": "ABBR AND (行业词 OR 所在国 OR 主营产品)",
+      "note": "收录拼写变体：当地注册文件中的错拼、连字符差异"
+    },
+    {
+      "layer": "A",
+      "category": "A2海外法人簇（英语区）",
+      "terms": "\"Local Entity Ltd\" \"LOCALABBR\" \"Joint Venture Name\"",
+      "lang": "en",
+      "guard": "LOCALABBR → 行业词 OR 所在省 OR 主营产品",
+      "note": "召回率命脉：当地媒体只写法人名不写母公司名"
+    },
+    {
+      "layer": "B",
+      "category": "地名/设施键",
+      "terms": "矿区名 厂区名 行政区名 \"尾矿坝\" \"水系名\" 事发路段",
+      "lang": "属地语",
+      "guard": "",
+      "note": "同一地名的多种转写变体必须全收"
+    },
+    {
+      "layer": "C",
+      "category": "人名键（默认停用）",
+      "terms": "[停用] 高管姓名 [停用·转写未证] 拼音转写",
+      "lang": "全",
+      "guard": "启用时须 AND 公司名或职务词",
+      "note": "默认全停用。涉隐私与误伤风险，须人工逐条审核；转写未证的一律不启用"
+    },
+    {
+      "layer": "R",
+      "category": "风险词·英",
+      "terms": "strike protest riot accident death killed lawsuit court pollution spill tailings collapse arrest corruption kidnap \"unpaid wages\" layoff shutdown",
+      "lang": "en",
+      "guard": "",
+      "note": "仅作精准轨 AND 条件，不单独跑。人身安全词另抽出做快讯管道"
+    },
+    {
+      "layer": "R",
+      "category": "风险词·法",
+      "terms": "grève manifestation émeute accident mort décès procès plainte pollution déversement effondrement arrestation salaire",
+      "lang": "fr",
+      "guard": "",
+      "note": "法语区必须用法语风险词，用英语词几乎零召回"
+    },
+    {
+      "layer": "X",
+      "category": "排除词",
+      "terms": "-同名赛事 -同名游戏 -同名俱乐部 -同名集团 -股票代码 -撞名域名",
+      "lang": "全",
+      "guard": "",
+      "note": "全组通用附加。先跑一次不带排除词的检索看实际噪音，再针对性补充"
+    }
+  ],
+
+  "extra_notes": [
+    {
+      "key": "待补缺口",
+      "value": "GAP001 某实体英文注册名缺失；GAP002 某地名拼写未证；GAP003 某语种召回未验证。补齐后可新增任务行"
+    },
+    {
+      "key": "承包关系更正",
+      "value": "已证伪项目列表：XX项目总包方实为其他公司，非监测主体，其舆情不得计入客户指标"
+    }
+  ]
+}

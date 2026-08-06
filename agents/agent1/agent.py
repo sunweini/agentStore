@@ -1,52 +1,77 @@
-"""图构建:agent1 的 LangGraph 定义。
+"""agent1 图构建入口:6 步流水线 + AsyncSqliteSaver checkpointer。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-langgraph-design.md 第 6 节。
-
-图结构(循环型 ReAct):
-  START → agent_node ──有 tool_calls──→ tools_node
-              │                          │
-              └──────无 tool_calls───────┘
-                     → END
-
-- agent_node:LLM 决策(agents/agent1/utils/nodes.py)。
-- tools_node:官方 prebuilt ToolNode,自动执行 LLM 请求的工具,结果回传。
-- should_continue:路由,有 tool_calls 回 tools,否则 END。
-- recursion_limit:运行时 config 参数(官方 graph-api 文档),invoke 时传入,
-  防死循环: graph.invoke(inputs, config={"recursion_limit": 25})。
-
+设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md。
 langgraph.json 注册入口: "./agents/agent1/agent.py:build_agent"
 """
 
 from __future__ import annotations
 
-from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
+import asyncio
+from pathlib import Path
 
-from agents.agent1.utils.nodes import agent_node, should_continue
-from agents.agent1.utils.state import AgentState
-from agents.agent1.utils.tools import TOOLS
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+from agents.agent1.graph.flows import build_graph
+
+_CHECKPOINT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "checkpoints.sqlite"
 
 
-def build_agent():
-    """构建并编译 agent1 的 LangGraph。
-
-    递归上限(recursion_limit)是运行时 config 参数,不在这里设置,
-    invoke 时传入: graph.invoke(inputs, config={"recursion_limit": 25})。
+async def build_agent():
+    """构建并编译 agent1 图,挂 AsyncSqliteSaver(本地持久化)。
 
     Returns:
-        编译后的 StateGraph(可直接 invoke)。
+        编译后的 StateGraph + checkpointer。使用:
+        graph = await build_agent()
+        await graph.ainvoke(inputs, config={"configurable": {"thread_id": group_id}})
+
+    注:AsyncSqliteSaver 需要事件循环内创建,故 build_agent 为 async。
     """
-    graph = StateGraph(AgentState)
+    graph = build_graph()
+    _CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
+    # async with 生命周期:由调用方(api.py)持有 saver 上下文。
+    # 这里返回编译图 + saver,调用方管理连接。
+    saver = AsyncSqliteSaver.from_conn_string(str(_CHECKPOINT_DB))
+    compiled = graph.compile(checkpointer=saver)
+    return compiled, saver
 
-    graph.add_node("agent", agent_node)
-    graph.add_node("tools", ToolNode(TOOLS))
 
-    graph.add_edge(START, "agent")
-    graph.add_conditional_edges(
-        "agent",
-        should_continue,
-        {"tools": "tools", END: END},
-    )
-    graph.add_edge("tools", "agent")  # 工具结果回传,形成循环
+async def run_pipeline(group_id: str, company_name: str, owner: str, meta: dict) -> dict:
+    """完整跑一次 6 步流水线(后台任务入口)。
 
-    return graph.compile()
+    Args:
+        group_id: 方案组 ID(= thread_id)。
+        company_name: 中文公司名。
+        owner: 用户(apikey 标识)。
+        meta: 主体角色/地区/检索类型。
+
+    Returns:
+        最终状态 dict(含 schemes)。
+    """
+    graph, saver = await build_agent()
+    try:
+        from agents.agent1.graph.state import STATUS_GENERATING, STATUS_REVIEW
+        from datetime import datetime
+
+        initial = {
+            "messages": [],
+            "current_step": 0,
+            "group": {
+                "group_id": group_id,
+                "owner": owner,
+                "company_name": company_name,
+                "meta": meta,
+                "status": STATUS_GENERATING,
+                "step_status": [],
+                "schemes": [],
+                "created_at": datetime.now().isoformat(),
+                "committed_at": None,
+            },
+        }
+        result = await graph.ainvoke(
+            initial,
+            config={"configurable": {"thread_id": group_id}},
+        )
+        result["group"]["status"] = STATUS_REVIEW  # 6 步完成 → 待勾选
+        return result["group"]
+    finally:
+        await saver.close()

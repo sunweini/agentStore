@@ -176,7 +176,7 @@ fastapi / uvicorn / langchain-mcp-adapters / opentelemetry-sdk / opentelemetry-e
 2. 删原骨架(agent.py/state/nodes/tools/system.md),建新结构
 3. common/otel.py
 4. graph(state/nodes/flows)+ agent.py + 依赖
-5. tools/websearch.py + skills/loader.py + prompts/
+5. tools/websearch.py + skills/loader.py(load_skill 工具)
 6. api.py + auth.py + store/
 7. 测试
 8. CLAUDE.md 模板重写
