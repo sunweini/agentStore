@@ -36,7 +36,7 @@
 5. 属地信源白名单:每轨 sources[](域名)
 6. 频次与风险定级:每轨 frequency + risk
 
-每步统一模式:websearch 搜索 → LLM 按 skill 格式生成(JSON schema)→ 校验写回状态。
+每步统一模式:websearch 搜索 → LLM 生成 → **调 skill 分步脚本**(stepN.py)按固定格式传回 → 校验写回状态。
 
 ## 4. 目录结构
 
@@ -54,12 +54,14 @@ agents/agent1/
 │   └── flows.py                 # 图构建:顺序边 + 中断路由
 ├── skills/
 │   ├── __init__.py
-│   ├── loader.py                # skill 指令加载(项目内路径)
-│   └── overseas-sentiment-query-builder/   # ★ 项目内 skill(agent1 专属)
+│   ├── loader.py                # load_skill 工具(渐进式披露,agent→common 查找)
+│   └── overseas-sentiment-query-builder/   # ★ 项目内 skill(agent1 专属,已改造)
 │       ├── SKILL.md
-│       ├── references/  assets/  scripts/
+│       ├── references/          # 方法论 4 件 + output-formats.md(6 步格式契约)
+│       ├── assets/              # task_spec_example.json
+│       └── scripts/             # step1..6 分步脚本 + build_task_xlsx.py
 ├── prompts/
-│   ├── step1.md … step6.md      # 6 步节点 prompt(嵌入 skill 规则)
+│   ├── step1.md … step6.md      # 每步节点 prompt(该步做什么 + 输出格式)
 ├── tools/
 │   ├── __init__.py
 │   └── websearch.py             # gateway MCP 池封装(3 引擎自动切换)
@@ -85,13 +87,38 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 - 任务状态:6 步每步 pending/running/done/error,存 checkpointer。
 - **commit 后冻结**:勾选状态固化,status 置「已入库」;再改勾选须走「重新生成」新流程(新 group_id)。
 
-## 6. Skill 目录策略(用户指定)
+### 5.1 分步格式契约(6 步 schema,存 skill references/output-formats.md)
+
+每步脚本输出的固定 JSON 格式,字段对齐 skill 最终 spec:
+
+| 步骤 | 脚本 | 输出格式(schema 关键字段) | 对齐 spec |
+|---|---|---|---|
+| 1 实体测绘 | step1_entities.py | `entities:{parent, subsidiaries[], overseas_entities[{name,lang,region}], spelling_variants[], interference_sources[]}` | —(输入层) |
+| 2 主体画像 | step2_profile.py | `profile:{role(承包商/业主/ai判定), relevance_rules:{direct,indirect,context}, regions[]}` | —(输入层) |
+| 3 关键词字典 | step3_keywords.py | `keywords:[{layer(A/B/C/D/R/X), category, terms, lang, guard, note}]` | spec `keywords[]` 行 |
+| 4 双轨检索式 | step4_queries.py | `schemes:[{id, name, region, lang, tracks:[{key(a/b/c/快讯/司法/招标), boolean, google}]}]` | spec `tasks[]` 行(部分) |
+| 5 属地信源 | step5_sources.py | 每轨补 `sources[]`(域名白名单) | spec `tasks[].sources` |
+| 6 频次定级 | step6_cadence.py | 每轨补 `frequency, risk, relevance`,组装完整 task 行 | spec `tasks[]` 行(完整) |
+
+- 步骤 4+5+6 合并 = 完整 tasks 行;步骤 3 = keywords 行;拼图式组装,导出零转换。
+- 每步脚本:校验字段、标准化、补默认值、缺字段记 GAP(编号 GAP00N)。
+- 格式定义唯一来源:skill `references/output-formats.md`,节点 prompt 引用它。
+
+## 6. Skill 目录策略与加载(用户指定 + 官方 skill 架构 + 分步脚本改造)
 
 - `common/skills/` — 公共 skill,所有 agent 可访问。
 - `agents/<agent>/skills/` — 仅该 agent 可用。
 - overseas-sentiment-query-builder 放 `agents/agent1/skills/`(从 ~/.claude/skills/ 复制)。
 - loader 按 agent → common 顺序查找。
-- **分步加载**:4 个 references 全文不进单步 prompt(context 爆)。按步骤只加载对应文件:步骤 1-2 用 SKILL.md 主体,步骤 3 用 keyword-dictionary.md,步骤 4 用 query-patterns.md,步骤 5 用 source-whitelists.md,步骤 6 用 cadence-and-risk.md。
+- **skill 原生加载(官方 skill 架构,渐进式披露)**:agent 把 skill 打包成 `load_skill` 工具,启动只加载 skill 摘要,agent 需要时按需调 `load_skill` 取完整内容(SKILL.md + references)。不手拆 6 个 prompt 文件。官方文档: /oss/python/langchain/multi-agent/skills。
+- **skill 改造:每步一个脚本,按格式传回(用户要求,路线 1)**:
+  - skill 现状只有 `scripts/build_task_xlsx.py`(最终 Excel),无分步接口,不分步返回数据 → 需改造。
+  - `agents/agent1/skills/overseas-sentiment-query-builder/scripts/` 加 6 个分步脚本:`step1_entities.py` / `step2_profile.py` / `step3_keywords.py` / `step4_queries.py` / `step5_sources.py` / `step6_cadence.py`。
+  - 每个脚本 = 该步的格式契约执行器:输入上步产物 + 本步原始结果(LLM/websearch 输出),**输出固定格式 JSON**(schema 见 §5.1)。职责:校验字段、标准化、补默认值、缺字段记 GAP。
+  - 每步节点:调对应脚本 → 拿格式结果 → 写 state。格式由脚本保证,LLM 自由生成,格式错由脚本兜底。
+  - 6 步格式定义存 skill 的 `references/output-formats.md`(skill 自包含)。
+- 第 3-6 步产物字段逐一对齐 skill 最终 spec 的 tasks 行 / keywords 行(拼图式组装,导出零转换)。
+- skill 的 Excel 步骤(第 6 步)不复用,导出走 API + converter(§7)。
 
 ## 7. API 接口
 
@@ -137,7 +164,7 @@ fastapi / uvicorn / langchain-mcp-adapters / opentelemetry-sdk / opentelemetry-e
 
 ## 12. 测试
 
-- skill loader 单测 / websearch 池单测(mock)/ 数据模型单测 / 图单测(mock LLM+websearch)/ API 单测(鉴权/计费/入库)/ 端到端(有 key+MCP)。
+- skill 分步脚本单测(6 个脚本格式契约/缺字段记 GAP)/ skill loader 单测 / websearch 池单测(mock)/ 数据模型单测 / 图单测(mock LLM+websearch)/ API 单测(鉴权/归属/计费/入库)/ 端到端(有 key+MCP)。
 
 ## 13. 范围外
 
