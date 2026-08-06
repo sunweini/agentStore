@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>海外舆情检索方案生成 · 演示</title>
+<style>
+:root{
+  --pri:#5B5BD6; --pri-2:#4A56E2; --pri-bg:#EEF0FD; --pri-line:#C3C9F7;
+  --ok:#16A34A; --ok-bg:#E7F8ED; --ok-line:#A8E5BE;
+  --warn:#B45309; --warn-bg:#FFF7EA; --warn-line:#F2DFC0;
+  --err:#E1483A; --err-bg:#FCEBEB;
+  --t1:#1F2329; --t2:#5F6672; --t3:#9AA0A6;
+  --line:#E4E6EB; --line2:#C9CDD4; --bg:#F5F6F8;
+  --neon:#6E7BFF; --neon-2:#33E1C6; --ink:#0B1030; --ink-line:#2A3160;
+  --r:6px; --r2:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--t1);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6}
+.top{background:#fff;border-bottom:1px solid var(--line);padding:14px 28px;display:flex;align-items:center;gap:12px;font-weight:700;color:var(--pri-2);font-size:15px}
+.wrap{max-width:1080px;margin:24px auto;padding:0 20px}
+
+/* 输入区 */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r2);padding:22px 26px;margin-bottom:20px}
+.card h3{font-size:15px;font-weight:600;margin-bottom:12px}
+.row{display:grid;grid-template-columns:110px minmax(0,1fr);gap:14px;margin-bottom:16px;align-items:start}
+.row:last-child{margin-bottom:0}
+.lab{font-size:13px;color:var(--t2);text-align:right;padding-top:8px}
+.lab i{color:var(--err);font-style:normal;margin-right:2px}
+input[type=text],select{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 12px;font:inherit;font-size:14px;outline:0}
+input:focus,select:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-bg)}
+.btn{border:1px solid var(--line);background:#fff;border-radius:var(--r);padding:9px 20px;font:inherit;font-size:14px;cursor:pointer;transition:.15s}
+.btn:hover{border-color:var(--line2)}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:#fff}
+.btn.pri:hover{background:var(--pri-2)}
+.btn.ai{background:linear-gradient(120deg,#6E7BFF,#5B5BD6);border:0;color:#fff;box-shadow:0 4px 14px rgba(94,110,255,.32)}
+.btn.ai:disabled{opacity:.5;cursor:not-allowed}
+.btn.ghost{background:none;border:0;color:var(--pri-2)}
+.hint{font-size:12px;color:var(--t3);margin-top:6px}
+
+/* 进度区 */
+.stage{background:var(--ink);border-radius:14px;overflow:hidden;border:1px solid var(--ink-line);margin-bottom:20px}
+.stghead{padding:16px 22px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--ink-line)}
+.orb{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#6E7BFF,#33E1C6);display:grid;place-items:center;color:#fff;font-size:17px}
+.stghead h2{color:#fff;font-size:15px;font-weight:600}
+.stghead p{color:#AEB4E0;font-size:12px}
+.stghead .eta{margin-left:auto;color:#CBD0F5;font-size:12px}
+.stgbar{height:4px;background:var(--ink-2,#141A3D)}
+.stgbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--neon),var(--neon-2));transition:width .5s}
+.stgbody{padding:18px 22px}
+.pstep{display:flex;gap:12px;padding:7px 0;align-items:flex-start}
+.pdot{width:22px;height:22px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;font-size:11px;font-weight:600;background:var(--ink-2,#141A3D);color:#6B72A8;border:1.5px solid var(--ink-line)}
+.pstep.done .pdot{background:var(--neon-2);color:#06231d;border-color:var(--neon-2)}
+.pstep.active .pdot{background:var(--neon);color:#fff;border-color:var(--neon);box-shadow:0 0 0 4px rgba(110,123,255,.18)}
+.pstep.error .pdot{background:#EB5757;color:#fff;border-color:#EB5757}
+.pt{color:#8890C6;font-size:13px;font-weight:500}
+.pt .st{font-size:11px;color:#5C6398;font-weight:400;margin-left:8px}
+.pstep.done .pt{color:#C7CDF0}
+.pstep.active .pt{color:#fff}
+.pstep.error .pt{color:#E9A0A0}
+.pstep.error .pt .st{color:#E9A0A0}
+.pout{font-size:11px;color:#5C6398;margin-top:2px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 方案区 */
+.schemes{border:1px solid var(--line);border-radius:var(--r2);overflow:hidden}
+.scheme{border-bottom:1px solid var(--line);padding:14px 18px;display:grid;grid-template-columns:20px minmax(0,1fr);gap:12px;background:#fff}
+.scheme:last-child{border-bottom:0}
+.scheme.off{opacity:.5;background:#FAFAFB}
+.scheme .cbx{width:18px;height:18px;border:1.5px solid var(--line2);border-radius:5px;cursor:pointer;position:relative;margin-top:3px}
+.scheme.on .cbx{background:var(--pri);border-color:var(--pri)}
+.scheme.on .cbx::after{content:"";position:absolute;left:5px;top:1px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.sm-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sm-name{font-weight:600;font-size:13.5px}
+.tag{font-size:11px;padding:2px 9px;border-radius:12px;font-weight:500}
+.tag.reg{background:var(--pri-bg);color:var(--pri-2)}
+.tag.risk-critical{background:var(--err-bg);color:var(--err)}
+.tag.risk-high{background:var(--warn-bg);color:var(--warn)}
+.tag.risk-medium{background:#F0F1F4;color:var(--t2)}
+.tag.freq{background:#fff;border:1px solid var(--line2);color:var(--t2)}
+.trks{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+.trk{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:var(--r);padding:4px 9px;font-size:12px;cursor:pointer;background:#fff}
+.trk.on{border-color:var(--pri-line);background:var(--pri-bg)}
+.trk .tb{width:13px;height:13px;border:1.5px solid var(--line2);border-radius:3px;position:relative}
+.trk.on .tb{background:var(--pri);border-color:var(--pri)}
+.trk.on .tb::after{content:"";position:absolute;left:3px;top:0;width:4px;height:7px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.trk .tkd{color:var(--t3);font-size:11px}
+.gap{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r);padding:4px 9px;font-size:11px;color:var(--warn);margin-top:8px;display:inline-flex}
+.summary{display:flex;align-items:center;gap:18px;padding:13px 18px;background:var(--pri-bg);border:1px solid var(--pri-line);border-radius:var(--r2);margin-top:14px}
+.summary .s{font-size:12.5px;color:var(--t2)}
+.summary .s b{display:block;font-size:19px;color:var(--pri-2);font-weight:700}
+.summary .sp{width:1px;height:30px;background:var(--pri-line)}
+.bar{display:flex;gap:10px;margin-top:16px;align-items:center}
+.msg{font-size:13px;color:var(--t2)}
+.msg.err{color:var(--err)}
+.hide{display:none!important}
+@media(max-width:760px){.row{grid-template-columns:1fr}.lab{text-align:left}}
+</style>
+</head>
+<body>
+<div class="top">📡 海外舆情检索方案生成 · 前端演示</div>
+<div class="wrap">
+
+  <!-- ===== 输入区 ===== -->
+  <div class="card" id="inputCard">
+    <h3>监测对象</h3>
+    <div class="row">
+      <label class="lab"><i>*</i>中文公司名</label>
+      <div><input type="text" id="company" placeholder="例如:中国十五冶金建设集团有限公司" value="中国十五冶金建设集团有限公司" />
+        <p class="hint">填法定全称最准。AI 自动补出简称、海外法人名、拼写变体。</p></div>
+    </div>
+    <div class="row">
+      <label class="lab">主体角色</label>
+      <div><select id="role"><option value="ai判定" selected>交给 AI 判定</option><option value="承包商">承包商</option><option value="业主">业主/投资方</option></select></div>
+    </div>
+    <div class="bar">
+      <button class="btn ai" id="startBtn">✦ 开始生成</button>
+      <span class="msg" id="apiKeyHint">API Key: <input type="text" id="apikey" value="sk-demo-key" style="width:180px;font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:4px" /></span>
+    </div>
+  </div>
+
+  <!-- ===== 进度区 ===== -->
+  <div class="stage hide" id="stageCard">
+    <div class="stghead">
+      <div class="orb">✦</div>
+      <div><h2 id="stageTitle">AI 正在合成检索方案组</h2><p id="stageSub">准备启动 6 步流水线…</p></div>
+      <div class="eta" id="eta">—</div>
+    </div>
+    <div class="stgbar"><i id="bar"></i></div>
+    <div class="stgbody" id="steps"></div>
+  </div>
+
+  <!-- ===== 结果区 ===== -->
+  <div class="card hide" id="resultCard">
+    <h3>方案组 · <span id="groupName"></span></h3>
+    <div class="bar" style="margin-top:0;margin-bottom:14px">
+      <button class="btn link ghost" id="selAll" style="color:var(--pri-2)">全选</button>
+      <button class="btn link ghost" id="selNone" style="color:var(--pri-2)">全不选</button>
+      <span style="margin-left:auto;font-size:12.5px;color:var(--t2)">勾选 <b id="selCnt" style="color:var(--t1)">0</b>/<span id="totCnt">0</span> 方案</span>
+    </div>
+    <div class="schemes" id="schemes"></div>
+    <div class="summary">
+      <div class="s">保留方案<b id="sumScheme">0</b></div><div class="sp"></div>
+      <div class="s">检索任务行<b id="sumTask">0</b></div><div class="sp"></div>
+      <div class="s">覆盖国家<b id="sumCty">0</b></div>
+    </div>
+    <div class="bar">
+      <button class="btn" id="dlXlsx">⬇ 导出 Excel</button>
+      <button class="btn pri" id="commitBtn">确认入库</button>
+      <span class="msg" id="actMsg"></span>
+    </div>
+  </div>
+
+  <div class="msg err hide" id="errMsg"></div>
+</div>
+
+<script>
+const API = "http://127.0.0.1:8000";
+let groupId = null, pollTimer = null, schemes = [];
+
+const $ = s => document.querySelector(s);
+
+/* ===== 6 步定义 ===== */
+const STEPS = [
+  ["实体测绘", "母公司 · 海外法人 · 拼写变体 · 同名干扰"],
+  ["主体画像", "角色判定 · 相关度口径"],
+  ["关键词字典", "A/B/C/D/R/X 六层 · context_guard"],
+  ["双轨检索式", "布尔 + Google 双语法"],
+  ["属地信源", "属地媒体 · 判例库 · NGO 白名单"],
+  ["频次定级", "快讯 / 日 / 周 · 风险等级"],
+];
+
+function renderSteps() {
+  const box = $("#steps"); box.innerHTML = "";
+  STEPS.forEach((s, i) => {
+    const d = document.createElement("div");
+    d.className = "pstep"; d.id = "step" + (i + 1);
+    d.innerHTML = `<div class="pdot">${i + 1}</div><div><div class="pt">${s[0]}<span class="st">${s[1]}</span></div><div class="pout"></div></div>`;
+    box.appendChild(d);
+  });
+}
+
+/* ===== 开始生成 ===== */
+$("#startBtn").onclick = async () => {
+  const company = $("#company").value.trim();
+  if (!company) { $("#errMsg").textContent = "请输入公司名"; $("#errMsg").classList.remove("hide"); return; }
+  $("#errMsg").classList.add("hide");
+  renderSteps();
+  $("#stageCard").classList.remove("hide");
+  $("#resultCard").classList.add("hide");
+  $("#stageTitle").textContent = "AI 正在合成检索方案组";
+  $("#bar").style.width = "0";
+  const t0 = Date.now();
+  $("#eta").textContent = "0:00";
+  const etaTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    $("#eta").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }, 1000);
+
+  try {
+    const r = await fetch(API + "/api/v1/groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + $("#apikey").value },
+      body: JSON.stringify({ company_name: company, role: $("#role").value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "提交失败");
+    groupId = d.group_id;
+    pollTimer = setInterval(() => poll(t0, etaTimer), 3000);
+    poll(t0, etaTimer);
+  } catch (e) {
+    clearInterval(etaTimer);
+    $("#stageCard").classList.add("hide");
+    $("#errMsg").textContent = "提交失败: " + e.message;
+    $("#errMsg").classList.remove("hide");
+  }
+};
+
+/* ===== 轮询进度 ===== */
+async function poll(t0, etaTimer) {
+  try {
+    const r = await fetch(API + `/api/v1/groups/${groupId}/progress`, {
+      headers: { "Authorization": "Bearer " + $("#apikey").value },
+    });
+    if (r.status === 404) return; // 还没落草稿,继续等
+    const d = await r.json();
+    const st = d.step_status || [];
+    st.forEach(s => {
+      const el = $("#step" + s.step);
+      if (!el) return;
+      el.className = "pstep";
+      if (s.status === "done") {
+        el.classList.add("done");
+        el.querySelector(".pdot").textContent = "✓";
+        const out = s.output ? (JSON.stringify(s.output).slice(0, 80)) : "";
+        el.querySelector(".pout").textContent = out;
+        $("#stageSub").textContent = STEPS[s.step - 1][0] + " 完成";
+      } else if (s.status === "error") {
+        el.classList.add("error");
+        el.querySelector(".pdot").textContent = "!";
+        el.querySelector(".pout").textContent = s.error || "失败";
+        $("#stageSub").textContent = STEPS[s.step - 1][0] + " 失败";
+      } else {
+        el.classList.add("active");
+        $("#stageSub").textContent = "正在" + STEPS[s.step - 1][0] + "…";
+      }
+    });
+    const done = st.filter(s => s.status === "done").length;
+    $("#bar").style.width = Math.round(done / 6 * 100) + "%";
+    if (d.status === "review") {
+      clearInterval(pollTimer); clearInterval(etaTimer);
+      $("#stageSub").textContent = "6 步完成,加载方案组…";
+      $("#stageTitle").textContent = "生成完成";
+      await loadSchemes();
+    } else if (d.status === "failed") {
+      clearInterval(pollTimer); clearInterval(etaTimer);
+      $("#errMsg").textContent = "生成失败: " + (d.error || "未知错误");
+      $("#errMsg").classList.remove("hide");
+    }
+  } catch (e) {
+    // 网络错,继续轮询
+  }
+}
+
+/* ===== 加载方案组 ===== */
+async function loadSchemes() {
+  const r = await fetch(API + `/api/v1/groups/${groupId}/schemes`, {
+    headers: { "Authorization": "Bearer " + $("#apikey").value },
+  });
+  const d = await r.json();
+  schemes = d.schemes || [];
+  $("#groupName").textContent = d.company_name;
+  $("#resultCard").classList.remove("hide");
+  renderSchemes();
+  sum();
+}
+
+function renderSchemes() {
+  const box = $("#schemes"); box.innerHTML = "";
+  schemes.forEach((sc, i) => {
+    const el = document.createElement("div");
+    el.className = "scheme on"; el.dataset.i = i;
+    const tags = `<span class="tag reg">${sc.region || ""}</span><span class="tag freq">${sc.lang || ""}</span>` +
+      `<span class="tag risk-${sc.risk || "medium"}">${sc.risk || "medium"}</span><span class="tag freq">${sc.frequency || ""}</span>`;
+    const trks = (sc.tracks || []).map((t, j) =>
+      `<label class="trk on" data-j="${j}"><span class="tb"></span><span><b>${t.key}</b> <span class="tkd">${t.frequency || ""}/${t.risk || ""}</span></span></label>`).join("");
+    const gaps = (sc.gaps || []).map(g => `<div class="gap">⚠ ${g}</div>`).join("");
+    el.innerHTML = `<div class="cbx"></div><div>
+      <div class="sm-top"><span class="sm-name">${sc.id} · ${sc.name || ""}</span>${tags}</div>
+      <div class="trks">${trks}</div>${gaps}</div>`;
+    box.appendChild(el);
+    el.querySelector(".cbx").onclick = () => { el.classList.toggle("on"); el.classList.toggle("off"); sum(); };
+    el.querySelectorAll(".trk").forEach(t => t.onclick = e => { e.stopPropagation(); t.classList.toggle("on"); sum(); });
+  });
+}
+
+function sum() {
+  const rows = $$("#schemes .scheme");
+  $("#totCnt").textContent = rows.length;
+  let sel = 0, tasks = 0, ctry = new Set();
+  rows.forEach(r => {
+    if (r.classList.contains("on")) {
+      sel++;
+      const onTrks = r.querySelectorAll(".trk.on").length;
+      tasks += onTrks;
+      const reg = schemes[r.dataset.i].region || "";
+      reg.split("/").forEach(x => { if (x && x !== "全语种" && x !== "区域") ctry.add(x.trim()); });
+    }
+  });
+  $("#selCnt").textContent = sel; $("#sumScheme").textContent = sel;
+  $("#sumTask").textContent = tasks; $("#sumCty").textContent = ctry.size || 1;
+}
+
+const $$ = s => [...document.querySelectorAll(s)];
+
+$("#selAll").onclick = () => { $$("#schemes .scheme").forEach(r => { r.classList.add("on"); r.classList.remove("off"); }); sum(); };
+$("#selNone").onclick = () => { $$("#schemes .scheme").forEach(r => { r.classList.remove("on"); r.classList.add("off"); }); sum(); };
+
+/* ===== 入库 ===== */
+$("#commitBtn").onclick = async () => {
+  // 先提交勾选
+  const selSchemes = {}, selTracks = {};
+  $$("#schemes .scheme").forEach(r => {
+    const sc = schemes[r.dataset.i];
+    selSchemes[sc.id] = r.classList.contains("on");
+    selTracks[sc.id] = {};
+    r.querySelectorAll(".trk").forEach(t => {
+      selTracks[sc.id][sc.tracks[+t.dataset.j].key] = t.classList.contains("on");
+    });
+  });
+  try {
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + $("#apikey").value };
+    await fetch(API + `/api/v1/groups/${groupId}/selection`, {
+      method: "PUT", headers, body: JSON.stringify({ schemes: selSchemes, tracks: selTracks }),
+    });
+    const r = await fetch(API + `/api/v1/groups/${groupId}/commit`, { method: "POST", headers });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "入库失败");
+    $("#actMsg").textContent = "✅ 已入库,计费 1 单位";
+    $("#actMsg").classList.remove("err");
+  } catch (e) {
+    $("#actMsg").textContent = "❌ " + e.message;
+    $("#actMsg").classList.add("err");
+  }
+};
+
+/* ===== 导出 Excel ===== */
+$("#dlXlsx").onclick = async () => {
+  const r = await fetch(API + `/api/v1/groups/${groupId}/export`, {
+    headers: { "Authorization": "Bearer " + $("#apikey").value },
+  });
+  if (!r.ok) { $("#actMsg").textContent = "导出失败"; $("#actMsg").classList.add("err"); return; }
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = groupId + "_tasks.xlsx";
+  a.click();
+  $("#actMsg").textContent = "✅ Excel 已下载";
+  $("#actMsg").classList.remove("err");
+};
+</script>
+</body>
+</html>

@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -25,6 +26,14 @@ from agents.agent1.store import converter, scheme_store
 from common.otel import init_otel, get_tracer
 
 app = FastAPI(title="海外舆情检索方案生成 Agent", version="0.1.0")
+
+# CORS:允许前端演示页(web/demo.html)跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 演示环境放开;生产按需收紧
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +101,14 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
 
 @app.get("/api/v1/groups/{group_id}/progress")
 async def get_progress(group_id: str, user: str = Depends(_user)):
-    """查 6 步进度(每步状态/产物)。"""
+    """查 6 步进度(每步状态/产物)。
+
+    数据源:优先草稿文件(完成后),否则从 checkpoint 读实时进度(生成中)。
+    """
     group = scheme_store.load_group(group_id)
+    if group is None:
+        # 生成中:从 checkpoint 读实时进度(thread_id = group_id)
+        group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
     auth.assert_owner(user, group)
@@ -102,6 +117,26 @@ async def get_progress(group_id: str, user: str = Depends(_user)):
         "status": group["status"],
         "step_status": group.get("step_status", []),
     }
+
+
+async def _load_from_checkpoint(group_id: str) -> dict | None:
+    """从 LangGraph checkpoint 读 group 状态(生成中进度)。"""
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from agents.agent1.graph.flows import build_graph
+    from agents.agent1.agent import _CHECKPOINT_DB
+
+    try:
+        async with AsyncSqliteSaver.from_conn_string(str(_CHECKPOINT_DB)) as saver:
+            g = build_graph().compile(checkpointer=saver)
+            state = await g.aget_state({"configurable": {"thread_id": group_id}})
+            group = state.values.get("group")
+            if group is None:
+                return None
+            # 生成中:status 仍为 generating(图内更新),补默认
+            group.setdefault("status", STATUS_GENERATING)
+            return group
+    except Exception:
+        return None
 
 
 @app.get("/api/v1/groups/{group_id}/schemes")

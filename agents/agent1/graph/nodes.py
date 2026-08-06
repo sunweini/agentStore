@@ -173,7 +173,7 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
                 prev=json.dumps(group.get(f"_step{step-1}", {}), ensure_ascii=False),
                 search=search_result,
             )
-            response = llm.invoke(messages)
+            response = await llm.ainvoke(messages)
             content = response.content if isinstance(response, AIMessage) else str(response)
             raw_output = _extract_json(content)
             if raw_output is not None:
@@ -208,9 +208,11 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
                 for i, sc in enumerate(group["schemes"]):
                     cd = normalized.get("schemes", [])[i] if i < len(normalized.get("schemes", [])) else {}
                     for t, tr in enumerate(sc.get("tracks", [])):
-                        tr["frequency"] = cd.get("tracks", [])[t].get("frequency", "周级")
-                        tr["risk"] = cd.get("tracks", [])[t].get("risk", "medium")
-                        tr["relevance"] = cd.get("tracks", [])[t].get("relevance", "direct")
+                        cd_tracks = cd.get("tracks", []) if isinstance(cd, dict) else []
+                        meta = cd_tracks[t] if t < len(cd_tracks) else {}
+                        tr["frequency"] = meta.get("frequency", "周级")
+                        tr["risk"] = meta.get("risk", "medium")
+                        tr["relevance"] = meta.get("relevance", "direct")
 
         step_status[-1] = {"step": step, "status": "done", "output": normalized}
         group["step_status"] = step_status
