@@ -19,6 +19,7 @@ import pytest
 
 from agents.agent1 import billing
 from agents.agent1.auth import _valid_keys, assert_owner
+from agents.agent1.graph.nodes import _extract_json
 from agents.agent1.store import converter, scheme_store
 from common import config
 
@@ -90,6 +91,15 @@ def test_script_bad_json_fails():
 
 
 # ===== 2. store 单测 =====
+
+
+def test_extract_json_robust():
+    """LLM 输出容错解析:纯 JSON/代码块/带说明文字。"""
+    assert _extract_json('{"a": 1}') == {"a": 1}
+    assert _extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert _extract_json('好的:\n{"a": 1}\n完成') == {"a": 1}
+    assert _extract_json('不是 JSON') is None
+    assert _extract_json('') is None
 
 
 def _sample_group() -> dict:

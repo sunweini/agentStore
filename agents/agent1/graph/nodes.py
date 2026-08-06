@@ -35,6 +35,35 @@ from common.otel import get_tracer
 logger = logging.getLogger(__name__)
 
 _AGENT = "agent1"
+
+
+def _extract_json(text: str) -> dict | None:
+    """容错解析 LLM 输出中的 JSON。
+
+    DeepSeek 常在 JSON 外包 Markdown 代码块或说明文字,直接 json.loads 会失败。
+    策略:
+    1. 剥 ```json ... ``` 代码块
+    2. 截取首个 { 到最后一个 } 的子串
+    3. json.loads;失败返回 None
+    """
+    if not text:
+        return None
+    content = text.strip()
+    # 1. 剥代码块
+    if content.startswith("```"):
+        content = content.split("```", 2)[1] if "```" in content[3:] else content[3:]
+        content = content.strip()
+        if content.startswith("json"):
+            content = content[4:].strip()
+    # 2. 截取首个 { 到最后一个 }
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(content[start : end + 1])
+    except json.JSONDecodeError:
+        return None
 # skill 分步脚本目录(项目内,agent 专属)
 _SKILL_SCRIPTS = (
     Path(__file__).resolve().parent.parent
@@ -51,20 +80,41 @@ STEPS = {
     6: ("step6_cadence.py", "cadence-and-risk.md"),
 }
 
-# 每步系统指令(该步做什么 + 输出格式;格式细节在 skill output-formats.md)
+# 每步系统指令(该步做什么 + 输出格式样例;格式契约见 skill references/output-formats.md)
+# 注意:
+# 1. prompt 必须给 LLM 具体 JSON schema 样例,否则 LLM 盲猜字段导致脚本校验失败。
+# 2. JSON 样例的 {} 必须转义为 {{}} —— ChatPromptTemplate 用 f-string 语法,
+#    未转义的花括号会被当作模板变量(报 "Nested replacement fields")。
 _STEP_PROMPTS = {
     1: "你是实体测绘专家。基于用户提供的公司名,识别母公司、海外法人(按语区分组)、"
-       "拼写变体、同名干扰源。先 websearch 验证,再输出 JSON(格式见 skill output-formats.md)。",
-    2: "你是主体画像专家。基于实体测绘结果,判定主体角色(承包商/业主/AI判定),"
-       "建立 direct/indirect/context 相关度口径,识别重点地区。先 websearch 验证,再输出 JSON。",
-    3: "你是关键词字典专家。基于实体测绘与画像,构建 A/B/C/D/R/X 六层关键词字典,"
-       "短缩写强制 context_guard。先 websearch 验证同音干扰,再输出 JSON。",
+       "拼写变体、同名干扰源。先 websearch 验证,再输出 JSON。\n"
+       "输出格式(JSON):\n"
+       '{{"entities": {{"parent": "母公司名", "subsidiaries": ["子公司"], '
+       '"overseas_entities": [{{"name": "海外法人名", "lang": "en", "region": "赞比亚"}}], '
+       '"spelling_variants": ["拼写变体"], "interference_sources": ["同名干扰源"]}}}}',
+    2: "你是主体画像专家。基于实体测绘结果,判定主体角色(承包商/业主/ai判定),"
+       "建立相关度口径,识别重点地区。先 websearch 验证,再输出 JSON。\n"
+       "输出格式(JSON):\n"
+       '{{"profile": {{"role": "承包商", "relevance_rules": {{"direct": "", "indirect": "", "context": ""}}, '
+       '"regions": ["重点地区"]}}}}',
+    3: "你是关键词字典专家。构建 A/B/C/D/R/X 六层关键词字典,短缩写强制 context_guard。"
+       "先 websearch 验证同音干扰,再输出 JSON。\n"
+       "输出格式(JSON,keywords 数组,每项一层):\n"
+       '{{"keywords": [{{"layer": "A", "category": "A1集团/公司名称簇", '
+       '"terms": "\\"中文全称\\" \\"ABBR\\"", "lang": "全", "guard": "", "note": ""}}]}}',
     4: "你是检索式构建专家。基于关键词字典,按国别×项目群分组,写双轨(布尔+Google)检索式。"
-       "先 websearch 验证,再输出 JSON。",
+       "先 websearch 验证,再输出 JSON。\n"
+       "输出格式(JSON,schemes 数组,每项含 tracks 数组):\n"
+       '{{"schemes": [{{"id": "Q0", "name": "集团层", "region": "全语种", "lang": "中/英", '
+       '"desc": "", "gaps": [], "tracks": [{{"key": "a", "boolean": "(...)", "google": "(...)"}}]}}]}}',
     5: "你是属地信源专家。为每轨配属地信源白名单域名(属地媒体/判例库/政府/NGO)。"
-       "先 websearch 验证域名活性,再输出 JSON。",
-    6: "你是频次定级专家。按信号为每轨定频次(快讯/日/周/双周/月)与风险等级。"
-       "先 websearch 验证时效,再输出 JSON。",
+       "先 websearch 验证域名活性,再输出 JSON。\n"
+       "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
+       '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "a", "sources": ["属地媒体.com"]}}]}}]}}',
+    6: "你是频次定级专家。按信号为每轨定频次与风险等级。先 websearch 验证时效,再输出 JSON。\n"
+       "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
+       '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "a", "frequency": "周级", '
+       '"risk": "medium", "relevance": "direct"}}]}}]}}',
 }
 
 
@@ -110,8 +160,10 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
         search_result = await websearch(f"{company} 海外 项目 负面 舆情", engine="auto")
         logger.info("service=%s step=%d span=%s event=search_done", _AGENT, step, span_id)
 
-        # 3. LLM 生成(强制 JSON,重试 2 次)
-        llm = get_chat_model()
+        # 3. LLM 生成(DeepSeek JSON Mode + 容错解析兜底,重试 2 次)
+        # response_format 强制模型输出合法 JSON(DeepSeek 官方 JSON Mode,
+        # 见 api-docs.deepseek.com/zh-cn/guides/json_mode;prompt 已含 "JSON" 字样)。
+        llm = get_chat_model().bind(response_format={"type": "json_object"})
         raw_output: dict | None = None
         for attempt in range(3):
             messages = prompt.format_messages(
@@ -121,15 +173,14 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
             )
             response = llm.invoke(messages)
             content = response.content if isinstance(response, AIMessage) else str(response)
-            try:
-                raw_output = json.loads(content)
+            raw_output = _extract_json(content)
+            if raw_output is not None:
                 break
-            except json.JSONDecodeError:
-                if attempt < 2:
-                    logger.warning("service=%s step=%d span=%s event=retry reason=bad_json",
-                                   _AGENT, step, span_id)
-                else:
-                    raise RuntimeError("LLM 输出非 JSON,重试 2 次仍失败")
+            if attempt < 2:
+                logger.warning("service=%s step=%d span=%s event=retry reason=bad_json",
+                               _AGENT, step, span_id)
+            else:
+                raise RuntimeError("LLM 输出无法解析为 JSON,重试 2 次仍失败")
 
         # 4. skill 脚本标准化
         normalized = _run_skill_script(step, raw_output)

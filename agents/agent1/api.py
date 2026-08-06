@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime
 
@@ -24,6 +25,8 @@ from agents.agent1.store import converter, scheme_store
 from common.otel import init_otel, get_tracer
 
 app = FastAPI(title="海外舆情检索方案生成 Agent", version="0.1.0")
+
+logger = logging.getLogger(__name__)
 
 
 def _user(request: Request) -> str:
@@ -69,8 +72,18 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
     }
 
     async def _runner():
-        group = await run_pipeline(group_id, req.company_name, user, meta)
-        scheme_store.save_draft(group)  # 完成后落草稿(未 commit)
+        try:
+            group = await run_pipeline(group_id, req.company_name, user, meta)
+            scheme_store.save_draft(group)  # 完成后落草稿(未 commit)
+        except Exception as exc:
+            # 任务失败:落错误草稿,进度接口可查(不静默)
+            logger.error("service=agent1 event=pipeline_failed group_id=%s error=%s", group_id, exc)
+            scheme_store.save_draft({
+                "group_id": group_id, "owner": user, "company_name": req.company_name,
+                "meta": meta, "status": "failed", "step_status": [],
+                "schemes": [], "created_at": datetime.now().isoformat(), "committed_at": None,
+                "error": str(exc),
+            })
 
     task = asyncio.create_task(_runner())
     app.state.tasks[group_id] = task
