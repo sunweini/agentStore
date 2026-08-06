@@ -20,6 +20,7 @@
 - **多供应商模型**:`common/llm.py` 供应商注册表。换供应商改 `.env` 的 `LLM_PROVIDER`,加供应商注册表加一项,代码不动。
 - **prompt 分离是能力非强制**:`common/prompts.py` 的 `load_prompt(agent, name="system")` 加载 `agents/<agent>/prompts/<name>.md`。默认一个 system.md,复杂 agent 按 node 拆多 prompt。
 - **目录**:agent 平级放 `agents/`(每个含 agent.py + utils/{state,nodes,tools}.py + prompts/),共享层在 `common/`,新 agent 在 `langgraph.json` 注册。
+- **每个 agent 必须有独立 CLAUDE.md**:`agents/<agent>/CLAUDE.md`,写清本 agent 的职责、架构、常用操作(加工具/改提示词/接真实业务)、约束。在 agent 目录工作时自动加载。
 
 ## 项目状态
 
