@@ -94,3 +94,40 @@ START → <node1> ──<条件>──→ <node2>
 
 - <本 agent 特有的约束;通用约束见根 CLAUDE.md>
 ```
+
+## 7. 通用开发经验(踩坑记录,开发 agent 前必读)
+
+以下经验来自 agent1(海外舆情方案生成)实际开发,均验证过。
+
+### 7.1 LangGraph / checkpointer
+
+- `AsyncSqliteSaver.from_conn_string()` 返回**异步上下文管理器**,必须 `async with` 进入后才拿到 saver 实例,不能直接当 saver 传给 `compile()`(否则报 "Invalid checkpointer")。
+- `recursion_limit` 是运行时 config 参数(`graph.invoke(inputs, config={"recursion_limit": N})`),不是 compile 参数。
+- 图节点内 LLM 调用必须用 `ainvoke`(异步)。用同步 `invoke` 会阻塞 FastAPI 事件循环,流水线跑时其他请求全部卡死(实测现象:progress 接口无响应)。
+- 生成中进度从 checkpoint 读(`aget_state`,thread_id=group_id),完成后才读文件/草稿——不要在生成中读文件(会 404)。
+
+### 7.2 LLM 输出格式(DeepSeek 实测)
+
+- **必须用 JSON Mode**:`llm.bind(response_format={"type": "json_object"})`,prompt 须含 "json" 字样(官方要求)。否则 LLM 常输出 Markdown 代码块/说明文字,`json.loads` 直接失败。
+- 即使开 JSON Mode 也**保留容错解析兜底**:剥 ```json 代码块 → 截取首个 `{` 到最后一个 `}` → json.loads。
+- **ChatPromptTemplate 是 f-string 语法**:prompt 里 JSON 样例的 `{}` 必须转义成 `{{}}`,否则报 "Nested replacement fields are not allowed"。
+- prompt 必须给 LLM **具体 JSON schema 样例**(字段名/枚举值),否则 LLM 盲猜字段名,脚本校验全挂(实测:轨 key 输成 "boolean" 而非 a/b/c)。
+- LLM 输出的数组长度可能与上步不一致(如 schemes 数),下游合并要防御性取值(`i < len(...)` 保护),否则 `list index out of range`。
+
+### 7.3 skill 分步脚本模式
+
+- skill 是知识源(方法论),**分步格式契约放脚本**(stepN.py):LLM 自由生成,脚本负责校验字段/标准化/补默认值/缺字段记 GAP(编号 GAP00N)。
+- 脚本读 stdin JSON、写 stdout JSON,非 JSON 输入退出码非 0 + stderr 说明 —— 节点据此判断重试。
+- 输出格式定义唯一来源:skill 的 `references/output-formats.md`,节点 prompt 引用它。
+
+### 7.4 数据与路径
+
+- 运行时数据目录(方案组/计费/checkpoint)统一放项目根 `data/`,计算路径注意文件层级(子目录多一层 `parent`),**加路径单测防回归**。
+- 计费 pending 记录有并发上限(防刷),测试遗留的 pending 会触发 429 —— 清理 `data/billing/` 即可。
+- `data/` 运行时产物加 `.gitignore`,不提交。
+
+### 7.5 前端联调
+
+- 后端必须加 CORS middleware,否则浏览器页跨域被拦。
+- 前端轮询 progress 时,404 是"还没数据"的正常态,不要当错误处理;但要确认后端在生成中能返回实时进度(见 7.1)。
+- 提交按钮要禁用 + loading 态,失败用 alert 醒目提示(小字错误提示用户注意不到,看起来像"没反应")。

@@ -7,6 +7,7 @@
 - **必须参考 LangChain 官方文档和 API 指引开发**(用户的硬性要求,详见 [docs/dev-standards.md](docs/dev-standards.md))。开发任何 agent 功能前,先用 langchain MCP 查文档确认 API 用法,禁止凭记忆写 API。
   - 文档:docs-langchain MCP(`search_docs_by_lang_chain` / `query_docs_filesystem`)
   - API 参考:reference-langchain MCP(`search_api` / `get_symbol`)
+- **开发前必读 [docs/dev-standards.md §7 通用开发经验](docs/dev-standards.md#7-通用开发经验踩坑记录开发-agent-前必读)**:LangGraph checkpointer 用法、LLM JSON Mode、ChatPromptTemplate 转义、异步 LLM、skill 分步脚本等踩坑记录,开发时对照避免重踩。
 
 ## 开发流程(用户偏好)
 
