@@ -51,6 +51,7 @@
 - 端到端测试无 key 自动跳过,不阻塞本地无 key 环境。
 - 密钥不硬编码,统一 `.env` + `common/config.py`。
 - 日志结构化(key=value),遵循可观测性规范。
+- **全链路可观测**:所有 agent 必须接入 OpenTelemetry 全链路监控——HTTP 请求、图节点执行、LLM 调用、工具调用都产生 span,携带 trace_id 关联;支持可视化查看(如 Jaeger/Grafana)。node/API 入口注入 trace context,错误记录到 span。
 
 ## 6. Agent CLAUDE.md 模板
 
