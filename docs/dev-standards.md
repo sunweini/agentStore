@@ -35,13 +35,15 @@
 - **多供应商模型**:LLM 支持多供应商、多模型 ID。供应商注册表模式(`common/llm.py`),换供应商改 `.env` 不改代码。
 - **prompt 管理**:prompt 与代码分离,存 `agents/<agent>/prompts/*.md`;加载走 `common/prompts.py`。一个 agent 可一个 system prompt,也可按 node 拆多 prompt(能力支持,按需使用)。
 - **agent 目录**:`agents/<agent>/` 含 `agent.py`(图构建)、`utils/{state,nodes,tools}.py`、`prompts/`。新 agent 在 `langgraph.json` 注册。
+- **每个 agent 必须有独立 CLAUDE.md**:`agents/<agent>/CLAUDE.md` 是该 agent 的专属开发指南,在该 agent 目录下工作时自动加载。新建 agent 时**必须按 §6 模板生成**,并写入根 `CLAUDE.md` 的架构约定。
 - **共享层**:跨 agent 复用代码放 `common/`(模型工厂/配置/prompt 加载/基础工具)。
 
 ## 4. 开发流程
 
 1. 设计先行:新 agent/新功能先出设计,用户确认后实现。
 2. 骨架阶段只建目录+占位文档(不写实现代码),用户确认后填实现。
-3. 实现后测试:`pytest`,三层测试(工具单测/图单测 mock LLM/端到端)。
+3. **按 §6 模板生成 `agents/<agent>/CLAUDE.md`**。
+4. 实现后测试:`pytest`,三层测试(工具单测/图单测 mock LLM/端到端)。
 
 ## 5. 质量要求
 
@@ -49,3 +51,45 @@
 - 端到端测试无 key 自动跳过,不阻塞本地无 key 环境。
 - 密钥不硬编码,统一 `.env` + `common/config.py`。
 - 日志结构化(key=value),遵循可观测性规范。
+
+## 6. Agent CLAUDE.md 模板
+
+**新建 agent 时,必须按此模板生成 `agents/<agent>/CLAUDE.md`**,替换 `<agent>` 占位符,并按实际架构填写。参考实例:`agents/agent1/CLAUDE.md`。
+
+```markdown
+# <agent> 开发指南
+
+<一句话:本 agent 是什么、做什么。>
+
+## 本 agent 是什么
+
+- 职责:<本 agent 的核心职责>
+- 开发前必读:根目录 [CLAUDE.md](../../CLAUDE.md) 和
+  [docs/dev-standards.md](../../docs/dev-standards.md)(必须依据 langchain MCP 文档/API 开发)
+
+## 架构
+
+<图结构文字描述或 Mermaid 图,例:>
+START → <node1> ──<条件>──→ <node2>
+            │
+            └────<条件>────→ END
+
+| 文件 | 职责 |
+|---|---|
+| <agent>.py | <图构建说明> |
+| utils/state.py | <状态定义说明> |
+| utils/nodes.py | <节点/路由说明> |
+| utils/tools.py | <工具定义说明> |
+| prompts/<name>.md | <提示词说明> |
+
+## 常用操作
+
+- **加工具**:<步骤>
+- **改提示词**:<步骤>
+- **接真实业务**:<步骤>
+- **跑测试**:<步骤>
+
+## 约束
+
+- <本 agent 特有的约束;通用约束见根 CLAUDE.md>
+```
