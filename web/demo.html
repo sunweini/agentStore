@@ -184,6 +184,10 @@ $("#startBtn").onclick = async () => {
   const company = $("#company").value.trim();
   if (!company) { $("#errMsg").textContent = "请输入公司名"; $("#errMsg").classList.remove("hide"); return; }
   $("#errMsg").classList.add("hide");
+  // 防重复提交:按钮禁用 + loading 态
+  const btn = $("#startBtn");
+  btn.disabled = true;
+  btn.textContent = "✦ 生成中…";
   renderSteps();
   $("#stageCard").classList.remove("hide");
   $("#resultCard").classList.add("hide");
@@ -203,7 +207,15 @@ $("#startBtn").onclick = async () => {
       body: JSON.stringify({ company_name: company, role: $("#role").value }),
     });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || "提交失败");
+    if (!r.ok) {
+      const msg = d.detail || "提交失败";
+      $("#errMsg").textContent = "提交失败: " + msg;
+      $("#errMsg").classList.remove("hide");
+      alert("提交失败: " + msg);  // 醒目提示
+      btn.disabled = false; btn.textContent = "✦ 开始生成";
+      clearInterval(etaTimer);
+      return;
+    }
     groupId = d.group_id;
     pollTimer = setInterval(() => poll(t0, etaTimer), 3000);
     poll(t0, etaTimer);
@@ -212,6 +224,8 @@ $("#startBtn").onclick = async () => {
     $("#stageCard").classList.add("hide");
     $("#errMsg").textContent = "提交失败: " + e.message;
     $("#errMsg").classList.remove("hide");
+    alert("提交失败: " + e.message);
+    btn.disabled = false; btn.textContent = "✦ 开始生成";
   }
 };
 
