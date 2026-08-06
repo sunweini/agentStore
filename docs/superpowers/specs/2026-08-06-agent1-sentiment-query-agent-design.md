@@ -14,7 +14,7 @@
 
 | 项 | 选择 |
 |---|---|
-| 编排 | LangGraph 状态机 + SqliteSaver checkpointer(中断/续跑) |
+| 编排 | LangGraph 状态机 + AsyncSqliteSaver checkpointer(中断/续跑,支持多用户并发) |
 | 交互层 | FastAPI(纯 API 接口,勾选是外部事件不塞图) |
 | LLM | DeepSeek(common/llm.py 工厂) |
 | 搜索 | gateway MCP websearch 池(brave/tavily/serpapi 三引擎,MultiServerMCPClient) |
@@ -65,7 +65,8 @@ agents/agent1/
 │   └── websearch.py             # gateway MCP 池封装(3 引擎自动切换)
 ├── store/
 │   ├── __init__.py
-│   └── scheme_store.py          # JSON 文件库(草稿/正式/索引)
+│   ├── scheme_store.py          # JSON 文件库(草稿/正式/索引)
+│   └── converter.py             # 方案组 → skill spec 格式转换(导出用)
 ```
 
 公共层新增 `common/otel.py`(OTel 初始化);`common/skills/` 预留公共 skill 目录。
@@ -80,7 +81,9 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 
 - 勾选:方案级 selected + 轨级 selected 两级。
 - 汇总:勾选轨数 = 任务行数。
+- 轨类型固定 6 类(key 取值):`a 全量` / `b 精准` / `c 不点名` / `快讯` / `司法` / `招标`。
 - 任务状态:6 步每步 pending/running/done/error,存 checkpointer。
+- **commit 后冻结**:勾选状态固化,status 置「已入库」;再改勾选须走「重新生成」新流程(新 group_id)。
 
 ## 6. Skill 目录策略(用户指定)
 
@@ -88,6 +91,7 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 - `agents/<agent>/skills/` — 仅该 agent 可用。
 - overseas-sentiment-query-builder 放 `agents/agent1/skills/`(从 ~/.claude/skills/ 复制)。
 - loader 按 agent → common 顺序查找。
+- **分步加载**:4 个 references 全文不进单步 prompt(context 爆)。按步骤只加载对应文件:步骤 1-2 用 SKILL.md 主体,步骤 3 用 keyword-dictionary.md,步骤 4 用 query-patterns.md,步骤 5 用 source-whitelists.md,步骤 6 用 cadence-and-risk.md。
 
 ## 7. API 接口
 
@@ -102,18 +106,21 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 
 - 后台 `asyncio.create_task` 跑图,`thread_id = group_id`。
 - 中断/续跑:同 thread_id 重跑,已完成步骤复用(checkpointer)。
+- **导出转换层**:`store/` 内 `converter.py` 把勾选后的方案组(轨)转成 skill 脚本要求的 spec 格式(tasks 行 + 关键词字典 + extra_notes),再调 skill 的 `build_task_xlsx.py` 生成 Excel。转换层放 store,复用计费/勾选冻结后的正式数据。
 
 ## 8. 鉴权与计费
 
 - apikey:`Authorization: Bearer <apikey>`,合法 key 列表配 `.env`/JSON 文件,标识用户。
-- 计费:一次完整流程(提交 → 6 步 → 确认入库)= 1 计费单位。commit 时记一条到 `data/billing/<user>.json`。
-- 进度查询/勾选不重复计费。
+- **资源归属校验**:每个 group 记录 `owner`(apikey 标识的用户)。所有 `/groups/{id}/*` 接口校验归属,越权返回 403。apikey 模型也必须防跨用户访问。
+- 计费:一次完整流程 = 1 计费单位。**每次提交生成(创建 group)计一次**,commit 时冻结计费记录(防"重新生成"刷计费)。进度查询/勾选不重复计费。
+- 计费记录:`data/billing/<user>.json`,commit 时记 `{group_id, user, created_at, committed_at}`。
 
 ## 9. OpenTelemetry 全链路(已写入 dev-standards §5)
 
 - `common/otel.py`:统一 OTLP exporter 初始化,FastAPI middleware 全请求 trace。
 - LangChain 原生 LLM span + 图节点手动 span + MCP 工具 span。
 - 分层:API 请求 → 图执行(thread_id)→ 节点 span(websearch/LLM)。
+- **高基数约束(遵循 OBS-CORE-003)**:用户标识(apikey)只进日志/计费,不进 span label;span 只带 trace_id/thread_id/步骤名/引擎名等低基数 label。
 - 已加入开发规范:所有 agent 必须接 OTel。
 
 ## 10. 错误处理
@@ -122,6 +129,7 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 - MCP 失败 → 切引擎重试(3 引擎池)。
 - LLM 格式错 → 重试 2 次,仍错标 error + GAP。
 - 无 key/无 MCP → 明确报错。
+- **MCP 连接生命周期**:应用启动时建单例连接,`get_tools()` 结果缓存复用,不在每次跑图时重建。
 
 ## 11. 依赖新增
 
