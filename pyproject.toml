@@ -1,0 +1,8 @@
+[project]
+name = "function-call-tool"
+version = "0.1.0"
+description = "基于 LangChain/LangGraph 的多步骤任务 Agent 组"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
