@@ -195,3 +195,20 @@ def test_billing_max_pending(tmp_path, monkeypatch):
         billing.create_pending("u1", f"g{i}")
     with pytest.raises(Exception):
         billing.create_pending("u1", "g_over")
+
+
+def test_billing_concurrent_no_loss(tmp_path, monkeypatch):
+    """并发竞态:同一用户并发提交,记录不丢失(文件锁保证原子)。"""
+    import asyncio
+    monkeypatch.setattr(billing, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(billing, "_MAX_PENDING", 100)  # 放开上限测竞态
+
+    async def _run():
+        await asyncio.gather(*[
+            asyncio.to_thread(billing.create_pending, "u1", f"g{i}")
+            for i in range(10)
+        ], return_exceptions=True)
+
+    asyncio.run(_run())
+    recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
+    assert len(recs) == 10  # 无丢失
