@@ -98,6 +98,49 @@ spec 的字段结构见 `assets/task_spec_example.json`（可直接复制修改�
 
 生成后**务必打开确认**行数与分组无误，再交付。
 
+## 分步脚本使用指南(流水线模式)
+
+本 skill 提供 **6 个分步脚本**(`scripts/step1_entities.py` … `step6_cadence.py`),供 AI Agent 流水线逐步调用——每步由 Agent 完成「联网搜索 → LLM 生成」后,调对应脚本把结果**按固定格式标准化**,再进入下一步。这是与「一次性生成 Excel」并行的第二种使用方式。
+
+### 调用约定
+
+每个脚本:**读 stdin JSON → 校验/标准化/补默认/记 GAP → 写 stdout JSON**。
+
+```bash
+echo '<JSON>' | python3 scripts/stepN_xxx.py
+```
+
+- 脚本只接受 stdin JSON,不接受命令行参数
+- 输出 stdout JSON;若输入不是合法 JSON 或字段缺失,退出码非 0 + stderr 输出 `FORMAT_ERROR: <原因>`
+- 字段缺失/非法值:自动补默认值,并以 `GAP00N` 编号记录到输出的 `_gaps` 字段(不中断流程)
+
+### 脚本与步骤对应
+
+| 脚本 | 对应步骤 | 标准化内容 |
+|---|---|---|
+| `step1_entities.py` | ① 实体测绘 | 母公司/子公司/海外法人(语区分组)/拼写变体/同名干扰源 |
+| `step2_profile.py` | ② 主体画像 | 角色(承包商/业主/ai判定)+ 相关度口径 + 重点地区 |
+| `step3_keywords.py` | ③ 关键词字典 | A/B/C/D/R/X 六层行(短缩写强制 context_guard) |
+| `step4_queries.py` | ④ 双轨检索式 | schemes×tracks,布尔+Google 双语法(轨 key 限 a/b/c/快讯/司法/招标) |
+| `step5_sources.py` | ⑤ 属地信源 | 每轨 sources[](域名白名单,自动去协议/路径/转小写) |
+| `step6_cadence.py` | ⑥ 频次定级 | 每轨 frequency/risk/relevance(快讯轨强制快讯/小时级) |
+
+### 步骤间数据流
+
+```
+step1 → step2 → step3 → step4 → step5 → step6
+实体测绘  画像   关键词   检索式   信源   频次定级
+  └──── 逐步传递,每步产物作为下一步输入 ────┘
+```
+
+- step4+5+6 的 `schemes` 结构一一对应:step4 建轨,step5 补信源,step6 补频次风险,逐步合并
+- step3 的 `keywords` 即最终 spec 的 keywords 行,无需再转换
+- 每步输出的 `_gaps` 需收集汇总,写入最终交付物的「待补缺口」
+
+### 输出格式契约
+
+6 步输出的**唯一格式定义**在 `references/output-formats.md`(每步 JSON schema + 字段枚举)。**Agent 每步的提示词必须引用该文件**,LLM 按 schema 输出,脚本负责兜底校验。
+
 ## 输出规格
 
 **Sheet 1「检索任务清单」**（核心）——每行一个爬取任务，12 列：
@@ -137,5 +180,7 @@ spec 的字段结构见 `assets/task_spec_example.json`（可直接复制修改�
 - `references/query-patterns.md` — 双轨三式详解、布尔与 Google 语法差异、常见干扰模式
 - `references/source-whitelists.md` — 属地信源筛选方法、类型清单、可信度分级
 - `references/cadence-and-risk.md` — 频次与风险定级规则、提频触发信号
+- `references/output-formats.md` — **6 步输出格式契约**(分步脚本模式的唯一格式定义,见上文「分步脚本使用指南」)
 - `assets/task_spec_example.json` — spec 模板（含完整字段示例）
 - `scripts/build_task_xlsx.py` — 由 spec 生成三 sheet Excel
+- `scripts/step1_entities.py` … `scripts/step6_cadence.py` — 6 个分步脚本(流水线模式,见上文「分步脚本使用指南」)
