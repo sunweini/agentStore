@@ -37,7 +37,6 @@ def main() -> None:
                 "google_query": google,
                 "sources": [],
                 "frequency": "",
-                "risk": "",
                 "relevance": "",
                 "selected": True,
             })
@@ -55,7 +54,7 @@ def main() -> None:
             "selected": True,
         })
     if not normed:
-        fail("schemes 为空或全部无有效轨:LLM 未按格式输出轨(检查 key 是否在 a/b/c/快讯/司法/招标)")
+        fail("schemes 为空或全部无有效轨:LLM 未按格式输出轨(检查 key 是否在 全量新闻/负面新闻/行业新闻/快讯/司法/招标)")
     emit(with_gaps({"schemes": normed}))
 
 

@@ -64,18 +64,33 @@ def test_step1_entities_format():
 
 
 def test_step4_queries_tracks():
+    """轨 key 用中文语义名:全量新闻/负面新闻/行业新闻/快讯/司法/招标。"""
     out = _run_script("step4_queries.py", {"schemes": [
         {"id": "Q0", "name": "集团层", "tracks": [
-            {"key": "a", "boolean": "(A)", "google": "(A)"},
-            {"key": "b", "boolean": "(A) AND (strike)", "google": "(A) strike"},
+            {"key": "全量新闻", "boolean": "(A)", "google": "(A)"},
+            {"key": "负面新闻", "boolean": "(A) AND (strike)", "google": "(A) strike"},
         ]},
     ]})
     sc = out["schemes"][0]
     assert sc["tracks"][0]["boolean_query"] == "(A)"
-    assert sc["tracks"][1]["key"] == "b"
-    # 每轨默认 selected=True,sources 空列表
+    assert sc["tracks"][1]["key"] == "负面新闻"
+    # 每轨默认 selected=True,sources 空列表,且不含 risk 字段
     assert sc["tracks"][0]["selected"] is True
     assert sc["tracks"][0]["sources"] == []
+    assert "risk" not in sc["tracks"][0]
+
+
+def test_step4_rejects_old_letter_keys():
+    """旧字母轨 key(a/b/c)不在新 TRACK_KEYS:全部无效 → 脚本非 0 退出。"""
+    proc = subprocess.run(
+        [sys.executable, str(_SCRIPTS / "step4_queries.py")],
+        input=json.dumps({"schemes": [{"id": "Q0", "name": "集团层", "tracks": [
+            {"key": "a", "boolean": "(A)", "google": "(A)"},
+        ]}]}),
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "FORMAT_ERROR" in proc.stderr
 
 
 def test_step6_cadence_fix_fast():
