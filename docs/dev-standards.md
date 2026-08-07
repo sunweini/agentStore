@@ -125,6 +125,7 @@ START → <node1> ──<条件>──→ <node2>
 - 运行时数据目录(方案组/计费/checkpoint)统一放项目根 `data/`,计算路径注意文件层级(子目录多一层 `parent`),**加路径单测防回归**。
 - 计费 pending 记录有并发上限(防刷),测试遗留的 pending 会触发 429 —— 清理 `data/billing/` 即可。
 - `data/` 运行时产物加 `.gitignore`,不提交。
+- **Python 包名不能含连字符**:`from agents.sentiment-query-agent import x` 是 SyntaxError。目录名/展示名可用连字符(业务名),但**包名必须下划线**(`agents/sentiment_query_agent`)。改名时:目录 `git mv` + 内容 sed 替换 + import 路径逐一核对,避免 sed 误改展示名(文档/日志 service 名)与包名混用。
 
 ### 7.5 前端联调
 
