@@ -5,6 +5,17 @@
 
 ---
 
+## v1.2.0 — 2026-08-07(轨 key 语义化 + 移除风险等级)
+
+### 变更
+
+- sentiment-query-agent:轨 key 语义化(a/b/c → 全量新闻/负面新闻/行业新闻),任务 ID 形如 Q0-全量新闻
+- sentiment-query-agent:全链路移除风险等级(critical/high/medium/low):step6/state/nodes/converter/Excel/skill 文档/demo
+- 保留:风险词(R 层词表、负面新闻轨 AND 条件)、频次定级、相关度 direct/indirect/context
+- 兼容:LLM 多余 risk 输入被 step6 忽略;旧字母轨 key 校验失败记 GAP
+
+---
+
 ## v1.1.0 — 2026-08-07(load_skill 方法论接入)
 
 ### 新增功能
