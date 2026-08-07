@@ -4,8 +4,8 @@
 
   "tasks": [
     {
-      "_注释": "Q0 集团层全量轨。集团层通常只需 a+b 两式，不需要不点名轨。",
-      "id": "Q0",
+      "_注释": "Q0-全量新闻 集团层全量新闻轨。集团层通常只需全量+负面两式，不需要行业新闻轨。",
+      "id": "Q0-全量新闻",
       "group": "集团层",
       "region": "全语种",
       "lang": "zh/en",
@@ -13,13 +13,12 @@
       "google": "(\"公司英文注册名\" OR \"英文缩写\" OR \"中文全称\") -同名干扰词1 -同名干扰词2 -同名集团",
       "sources": ["reuters.com", "行业垂直媒体.com", "属地主流媒体.com"],
       "frequency": "周级",
-      "risk": "medium",
       "relevance": "direct",
       "note": "全量轨。缩写噪音大时加 AND (行业词 OR 所在国)。母语检索式须附地域词隔离本国招采噪音"
     },
     {
-      "_注释": "Q0b 集团层精准轨：实体键 AND 风险词，只抓负面，可高频。",
-      "id": "Q0b",
+      "_注释": "Q0-负面新闻 集团层负面新闻轨：实体键 AND 风险词，只抓负面，可高频。",
+      "id": "Q0-负面新闻",
       "group": "集团层·负面精准",
       "region": "全语种",
       "lang": "zh/en",
@@ -27,13 +26,12 @@
       "google": "(\"英文缩写\" OR \"英文常用名\") (strike OR protest OR accident OR lawsuit OR pollution) -同名干扰词1",
       "sources": ["reuters.com", "行业垂直媒体.com"],
       "frequency": "日级",
-      "risk": "high",
       "relevance": "direct",
       "note": "精准轨。集团层任何负面直接升客户指标"
     },
     {
-      "_注释": "区域组不点名轨示例：地名键 AND 行业词 AND 外资标识，抓早期未点名信号。",
-      "id": "Q1c",
+      "_注释": "区域组行业新闻轨示例：地名键 AND 行业词 AND 外资标识，抓早期未点名信号。",
+      "id": "Q1-行业新闻",
       "group": "某国·某项目群·不点名",
       "region": "某国",
       "lang": "en",
@@ -41,13 +39,12 @@
       "google": "(地名1 OR 地名2) (tailings OR spill OR acid) Chinese mine",
       "sources": ["属地主流媒体.com", "属地调查报道媒体.org", "属地判例库.org", "主管部门.gov.xx"],
       "frequency": "周级",
-      "risk": "high",
       "relevance": "context",
       "note": "context 捕捉，抓同区域未点名的外资企业负面。命中不计入客户自身负面指标"
     },
     {
-      "_注释": "人员安全级示例：涉战乱/治安，走快讯管道。",
-      "id": "Q6",
+      "_注释": "快讯轨示例：涉战乱/治安，走快讯管道。",
+      "id": "Q6-快讯",
       "group": "某国·高风险项目",
       "region": "某国",
       "lang": "en",
@@ -55,7 +52,6 @@
       "google": "\"项目名\" (attack OR seized OR shutdown)",
       "sources": ["属地媒体.com", "境外流亡媒体.org", "rfa.org"],
       "frequency": "快讯/小时级",
-      "risk": "critical",
       "relevance": "direct",
       "note": "人员安全级，命中即推送应急联系人。主源为境外媒体，核实困难须标注"
     }

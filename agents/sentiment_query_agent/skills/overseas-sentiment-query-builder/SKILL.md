@@ -1,6 +1,6 @@
 ---
 name: overseas-sentiment-query-builder
-description: 把企业海外舆情监测的实体/项目知识，转化成可直接喂给爬虫调度器的检索任务清单——分层关键词字典、分组双轨检索式（布尔+Google 双语法）、属地信源白名单、频次与风险定级，输出为多 sheet Excel。当用户提到舆情监测、舆情检索、关键词包、检索式、爬虫抓取任务、境外/海外负面信息监测、信源白名单、监测频次、competitor or country risk media monitoring、OSINT media monitoring setup 时，都应使用本 skill；即使用户只说"帮我整理关键词"或"把这些检索式排个班"也要使用。同样适用于把已有的零散关键词包/知识库规范化成可执行清单，或为新客户从零搭建监测方案。
+description: 把企业海外舆情监测的实体/项目知识，转化成可直接喂给爬虫调度器的检索任务清单——分层关键词字典、分组双轨检索式（布尔+Google 双语法）、属地信源白名单、频次定级，输出为多 sheet Excel。当用户提到舆情监测、舆情检索、关键词包、检索式、爬虫抓取任务、境外/海外负面信息监测、信源白名单、监测频次、competitor or country risk media monitoring、OSINT media monitoring setup 时，都应使用本 skill；即使用户只说"帮我整理关键词"或"把这些检索式排个班"也要使用。同样适用于把已有的零散关键词包/知识库规范化成可执行清单，或为新客户从零搭建监测方案。
 ---
 
 # 海外舆情检索任务清单构建
@@ -78,9 +78,9 @@ echo '<关键词字典 JSON>' | python3 scripts/step3_keywords.py
 
 | 轨 | 构成 | 作用 |
 |---|---|---|
-| **a 全量轨** | 实体键簇（+ 地域限定） | 宽召回，掌握全貌 |
-| **b 精准轨** | 实体键簇 AND 风险词 | 只抓负面，可高频跑 |
-| **c 不点名轨** | 地名键 AND 行业词 AND 外资标识 | 抓同区域未点名的负面（context 层） |
+| **全量新闻轨** | 实体键簇（+ 地域限定） | 宽召回，掌握全貌 |
+| **负面新闻轨** | 实体键簇 AND 风险词 | 只抓负面，可高频跑 |
+| **行业新闻轨** | 地名键 AND 行业词 AND 外资标识 | 抓同区域未点名的负面（context 层） |
 
 每式同时给 **布尔语法** 和 **Google 语法** 两个版本——爬虫走 API 用布尔式，走搜索引擎抓取用 Google 式，两者的取反和括号规则不同，不能混用。语法差异见 `references/query-patterns.md`。
 
@@ -104,7 +104,7 @@ echo '<检索式 JSON>' | python3 scripts/step4_queries.py
 echo '<信源 JSON>' | python3 scripts/step5_sources.py
 ```
 
-### 第 5 步：定频次与风险等级
+### 第 5 步：频次定级
 
 频次不是拍脑袋，按下面的信号定，详见 `references/cadence-and-risk.md`：
 
@@ -113,11 +113,11 @@ echo '<信源 JSON>' | python3 scripts/step5_sources.py
 | 快讯/小时级 | 涉人员安全（战乱区、治安事件、伤亡） |
 | 日级 | 进行中的司法程序、政治敏感期、已发酵的重大事件 |
 | 周级 | 常规核心项目组 |
-| 双周/月级 | 轻扫组、低风险区域 |
+| 双周/月级 | 轻扫组、待证项目区域 |
 
 需要提频的信号：所在国大选年、项目投产/复产等高曝光节点、诉讼进入更高审级、当地战事或治安恶化、议题已外溢到国际媒体或学术圈。
 
-**完成后调用脚本**：按 `references/output-formats.md` 步骤 6 的格式写成 JSON（与检索式输出 `step4_queries.py` 的 schemes 结构一一对应，每轨补 frequency/risk/relevance），调 `scripts/step6_cadence.py` 标准化：
+**完成后调用脚本**：按 `references/output-formats.md` 步骤 6 的格式写成 JSON（与检索式输出 `step4_queries.py` 的 schemes 结构一一对应，每轨补 frequency/relevance），调 `scripts/step6_cadence.py` 标准化：
 
 ```bash
 echo '<频次定级 JSON>' | python3 scripts/step6_cadence.py
@@ -131,7 +131,7 @@ echo '<频次定级 JSON>' | python3 scripts/step6_cadence.py
 python scripts/build_task_xlsx.py <spec.json> <输出路径.xlsx>
 ```
 
-spec 的字段结构见 `assets/task_spec_example.json`（可直接复制修改）。脚本负责三个 sheet 的生成、频次与风险的色标、列宽冻结与筛选器——这些是确定性的重复劳动，交给脚本比手写 openpyxl 可靠。
+spec 的字段结构见 `assets/task_spec_example.json`（可直接复制修改）。脚本负责三个 sheet 的生成、频次色标、列宽冻结与筛选器——这些是确定性的重复劳动，交给脚本比手写 openpyxl 可靠。
 
 生成后**务必打开确认**行数与分组无误，再交付。
 
@@ -162,9 +162,9 @@ echo '<JSON>' | python3 scripts/stepN_xxx.py
 | `step1_entities.py` | ① 实体测绘 | 母公司/子公司/海外法人(语区分组)/拼写变体/同名干扰源 |
 | `step2_profile.py` | ② 主体画像 | 角色(承包商/业主/ai判定)+ 相关度口径 + 重点地区 |
 | `step3_keywords.py` | ③ 关键词字典 | A/B/C/D/R/X 六层行(短缩写强制 context_guard) |
-| `step4_queries.py` | ④ 双轨检索式 | schemes×tracks,布尔+Google 双语法(轨 key 限 a/b/c/快讯/司法/招标) |
+| `step4_queries.py` | ④ 双轨检索式 | schemes×tracks,布尔+Google 双语法(轨 key 限 全量新闻/负面新闻/行业新闻/快讯/司法/招标) |
 | `step5_sources.py` | ⑤ 属地信源 | 每轨 sources[](域名白名单,自动去协议/路径/转小写) |
-| `step6_cadence.py` | ⑥ 频次定级 | 每轨 frequency/risk/relevance(快讯轨强制快讯/小时级) |
+| `step6_cadence.py` | ⑥ 频次定级 | 每轨 frequency/relevance(快讯轨强制快讯/小时级) |
 
 ### 步骤间数据流
 
@@ -174,7 +174,7 @@ step1 → step2 → step3 → step4 → step5 → step6
   └──── 逐步传递,每步产物作为下一步输入 ────┘
 ```
 
-- step4+5+6 的 `schemes` 结构一一对应:step4 建轨,step5 补信源,step6 补频次风险,逐步合并
+- step4+5+6 的 `schemes` 结构一一对应:step4 建轨,step5 补信源,step6 补频次相关度,逐步合并
 - step3 的 `keywords` 即最终 spec 的 keywords 行,无需再转换
 - 每步输出的 `_gaps` 需收集汇总,写入最终交付物的「待补缺口」
 
@@ -188,10 +188,10 @@ step1 → step2 → step3 → step4 → step5 → step6
 
 ```
 任务ID | 检索组 | 国家/地区 | 语种 | 检索式(布尔) | 检索式(Google语法)
-     | 目标信源白名单(域名) | 建议频次 | 风险等级 | 命中期望相关度 | 状态 | 运营注/说明
+     | 目标信源白名单(域名) | 建议频次 | 命中期望相关度 | 状态 | 运营注/说明
 ```
 
-「状态」列留给运营勾选（待启用/运行中/暂停），频次与风险等级用色标区分优先级。
+「状态」列留给运营勾选（待启用/运行中/暂停），频次用色标区分优先级。
 
 **Sheet 2「关键词字典」**——6 列：层 / 键类别 / 关键词与别名 / 语种 / context_guard / 排除词与备注。
 
@@ -220,7 +220,7 @@ step1 → step2 → step3 → step4 → step5 → step6
 - `references/keyword-dictionary.md` — 六层词表定义、context_guards 生成规则、人名键与隐私处置
 - `references/query-patterns.md` — 双轨三式详解、布尔与 Google 语法差异、常见干扰模式
 - `references/source-whitelists.md` — 属地信源筛选方法、类型清单、可信度分级
-- `references/cadence-and-risk.md` — 频次与风险定级规则、提频触发信号
+- `references/cadence-and-risk.md` — 频次定级规则、提频触发信号
 - `references/output-formats.md` — **6 步输出格式契约**(分步脚本模式的唯一格式定义,见上文「分步脚本使用指南」)
 - `assets/task_spec_example.json` — spec 模板（含完整字段示例）
 - `scripts/build_task_xlsx.py` — 由 spec 生成三 sheet Excel

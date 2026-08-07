@@ -119,7 +119,7 @@ _STEP_PROMPTS = {
     5: "你是属地信源专家。为每轨配属地信源白名单域名(属地媒体/判例库/政府/NGO)。"
        "先 websearch 验证域名活性,再输出 JSON。\n"
        "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
-       '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "a", "sources": ["属地媒体.com"]}}]}}]}}',
+       '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "全量新闻", "sources": ["属地媒体.com"]}}]}}]}}',
     6: "你是频次定级专家。按信号为每轨定频次与相关度。先 websearch 验证时效,再输出 JSON。\n"
        "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
        '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "全量新闻", "frequency": "周级", '

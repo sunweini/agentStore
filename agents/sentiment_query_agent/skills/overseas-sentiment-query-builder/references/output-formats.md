@@ -55,13 +55,13 @@
 ```json
 {
   "schemes": [
-    {"id": "Q0", "name": "集团层·实体全量", "region": "全语种", "lang": "中/英",
-     "tracks": [{"key": "a", "boolean": "(...)", "google": "(...)"}]}
+    {"id": "Q0",
+     "tracks": [{"key": "全量新闻", "boolean": "(...)", "google": "(...)"}]}
   ]
 }
 ```
 
-轨 key 固定 6 类:a 全量 / b 精准 / c 不点名 / 快讯 / 司法 / 招标。每式布尔+Google 双版本,语法差异见 query-patterns.md。
+轨 key 固定 6 类:全量新闻 / 负面新闻 / 行业新闻 / 快讯 / 司法 / 招标。每式布尔+Google 双版本,语法差异见 query-patterns.md。
 
 ## 步骤 5 属地信源 → step5_sources.py
 
@@ -71,25 +71,25 @@
 {
   "schemes": [
     {"id": "Q0",
-     "tracks": [{"key": "a", "sources": ["属地媒体.com", "判例库.org"]}]}
+     "tracks": [{"key": "全量新闻", "sources": ["属地媒体.com", "判例库.org"]}]}
   ]
 }
 ```
 
 ## 步骤 6 频次定级 → step6_cadence.py
 
-每轨补 frequency/risk/relevance,组装完整 task 行。
+每轨补 frequency/relevance,组装完整 task 行。
 
 ```json
 {
   "schemes": [
     {"id": "Q0",
-     "tracks": [{"key": "a", "frequency": "周级", "risk": "medium", "relevance": "direct"}]}
+     "tracks": [{"key": "全量新闻", "frequency": "周级", "relevance": "direct"}]}
   ]
 }
 ```
 
-frequency:快讯/小时级|日级|周级|双周级|月级;risk:critical|high|medium|low;relevance:direct|indirect|context。
+frequency:快讯/小时级|日级|周级|双周级|月级;relevance:direct|indirect|context。
 
 ## 脚本职责
 
