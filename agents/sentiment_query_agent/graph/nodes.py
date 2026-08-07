@@ -36,6 +36,13 @@ logger = logging.getLogger(__name__)
 
 _AGENT = "sentiment-query-agent"
 
+# 每步注入的 load_skill 提示:告诉 LLM 可调工具拿方法论(方案 2a)
+_SKILL_HINT = (
+    "\n\n可用工具: load_skill(skill_name)。本步涉及海外舆情方法论"
+    "(六层词表/双轨语法/信源/频次规则),需要时调用 load_skill 获取专业指导,"
+    "然后按格式输出 JSON。工具返回内容仅供参考,不改变输出格式。"
+)
+
 
 def _extract_json(text: str) -> dict | None:
     """容错解析 LLM 输出中的 JSON。
@@ -151,9 +158,9 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
     step_status.append({"step": step, "status": "running", "output": None})
 
     try:
-        # 1. 该步系统指令
+        # 1. 该步系统指令(含 load_skill 提示:LLM 可调工具拿方法论)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", _STEP_PROMPTS[step]),
+            ("system", _STEP_PROMPTS[step] + _SKILL_HINT),
             ("human", "公司名:{company}\n上步产物:{prev}\n搜索:\n{search}\n按格式输出 JSON"),
         ])
 
@@ -162,18 +169,31 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
         search_result = await websearch(f"{company} 海外 项目 负面 舆情", engine="auto")
         logger.info("service=%s step=%d span=%s event=search_done", _AGENT, step, span_id)
 
-        # 3. LLM 生成(DeepSeek JSON Mode + 容错解析兜底,重试 2 次)
-        # response_format 强制模型输出合法 JSON(DeepSeek 官方 JSON Mode,
-        # 见 api-docs.deepseek.com/zh-cn/guides/json_mode;prompt 已含 "JSON" 字样)。
-        llm = get_chat_model().bind(response_format={"type": "json_object"})
+        # 3. LLM 生成(DeepSeek JSON Mode + load_skill 工具 + 容错解析,最多 2 回合)
+        # - JSON Mode 强制模型输出合法 JSON(DeepSeek 官方,见 api-docs.deepseek.com/zh-cn/guides/json_mode)
+        # - 绑定 load_skill 工具:LLM 需要方法论时主动调用(方案 2a,每步固定可用 skill 列表)
+        # - 多轮:回合 1 调工具 → 喂工具结果 → 回合 2 生成 JSON;回合 2 仍调工具则强制停止
+        from langchain_core.messages import ToolMessage
+        from agents.sentiment_query_agent.skills.loader import load_skill
+
+        llm = get_chat_model().bind_tools([load_skill], strict=True).bind(
+            response_format={"type": "json_object"}
+        )
+        messages = prompt.format_messages(
+            company=company,
+            prev=json.dumps(group.get(f"_step{step-1}", {}), ensure_ascii=False),
+            search=search_result,
+        )
         raw_output: dict | None = None
-        for attempt in range(3):
-            messages = prompt.format_messages(
-                company=company,
-                prev=json.dumps(group.get(f"_step{step-1}", {}), ensure_ascii=False),
-                search=search_result,
-            )
+        for attempt in range(3):  # 外层:JSON 解析重试(最多 3 次)
             response = await llm.ainvoke(messages)
+            # 回合 1:LLM 发 tool_calls → 执行工具 → 追加结果 → 回合 2(仅 1 轮工具)
+            if getattr(response, "tool_calls", None):
+                tool_msgs = [
+                    ToolMessage(content=load_skill.invoke(tc["args"]), tool_call_id=tc["id"])
+                    for tc in response.tool_calls
+                ]
+                response = await llm.ainvoke([*messages, response, *tool_msgs])
             content = response.content if isinstance(response, AIMessage) else str(response)
             raw_output = _extract_json(content)
             if raw_output is not None:

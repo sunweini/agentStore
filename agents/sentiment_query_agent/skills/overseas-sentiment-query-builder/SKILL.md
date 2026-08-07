@@ -38,6 +38,17 @@ description: 把企业海外舆情监测的实体/项目知识，转化成可直
 | indirect | 未点名，但可确定指向该集团/关联实体的项目 |
 | context | 行业性报道，仅称"中国企业/外资企业"或涉他企，未指向具体公司 |
 
+**完成后调用脚本**：本步产出两部分，分别调脚本标准化：
+
+```bash
+# 实体测绘(实体簇/拼写变体/干扰源)→ step1
+echo '<实体测绘 JSON>' | python3 scripts/step1_entities.py
+# 主体画像(角色/相关度口径/重点地区)→ step2
+echo '<主体画像 JSON>' | python3 scripts/step2_profile.py
+```
+
+格式见 `references/output-formats.md` 步骤 1、步骤 2。标准化输出作为下一步输入。
+
 ### 第 2 步：建分层关键词字典
 
 按 A/B/C/D/R/X 六层拆词。**分层不是为了好看，是因为每层的检索行为不同**——实体键可以单独跑，风险词只能作为 AND 条件，排除词全局附加。
@@ -53,6 +64,14 @@ description: 把企业海外舆情监测的实体/项目知识，转化成可直
 
 **context_guards 是关键机制**：任何 ≤5 字符的缩写都必须强制 AND 一组限定词，否则必然引入噪音。字典里要单列一栏写清楚。
 
+**完成后调用脚本**：按 `references/output-formats.md` 步骤 3 的格式写成 JSON，调 `scripts/step3_keywords.py` 标准化：
+
+```bash
+echo '<关键词字典 JSON>' | python3 scripts/step3_keywords.py
+```
+
+> 说明：本 skill 的「分步脚本流水线」含 6 个脚本（step1 实体测绘 / step2 主体画像 / step3 关键词 / step4 检索式 / step5 信源 / step6 频次），与工作流步骤对应。工作流第 1 步（厘清主体）覆盖 step1+step2 的产物，流水线模式下 step1/step2 在实体测绘与画像完成时各自调用；第 2 步调 step3；第 3 步调 step4；第 4 步调 step5；第 5 步调 step6。Excel 生成（第 6 步）走 build_task_xlsx.py。
+
 ### 第 3 步：按"国别 × 项目群"分组，写双轨三式检索式
 
 不要写一条大而全的检索式——无法排频次、无法配白名单、命中后无法归因。按**国别 × 项目群**切成组（Q0 集团层、Q1..Qn 各区域组），每组内部再拆成三式：
@@ -65,6 +84,12 @@ description: 把企业海外舆情监测的实体/项目知识，转化成可直
 
 每式同时给 **布尔语法** 和 **Google 语法** 两个版本——爬虫走 API 用布尔式，走搜索引擎抓取用 Google 式，两者的取反和括号规则不同，不能混用。语法差异见 `references/query-patterns.md`。
 
+**完成后调用脚本**：按 `references/output-formats.md` 步骤 4 的格式写成 JSON，调 `scripts/step4_queries.py` 标准化：
+
+```bash
+echo '<检索式 JSON>' | python3 scripts/step4_queries.py
+```
+
 ### 第 4 步：配属地信源白名单
 
 **这是决定信噪比的一步，也是最容易被略过的一步。** 国际大媒体（路透、行业媒体）只报大事；真正的早期信号在属地媒体、当地法律数据库、政府部门网站、NGO 报告里。
@@ -72,6 +97,12 @@ description: 把企业海外舆情监测的实体/项目知识，转化成可直
 每组配一份域名白名单，按国别整理。类型上要覆盖：属地主流媒体、调查报道媒体、行业垂直媒体、法律/司法数据库、政府主管部门、国际 NGO 与人权机构。方法与筛选标准见 `references/source-whitelists.md`。
 
 对信源要做**可信度标注**：单一信源、AI 生成内容站点、明显立场媒体，都要在清单里标出来，要求交叉验证后才可引用。
+
+**完成后调用脚本**：按 `references/output-formats.md` 步骤 5 的格式写成 JSON（与检索式输出 `step4_queries.py` 的 schemes 结构一一对应，每轨补 sources），调 `scripts/step5_sources.py` 标准化：
+
+```bash
+echo '<信源 JSON>' | python3 scripts/step5_sources.py
+```
 
 ### 第 5 步：定频次与风险等级
 
@@ -85,6 +116,12 @@ description: 把企业海外舆情监测的实体/项目知识，转化成可直
 | 双周/月级 | 轻扫组、低风险区域 |
 
 需要提频的信号：所在国大选年、项目投产/复产等高曝光节点、诉讼进入更高审级、当地战事或治安恶化、议题已外溢到国际媒体或学术圈。
+
+**完成后调用脚本**：按 `references/output-formats.md` 步骤 6 的格式写成 JSON（与检索式输出 `step4_queries.py` 的 schemes 结构一一对应，每轨补 frequency/risk/relevance），调 `scripts/step6_cadence.py` 标准化：
+
+```bash
+echo '<频次定级 JSON>' | python3 scripts/step6_cadence.py
+```
 
 ### 第 6 步：生成 Excel
 
