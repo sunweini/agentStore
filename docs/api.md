@@ -51,7 +51,7 @@ Content-Type: application/json
 | `company_name` | string | ✅ | 中文公司名(一个待搜索主体) |
 | `role` | string | — | 主体角色:`承包商` / `业主` / `ai判定`(默认) |
 | `regions` | string[] | — | 重点地区,空 = AI 推断 |
-| `query_types` | string[] | — | 检索类型:实体全量/负面精准/不点名/招标/快讯/司法,空 = 全部 |
+| `query_types` | string[] | — | 检索类型:全量新闻/负面新闻/行业新闻/招标/快讯/司法,空 = 全部 |
 
 **示例**:
 
@@ -138,7 +138,6 @@ Authorization: Bearer <apikey>
           "google_query": "(...)",
           "sources": ["属地媒体.com"],
           "frequency": "周级",
-          "risk": "medium",
           "relevance": "direct",
           "selected": true
         }
@@ -154,9 +153,8 @@ Authorization: Bearer <apikey>
 | 字段 | 说明 |
 |---|---|
 | `schemes[]` | 方案列表(6-8 个),每个含多轨 |
-| `schemes[].tracks[].key` | 轨类型:`a`全量 / `b`精准 / `c`不点名 / `快讯` / `司法` / `招标` |
+| `schemes[].tracks[].key` | 轨类型:`全量新闻` / `负面新闻` / `行业新闻` / `快讯` / `司法` / `招标` |
 | `schemes[].tracks[].frequency` | `快讯/小时级` / `日级` / `周级` / `双周级` / `月级` |
-| `schemes[].tracks[].risk` | `critical` / `high` / `medium` / `low` |
 | `schemes[].tracks[].relevance` | `direct` / `indirect` / `context` |
 | `keywords[]` | 关键词字典(六层 A/B/C/D/R/X) |
 
@@ -216,7 +214,7 @@ Authorization: Bearer <apikey>
 **响应 200**: Excel 文件(`{group_id}_tasks.xlsx`,3 sheet:检索任务清单 / 关键词字典 / 调度说明)
 
 - 只导出勾选的轨(勾选轨数 = 任务行数)
-- 检索任务清单列:任务ID | 检索组 | 国家/地区 | 语种 | 检索式(布尔) | 检索式(Google) | 信源白名单 | 建议频次 | 风险等级 | 相关度 | 状态 | 说明
+- 检索任务清单列:任务ID | 检索组 | 国家/地区 | 语种 | 检索式(布尔) | 检索式(Google) | 目标信源白名单 | 建议频次 | 命中期望相关度 | 状态 | 运营注/说明
 
 ---
 

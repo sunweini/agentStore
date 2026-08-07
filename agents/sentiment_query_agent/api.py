@@ -46,7 +46,7 @@ class CreateGroupRequest(BaseModel):
     company_name: str
     role: str = "ai判定"        # 承包商/业主/ai判定
     regions: list[str] = []     # 重点地区,空 = AI 推断
-    query_types: list[str] = [] # 检索类型(实体全量/负面精准/不点名/招标/快讯/司法),空 = 全部
+    query_types: list[str] = [] # 检索类型(全量新闻/负面新闻/行业新闻/招标/快讯/司法),空 = 全部
 
 
 class SelectionRequest(BaseModel):
