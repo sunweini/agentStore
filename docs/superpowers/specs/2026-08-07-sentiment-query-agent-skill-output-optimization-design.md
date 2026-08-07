@@ -58,6 +58,15 @@
 
 附:模板 `assets/task_spec_example.json` 删 4 处 `"risk"` 字段(16/30/44/58 行)。
 
+## 4b. 测试更新(新增)
+
+受影响的测试,必须同步更新:
+
+1. `tests/test_sentiment_query_agent.py:68-69` `test_step4_queries_tracks` — 轨 key 断言 `"a"`/`"b"` → `"全量新闻"`/`"负面新闻"`。
+2. `tests/test_sentiment_query_agent.py:84` `test_step6_cadence_fix_fast` — 输入可保留 `risk`(验证忽略逻辑),断言不变;若改为不带 risk 输入更贴合新契约,则仅删 risk 键,断言不变。
+3. `tests/test_sentiment_query_agent.py:121,124` `_sample_group` — 轨 key `"a"`/`"b"` → 中文;删 `risk` 字段;`test_converter_selected_only` 断言任务不含 risk。
+4. `step4_queries.py:40` — 标准化输出轨对象里的 `"risk": ""` 占位字段删掉。
+
 ## 5. 错误处理
 
 - LLM 若仍输出 `risk` 字段:step6_cadence.py 只取 frequency/relevance 输出,多余 risk 直接忽略——不报错、不记 GAP,向后兼容,不阻塞流水线。
