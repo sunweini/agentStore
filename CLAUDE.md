@@ -30,7 +30,7 @@
 - sentiment-query-agent 已交付为**海外舆情检索方案生成 Agent**:输入中文公司名 → 6 步流水线(skill 分步脚本按格式传回)→ 方案组 → API 勾选确认 → JSON 入库 + 计费。12 测试全过。
 - 前端演示页 `web/demo.html`(6 步实时回显 + 勾选/入库/导出)已跑通全流程。
 - 设计文档:`docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md`
-- 后续:真实监控主体验证、prompt 调优(频次/风险定级偏保守)、新 agent、接爬虫调度器。
+- 后续:真实监控主体验证、prompt 调优(频次定级偏保守)、新 agent、接爬虫调度器。
 
 ## 技术栈
 

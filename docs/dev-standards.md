@@ -112,7 +112,7 @@ START → <node1> ──<条件>──→ <node2>
 - **必须用 JSON Mode**:`llm.bind(response_format={"type": "json_object"})`,prompt 须含 "json" 字样(官方要求)。否则 LLM 常输出 Markdown 代码块/说明文字,`json.loads` 直接失败。
 - 即使开 JSON Mode 也**保留容错解析兜底**:剥 ```json 代码块 → 截取首个 `{` 到最后一个 `}` → json.loads。
 - **ChatPromptTemplate 是 f-string 语法**:prompt 里 JSON 样例的 `{}` 必须转义成 `{{}}`,否则报 "Nested replacement fields are not allowed"。
-- prompt 必须给 LLM **具体 JSON schema 样例**(字段名/枚举值),否则 LLM 盲猜字段名,脚本校验全挂(实测:轨 key 输成 "boolean" 而非 a/b/c)。
+- prompt 必须给 LLM **具体 JSON schema 样例**(字段名/枚举值),否则 LLM 盲猜字段名,脚本校验全挂(实测:轨 key 输成 "boolean" 而非合法枚举如 全量新闻/负面新闻/行业新闻/快讯/司法/招标)。
 - LLM 输出的数组长度可能与上步不一致(如 schemes 数),下游合并要防御性取值(`i < len(...)` 保护),否则 `list index out of range`。
 
 ### 7.3 skill 分步脚本模式

@@ -24,7 +24,7 @@ _COMMON_SKILLS = _PROJECT_ROOT / "common" / "skills"
 _AVAILABLE_SKILLS = {
     "overseas-sentiment-query-builder": (
         "把企业海外舆情监测需求,变成可直接执行的检索任务清单——"
-        "分层关键词字典、分组双轨检索式(布尔+Google)、属地信源白名单、频次与风险定级。"
+        "分层关键词字典、分组双轨检索式(布尔+Google)、属地信源白名单、频次定级。"
         "6 步流水线:实体测绘→主体画像→关键词字典→双轨检索式→属地信源→频次定级。"
         "分步脚本在 scripts/,格式契约在 references/output-formats.md。"
     ),
