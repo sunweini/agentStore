@@ -112,6 +112,7 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 - overseas-sentiment-query-builder 放 `agents/sentiment-query-agent/skills/`(从 ~/.claude/skills/ 复制)。
 - loader 按 agent → common 顺序查找。
 - **skill 原生加载(官方 skill 架构,渐进式披露)**:agent 把 skill 打包成 `load_skill` 工具,启动只加载 skill 摘要,agent 需要时按需调 `load_skill` 取完整内容(SKILL.md + references)。不手拆 6 个 prompt 文件。官方文档: /oss/python/langchain/multi-agent/skills。
+  - **实现落地(2026-08-07)**:方案 2a——每步节点绑定 `load_skill` 工具(`bind_tools(strict=True)`),LLM 需要方法论时主动调用;最多 2 回合(回合 1 并行调工具 → 回合 2 生成 JSON,防死循环);JSON Mode 与 tool calling 兼容已实测(`response_format` + `bind_tools` 可同用)。
 - **skill 改造:每步一个脚本,按格式传回(用户要求,路线 1)**:
   - skill 现状只有 `scripts/build_task_xlsx.py`(最终 Excel),无分步接口,不分步返回数据 → 需改造。
   - `agents/sentiment-query-agent/skills/overseas-sentiment-query-builder/scripts/` 加 6 个分步脚本:`step1_entities.py` / `step2_profile.py` / `step3_keywords.py` / `step4_queries.py` / `step5_sources.py` / `step6_cadence.py`。

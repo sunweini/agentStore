@@ -120,6 +120,9 @@ START → <node1> ──<条件>──→ <node2>
 - skill 是知识源(方法论),**分步格式契约放脚本**(stepN.py):LLM 自由生成,脚本负责校验字段/标准化/补默认值/缺字段记 GAP(编号 GAP00N)。
 - 脚本读 stdin JSON、写 stdout JSON,非 JSON 输入退出码非 0 + stderr 说明 —— 节点据此判断重试。
 - 输出格式定义唯一来源:skill 的 `references/output-formats.md`,节点 prompt 引用它。
+- **方法论供给用 load_skill 工具(方案 2a)**:每步节点绑定 `load_skill`(`bind_tools([...], strict=True)`),LLM 需要专业指导时主动调用,拿方法论后再生成。上限 2 回合(回合 1 并行调工具 → 回合 2 生成 JSON),防死循环。
+- **DeepSeek JSON Mode + tool calling 兼容**:`bind_tools([...], strict=True)` 与 `response_format={"type":"json_object"}` 可同用(实测)。注意:工具必须 `strict=True`,否则报 "Only strict function tools can be auto-parsed"。
+- **代码调用脚本 vs 文档指导**:运行时脚本调用放代码(确定性,方案 A);SKILL.md 文档写清脚本用法(知识层,自包含)。两者不冲突,缺一不可——只写文档不接代码,LLM 不会主动用脚本;只接代码不写文档,skill 无法独立交付。
 
 ### 7.4 数据与路径
 

@@ -26,7 +26,7 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 | [graph/nodes.py](graph/nodes.py) | 6 步节点:每步内联 prompt + LLM(强制 JSON)+ 调 skill 脚本标准化 |
 | [graph/flows.py](graph/flows.py) | 图构建:顺序边,单步失败标 error 不中断 |
 | [tools/websearch.py](tools/websearch.py) | gateway MCP websearch 池(3 引擎自动切换,单例连接) |
-| [skills/loader.py](skills/loader.py) | load_skill 工具(渐进式披露,agent→common 查找) |
+| [skills/loader.py](skills/loader.py) | load_skill 工具(每步节点绑定,LLM 主动调方法论,2 回合上限) |
 | [store/scheme_store.py](store/scheme_store.py) | JSON 文件库(草稿/正式/索引) |
 | [store/converter.py](store/converter.py) | 勾选后的方案组 → skill spec 格式 → Excel |
 
@@ -35,10 +35,11 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - **改 6 步 prompt**:`graph/nodes.py` 的 `_STEP_PROMPTS`(内联,每步做什么 + 输出格式)。
 - **改 6 步格式契约**:`skills/overseas-sentiment-query-builder/references/output-formats.md` + 对应 `scripts/stepN.py`(校验/标准化/GAP)。
 - **加 skill**:复制到 `skills/`(agent 专属)或 `common/skills/`(共享),`loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要。
+- **改 skill 加载方式**:`graph/nodes.py` 的 `_SKILL_HINT`(工具提示)+ `bind_tools([load_skill], strict=True)`(每步绑定);上限 2 回合在 `_step_node` 的工具循环。
 - **接真实搜索**:`tools/websearch.py` 已接 gateway MCP 池;改 `.env` 的 `MCP_GATEWAY_URL/TOKEN`。
 - **配 apikey**:`.env` 的 `API_KEYS_JSON`(apikey→用户映射)。
-- **跑测试**:`pytest tests/test_sentiment-query-agent.py`(脚本/store/鉴权/计费单测;图/端到端需外部服务)。
-- **启动 API**:`uvicorn agents.sentiment-query-agent.api:app --reload`。
+- **跑测试**:`pytest tests/test_sentiment_query_agent.py`(脚本/store/鉴权/计费单测;图/端到端需外部服务)。
+- **启动 API**:`uvicorn agents.sentiment_query_agent.api:app --reload`。
 
 ## 约束
 
