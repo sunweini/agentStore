@@ -94,12 +94,13 @@ def test_step4_rejects_old_letter_keys():
 
 
 def test_step6_cadence_fix_fast():
-    """快讯轨强制快讯/小时级。"""
+    """快讯轨强制快讯/小时级;多余 risk 字段被忽略,输出不含 risk。"""
     out = _run_script("step6_cadence.py", {"schemes": [
         {"id": "Q3", "tracks": [{"key": "快讯", "frequency": "周级", "risk": "critical"}]},
     ]})
     tr = out["schemes"][0]["tracks"][0]
     assert tr["frequency"] == "快讯/小时级"
+    assert "risk" not in tr
     assert any("GAP" in g for g in out.get("_gaps", []))
 
 

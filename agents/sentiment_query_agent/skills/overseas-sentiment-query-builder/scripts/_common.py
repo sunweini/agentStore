@@ -13,7 +13,6 @@ from typing import Any
 
 TRACK_KEYS = ("全量新闻", "负面新闻", "行业新闻", "快讯", "司法", "招标")
 FREQUENCIES = ("快讯/小时级", "日级", "周级", "双周级", "月级")
-RISKS = ("critical", "high", "medium", "low")
 RELEVANCES = ("direct", "indirect", "context")
 LAYERS = ("A", "B", "C", "D", "R", "X")
 
