@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>海外舆情检索方案生成 Agent · 技术说明书</title>
+<style>
+:root{
+  --pri:#5B5BD6; --pri-2:#4A56E2; --pri-bg:#EEF0FD; --pri-line:#C3C9F7;
+  --ok:#16A34A; --ok-bg:#E7F8ED;
+  --t1:#1F2329; --t2:#5F6672; --t3:#9AA0A6;
+  --line:#E4E6EB; --bg:#F5F6F8;
+  --r:6px; --r2:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--t1);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.8}
+.cover{background:linear-gradient(135deg,#5B5BD6 0%,#33A0E1 60%,#33E1C6 100%);color:#fff;padding:64px 28px 56px;text-align:center}
+.cover .badge{display:inline-block;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);border-radius:20px;padding:4px 18px;font-size:13px;margin-bottom:18px}
+.cover h1{font-size:32px;font-weight:700;margin-bottom:10px}
+.cover p{font-size:16px;opacity:.92;max-width:720px;margin:0 auto}
+.wrap{max-width:900px;margin:0 auto;padding:36px 24px 60px}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r2);padding:26px 30px;margin-bottom:24px}
+.card h2{font-size:19px;font-weight:700;color:var(--pri-2);margin-bottom:14px;display:flex;align-items:center;gap:10px}
+.card h2 .n{width:26px;height:26px;border-radius:50%;background:var(--pri);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:14px;flex:0 0 auto}
+.card h3{font-size:15px;font-weight:600;margin:18px 0 8px}
+.card p{margin-bottom:10px}
+.card ul{margin:6px 0 12px 22px}
+.card li{margin-bottom:6px}
+.hl{background:var(--pri-bg);border:1px solid var(--pri-line);border-radius:var(--r);padding:14px 18px;margin:12px 0}
+.hl b{color:var(--pri-2)}
+.demo{background:#0B1030;border-radius:12px;padding:20px 24px;color:#C7CDF0;font-size:14px;margin:14px 0}
+.demo .step{display:flex;gap:12px;padding:6px 0;align-items:flex-start}
+.demo .dot{width:22px;height:22px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;background:#2A3160;color:#6B72A8;border:1px solid #3a4378}
+.demo .step.done .dot{background:#33E1C6;color:#06231d;border-color:#33E1C6}
+.demo .step.done .tx{color:#E8EBFF}
+.demo .tx{color:#8890C6}
+.demo .tx b{color:#C7CDF0}
+.tag{display:inline-block;background:var(--pri-bg);color:var(--pri-2);border-radius:4px;padding:1px 8px;font-size:12px;margin-right:6px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+th,td{border:1px solid var(--line);padding:9px 14px;text-align:left;font-size:14px}
+th{background:var(--pri-bg);color:var(--pri-2);font-weight:600}
+.tr-compare td{vertical-align:top}
+.cmp{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;font-size:13.5px;margin-bottom:10px}
+.cmp b{color:var(--t1)}
+.cmp .why{color:var(--ok);font-weight:600;margin-top:4px}
+.flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0;font-size:13.5px}
+.flow .node{background:var(--pri-bg);border:1px solid var(--pri-line);border-radius:6px;padding:5px 14px;color:var(--pri-2);font-weight:500}
+.flow .arrow{color:var(--t3)}
+.note{background:#FFF7EA;border:1px solid #F2DFC0;border-radius:var(--r);padding:12px 16px;font-size:13.5px;color:#B45309;margin:12px 0}
+.footer{text-align:center;color:var(--t3);font-size:13px;padding:20px 0 40px}
+@media(max-width:700px){.cover h1{font-size:24px}.card{padding:20px 18px}}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="badge">AI Agent · 技术说明书</div>
+  <h1>海外舆情检索方案生成 Agent</h1>
+  <p>输入一个中文公司名,系统自动完成六步分析,生成一套可执行的海外舆情监测方案 —— 全程无需人工编写检索词。</p>
+</div>
+
+<div class="wrap">
+
+  <!-- ===== 1. 能干什么 ===== -->
+  <div class="card">
+    <h2><span class="n">1</span>这个东西能干什么?</h2>
+    <p>传统做法:要监测一家企业在海外的舆情,运营人员需要手动完成一系列工作——查公司的海外注册名、梳理关键词、编写检索式、找当地媒体清单、定监测频率。这项工作熟练的人也要 1-2 天,新手容易漏。</p>
+    <p>现在:你只需要在系统里输入一个中文公司名,点一下「开始生成」,系统自动跑完六个步骤,输出一整组检索方案。你可以勾选保留哪些,确认后入库,一键导出 Excel 直接交给爬虫系统执行。</p>
+
+    <div class="demo">
+      <div style="margin-bottom:10px;color:#AEB4E0;font-size:13px">演示:输入「中国十五冶金建设集团有限公司」,系统自动完成 ——</div>
+      <div class="step done"><div class="dot">✓</div><div class="tx"><b>实体测绘</b> — 识别母公司「中国有色矿业集团」、海外法人(赞比亚/刚果金/白俄罗斯)、拼写变体</div></div>
+      <div class="step done"><div class="dot">✓</div><div class="tx"><b>主体画像</b> — 判定为「承包商」视角,建立相关度口径</div></div>
+      <div class="step done"><div class="dot">✓</div><div class="tx"><b>关键词字典</b> — A/B/C/D/R/X 六层关键词 + 短缩写防误报规则</div></div>
+      <div class="step done"><div class="dot">✓</div><div class="tx"><b>双轨检索式</b> — 每个方案生成布尔 + Google 两套检索式</div></div>
+      <div class="step done"><div class="dot">✓</div><div class="tx"><b>属地信源</b> — 配属地媒体/判例库/政府网站白名单</div></div>
+      <div class="step done"><div class="dot">✓</div><div class="tx"><b>频次定级</b> — 按风险定监测频率(快讯/日/周级)</div></div>
+    </div>
+
+    <div class="hl">实际运行结果:识别出 <b>6 个国别项目群</b>(刚果金/赞比亚/白俄罗斯/厄瓜多尔等),生成 <b>8 个方案、20+ 条检索任务</b>,每条带频次、风险等级、信源白名单。还自动标注了 3 处数据缺口(如「俄语关键词未覆盖」),提醒运营补充。</div>
+  </div>
+
+  <!-- ===== 2. 为什么用 LangChain 开发 ===== -->
+  <div class="card">
+    <h2><span class="n">2</span>为什么用 LangChain 这种方式开发?</h2>
+
+    <h3>先打个比方</h3>
+    <p>您平时用的对话式 AI(比如 DeepSeek 网页版),相当于一个「指哪打哪的实习生」——你问一句它答一句,答得不错,但它<b>记不住多步任务</b>,也不能<b>自己动手调用外部工具</b>。</p>
+    <p>而这次要做的事,是让 AI <b>独立完成一整条业务流水线</b>:拆任务 → 上网查证 → 按格式产出 → 人工确认 → 入库。这需要 AI 能"按流程干活",而不是"回答问题"。<b>LangChain 就是干这个的——它是把 AI 变成"按流程干活的员工"的标准框架。</b></p>
+
+    <h3>普通对话式 AI 做不到的三件事</h3>
+    <table>
+      <tr><th style="width:22%">能力</th><th>对话式 AI</th><th>本次系统(LangChain)</th></tr>
+      <tr><td><b>多步流程</b></td><td>单轮问答,上下文一长就乱</td><td>六步流水线按顺序执行,每步产物传给下一步,结果可审查</td></tr>
+      <tr><td><b>调用工具</b></td><td>不能自己上网搜索/调系统</td><td>自动调用联网搜索(3 个搜索引擎),用搜索结果验证后再产出</td></tr>
+      <tr><td><b>按格式输出</b></td><td>回答是自由文本,格式随缘</td><td>强制输出固定 JSON 格式,每步经脚本校验,缺数据自动标注</td></tr>
+    </table>
+
+    <h3>具体到本项目,LangChain 解决了 4 个实际问题</h3>
+    <div class="cmp"><b>① 流程编排</b> — 六步流水线谁先谁后、每步产物怎么传递、失败怎么处理,用 LangGraph(状态图)显式定义。类比:给 AI 画了一张「业务流程图」,它照着走,不会跳步。<br><span class="why">✓ 解决:AI 不会漏步骤、跑偏</span></div>
+    <div class="cmp"><b>② 工具调用</b> — AI 需要"上网查证"(比如验证海外法人名是否真实存在),通过标准工具接口接入 3 个搜索供应商(一个失败自动切换另一个)。<br><span class="why">✓ 解决:AI 能自己查资料,不靠猜</span></div>
+    <div class="cmp"><b>③ 结构化输出</b> — 强制 AI 输出固定格式(JSON),再用脚本校验字段、补默认值、缺数据记 GAP。类比:AI 填好每步的「标准表格」,填错/漏填系统会拦下来。<br><span class="why">✓ 解决:产出的方案能直接入库、直接导出 Excel</span></div>
+    <div class="cmp"><b>④ 状态可恢复</b> — 生成过程存到本地数据库,中断了可以从断点继续,不用从头再来。<br><span class="why">✓ 解决:生成到一半断了不白干</span></div>
+  </div>
+
+  <!-- ===== 3. 系统架构 ===== -->
+  <div class="card">
+    <h2><span class="n">3</span>系统是怎么搭起来的?</h2>
+    <p style="font-size:13.5px;color:var(--t2)">给技术背景同事看的简图;非技术可跳过本节。</p>
+
+    <div class="flow">
+      <span class="node">用户输入公司名</span><span class="arrow">→</span>
+      <span class="node">API 网关<br><small style="font-weight:400">鉴权 · 计费</small></span><span class="arrow">→</span>
+      <span class="node">六步流水线<br><small style="font-weight:400">LangGraph 状态机</small></span><span class="arrow">→</span>
+      <span class="node">方案组<br><small style="font-weight:400">JSON 入库</small></span><span class="arrow">→</span>
+      <span class="node">勾选确认</span><span class="arrow">→</span>
+      <span class="node">Excel 导出</span>
+    </div>
+
+    <table>
+      <tr><th style="width:20%">组件</th><th>作用</th><th style="width:30%">对应技术</th></tr>
+      <tr><td>六步流水线</td><td>实体测绘 → 画像 → 关键词 → 检索式 → 信源 → 频次,每步「联网搜索 + AI 生成 + 脚本校验」</td><td>LangGraph(编排)+ DeepSeek(生成)+ MCP 搜索池</td></tr>
+      <tr><td>AI 大脑</td><td>按每步指令生成内容,强制 JSON 输出</td><td>DeepSeek(DeepSeek 官方 JSON 模式)</td></tr>
+      <tr><td>联网搜索</td><td>查证实体名/找属地媒体/验证域名,3 个搜索引擎自动切换</td><td>MCP 标准协议(集成 Tavily / SerpAPI / Brave)</td></tr>
+      <tr><td>领域知识</td><td>海外舆情方法论(六层关键词/双轨检索式/信源白名单等规则)</td><td>skill 知识包 + 6 个分步校验脚本</td></tr>
+      <tr><td>API 服务</td><td>对外提供 6 个接口:提交/进度/方案/勾选/入库/导出</td><td>FastAPI(Python 标准 Web 框架)</td></tr>
+      <tr><td>安全与计费</td><td>API Key 鉴权 + 用户归属校验 + 每次完整生成计费 1 单位</td><td>自研鉴权/计费模块</td></tr>
+      <tr><td>监控</td><td>全链路追踪,每步耗时/搜索/生成都可查</td><td>OpenTelemetry(行业标准可观测框架)</td></tr>
+    </table>
+
+    <div class="note">📌 术语速查:LangChain = AI 应用开发框架(把大模型变成可编程组件);LangGraph = 其子框架(定义多步流程的状态机);MCP = 标准化的「AI 调用外部工具」协议(类比 USB 接口,统一各家搜索/数据库的接入方式);JSON = 标准数据格式(计算机之间交换数据的通用语言)。</div>
+  </div>
+
+  <!-- ===== 4. 演示方式 ===== -->
+  <div class="card">
+    <h2><span class="n">4</span>现场怎么演示?</h2>
+    <h3>环境要求</h3>
+    <ul>
+      <li>本机(服务器)已启动两个服务:<span class="tag">API 服务</span><span class="tag">前端演示页</span></li>
+      <li>内网任意电脑浏览器访问:<b>http://10.15.80.5:8080/demo.html</b></li>
+    </ul>
+    <h3>演示步骤(约 8 分钟)</h3>
+    <table>
+      <tr><th style="width:16%">步骤</th><th>操作</th><th>领导看到什么</th></tr>
+      <tr><td>1</td><td>输入公司名(已预填「中国十五冶金建设集团有限公司」)</td><td>只需填一个名字,其余全自动</td></tr>
+      <tr><td>2</td><td>点「✦ 开始生成」</td><td>六步流水线逐条点亮:实体测绘 → 主体画像 → 关键词字典 → 双轨检索式 → 属地信源 → 频次定级,每步完成显示产物摘要</td></tr>
+      <tr><td>3</td><td>等待约 6 分钟</td><td>进度条 + 实时步骤状态,期间可说明每步在做什么</td></tr>
+      <tr><td>4</td><td>展示生成的方案组</td><td>多个国别方案(集团层/刚果金/赞比亚…),每条含频次/风险等级/GAP 警示</td></tr>
+      <tr><td>5</td><td>勾选 + 确认入库</td><td>勾选保留的方案,点「确认入库」,系统提示已入库并计费</td></tr>
+      <tr><td>6</td><td>导出 Excel</td><td>三张表:检索任务清单 / 关键词字典 / 调度说明,可直接交给爬虫系统</td></tr>
+    </table>
+    <div class="note">⚠ 提醒:生成全程约 6 分钟(每步要联网搜索 + AI 生成),演示前建议先跑通一次;若现场时间紧,可提前生成好一组方案,现场只演示「勾选 → 入库 → 导出」环节。</div>
+  </div>
+
+  <!-- ===== 5. 总结 ===== -->
+  <div class="card">
+    <h2><span class="n">5</span>一句话总结</h2>
+    <div class="hl" style="font-size:16px">这次做的不是"一个能聊天的 AI",而是<b>一个按流程干活的 AI 员工</b>:输入公司名,六步流水线自动完成,产出可直接执行的舆情监测方案。LangChain 的作用,就是给 AI 装上<b>流程、工具、格式、状态</b>四样东西,让它从"回答问题"升级为"完成工作"。</div>
+  </div>
+
+  <div class="footer">agentStore · 海外舆情检索方案生成 Agent · 2026-08</div>
+</div>
+</body>
+</html>

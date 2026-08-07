@@ -154,7 +154,8 @@ input:focus,select:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-
 </div>
 
 <script>
-const API = "http://127.0.0.1:8000";
+// API 地址动态取当前访问的 host(内网其他机器访问时指向服务器自身)
+const API = window.location.protocol + "//" + window.location.hostname + ":8000";
 let groupId = null, pollTimer = null, schemes = [];
 
 const $ = s => document.querySelector(s);
