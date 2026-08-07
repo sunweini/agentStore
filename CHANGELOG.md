@@ -5,6 +5,27 @@
 
 ---
 
+## v1.1.0 — 2026-08-07(load_skill 方法论接入)
+
+### 新增功能
+
+- **load_skill 工具接入(方案 2a)**:每步节点绑定 load_skill 工具,LLM 需要方法论时主动调用(六层词表/双轨语法/信源/频次规则),拿到专业指导后按格式输出。最多 2 回合(回合 1 并行调工具 → 回合 2 生成 JSON),防死循环。
+- **SKILL.md 补全**:工作流每步补「完成后调用脚本」指令(脚本调用约定/步骤对应/数据流/格式契约),skill 成为自包含知识包;标注方案 A(代码调用脚本)+ load_skill 方法论供给。
+
+### 质量提升(load_skill 前后对比)
+
+- 风险分级更有区分度:厄瓜多尔 c 轨 high、刚果金 b/c 轨 high(之前普遍 low/medium 偏保守)
+- 快讯轨普遍正确配置(快讯/小时级)
+- 方案名更具体:米拉多铜矿/迪兹瓦微电网/蒙古 ETT 选煤厂(之前泛"项目群")
+- 识别地区更全:新增蒙古
+
+### 技术要点
+
+- DeepSeek JSON Mode + tool calling 兼容:实测 `bind_tools([...], strict=True)` + `response_format={"type":"json_object"}` 可同用,LLM 正确发 tool_calls 且后续输出纯 JSON
+- 多轮工具调用:回合 1 tool_calls → 执行 load_skill → 喂 ToolMessage → 回合 2 生成 JSON
+
+---
+
 ## v1.0.0 — 2026-08-07(sentiment-query-agent 正式交付)
 
 首个完整交付版本:海外舆情检索方案生成 Agent。

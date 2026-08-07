@@ -137,7 +137,11 @@ spec 的字段结构见 `assets/task_spec_example.json`（可直接复制修改�
 
 ## 分步脚本使用指南(流水线模式)
 
-本 skill 提供 **6 个分步脚本**(`scripts/step1_entities.py` … `step6_cadence.py`),供 AI Agent 流水线逐步调用——每步由 Agent 完成「联网搜索 → LLM 生成」后,调对应脚本把结果**按固定格式标准化**,再进入下一步。这是与「一次性生成 Excel」并行的第二种使用方式。
+本 skill 提供 **6 个分步脚本**(`scripts/step1_entities.py` … `scripts/step6_cadence.py`),供 AI Agent 流水线逐步调用——每步由 Agent 完成「联网搜索 → LLM 生成」后,调对应脚本把结果**按固定格式标准化**,再进入下一步。这是与「一次性生成 Excel」并行的第二种使用方式。
+
+**调用方式(方案 A:代码调用)**:运行时由 Agent 代码(图节点)自动调用脚本,LLM 不参与脚本决策。本指南供开发/维护者理解脚本契约,以及供需要独立使用脚本的 Agent 参考。
+
+> 方法论知识(本 SKILL.md + references)通过 `load_skill` 工具提供给 LLM:每步节点绑定 load_skill,LLM 需要专业指导时主动调用(方案 2a,最多 2 回合)。
 
 ### 调用约定
 
