@@ -171,7 +171,7 @@ Content-Type: application/json
 ```json
 {
   "schemes": {"Q0": true, "Q1": false},
-  "tracks": {"Q0": {"a": true, "b": true, "c": false, "快讯": false, "司法": false, "招标": false}}
+  "tracks": {"Q0": {"全量新闻": true, "负面新闻": true, "行业新闻": false, "快讯": false, "司法": false, "招标": false}}
 }
 ```
 
