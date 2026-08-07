@@ -1,6 +1,6 @@
 """websearch 池:gateway MCP 封装(brave/tavily/serpapi 三引擎)。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §2/§10。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §2/§10。
 
 - 应用启动时建单例连接(MultiServerMCPClient),get_tools() 结果缓存复用,
   不在每次跑图时重建。
@@ -41,7 +41,7 @@ async def _get_tools() -> dict[str, Any]:
         tools = await _client.get_tools()
         # 工具名 → 工具映射,供按引擎调用
         _tools = {getattr(t, "name", ""): t for t in tools}
-        logger.info("service=agent1 event=mcp_connected tools=%d", len(_tools))
+        logger.info("service=sentiment-query-agent event=mcp_connected tools=%d", len(_tools))
         return _tools
     except Exception as exc:
         raise RuntimeError(f"MCP gateway 连接失败: {exc}") from exc
@@ -70,17 +70,17 @@ async def websearch(query: str, engine: str = "auto", **kwargs) -> str:
         # 按引擎找工具:brave_web_search / tavily_search / serpapi_google
         candidates = [n for n in tools if n.startswith(eng)]
         if not candidates:
-            logger.warning("service=agent1 event=engine_missing engine=%s", eng)
+            logger.warning("service=sentiment-query-agent event=engine_missing engine=%s", eng)
             continue
         tool = tools[candidates[0]]
         try:
-            logger.info("service=agent1 event=search_start engine=%s query_len=%d", eng, len(query))
+            logger.info("service=sentiment-query-agent event=search_start engine=%s query_len=%d", eng, len(query))
             resp = await tool.ainvoke({**kwargs, "query": query})
             results.append(f"[{eng}] {resp}")
             break  # 首个成功引擎即返回
         except Exception as exc:
             last_err = exc
-            logger.warning("service=agent1 event=engine_fail engine=%s error=%s", eng, exc)
+            logger.warning("service=sentiment-query-agent event=engine_fail engine=%s error=%s", eng, exc)
             continue
 
     if not results:

@@ -1,6 +1,6 @@
 """图构建:6 步流水线顺序图。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §2/§4。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §2/§4。
 
 图结构:
   START → step1 → step2 → step3 → step4 → step5 → step6 → END
@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from agents.agent1.graph.nodes import (
+from agents.sentiment_query_agent.graph.nodes import (
     step1_node, step2_node, step3_node, step4_node, step5_node, step6_node,
 )
-from agents.agent1.graph.state import AgentState
+from agents.sentiment_query_agent.graph.state import AgentState
 
 _NODES = [
     ("step1", step1_node),

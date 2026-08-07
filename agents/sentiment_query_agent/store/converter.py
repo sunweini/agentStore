@@ -1,6 +1,6 @@
 """导出转换层:勾选后的方案组 → skill spec 格式(tasks/keywords/extra_notes)。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §7。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §7。
 
 把勾选的轨转成 spec 的 tasks 行(第 4+5+6 步产物拼图),关键词字典转 keywords 行,
 GAP 转 extra_notes。再调 skill 的 build_task_xlsx.py 生成 Excel。

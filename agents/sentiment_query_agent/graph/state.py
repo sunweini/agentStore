@@ -1,6 +1,6 @@
-"""数据模型:agent1 舆情方案生成 Agent 的图状态。
+"""数据模型:sentiment-query-agent 舆情方案生成 Agent 的图状态。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §5。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §5。
 
 层级:SchemeGroup(方案组) → Scheme(方案) → Track(轨)。
 勾选:方案级 selected + 轨级 selected 两级;汇总 = 勾选轨数 = 任务行数。

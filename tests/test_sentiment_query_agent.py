@@ -1,4 +1,4 @@
-"""agent1(舆情方案生成 Agent)测试。
+"""sentiment-query-agent(舆情方案生成 Agent)测试。
 
 覆盖:
 1. skill 分步脚本单测(格式契约/缺字段记 GAP)
@@ -17,10 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from agents.agent1 import billing
-from agents.agent1.auth import _valid_keys, assert_owner
-from agents.agent1.graph.nodes import _extract_json
-from agents.agent1.store import converter, scheme_store
+from agents.sentiment_query_agent import billing
+from agents.sentiment_query_agent.auth import _valid_keys, assert_owner
+from agents.sentiment_query_agent.graph.nodes import _extract_json
+from agents.sentiment_query_agent.store import converter, scheme_store
 from common import config
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,7 +33,7 @@ def test_data_paths():
 
 _SCRIPTS = (
     Path(__file__).resolve().parent.parent
-    / "agents" / "agent1" / "skills" / "overseas-sentiment-query-builder" / "scripts"
+    / "agents" / "sentiment_query_agent" / "skills" / "overseas-sentiment-query-builder" / "scripts"
 )
 
 

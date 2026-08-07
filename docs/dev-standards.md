@@ -1,7 +1,7 @@
 # AI Agent 开发规范(基于 LangChain)
 
 版本:1.0
-适用范围:本项目中**所有** agent 的开发(现有 agent1 及后续 agent2、agent3…… 及任何 agent 功能)。
+适用范围:本项目中**所有** agent 的开发(现有 sentiment-query-agent 及后续 agent2、agent3…… 及任何 agent 功能)。
 
 ## 1. 核心铁律:必须依据 LangChain 官方文档与 API 指引开发
 
@@ -55,7 +55,7 @@
 
 ## 6. Agent CLAUDE.md 模板
 
-**新建 agent 时,必须按此模板生成 `agents/<agent>/CLAUDE.md`**,替换 `<agent>` 占位符,并按实际架构填写。参考实例:`agents/agent1/CLAUDE.md`。
+**新建 agent 时,必须按此模板生成 `agents/<agent>/CLAUDE.md`**,替换 `<agent>` 占位符,并按实际架构填写。参考实例:`agents/sentiment-query-agent/CLAUDE.md`。
 
 ```markdown
 # <agent> 开发指南
@@ -97,7 +97,7 @@ START → <node1> ──<条件>──→ <node2>
 
 ## 7. 通用开发经验(踩坑记录,开发 agent 前必读)
 
-以下经验来自 agent1(海外舆情方案生成)实际开发,均验证过。
+以下经验来自 sentiment-query-agent(海外舆情方案生成)实际开发,均验证过。
 
 ### 7.1 LangGraph / checkpointer
 

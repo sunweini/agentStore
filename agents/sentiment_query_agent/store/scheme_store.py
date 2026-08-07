@@ -1,6 +1,6 @@
 """JSON 文件库:方案组/草稿/索引 读写。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §7。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §7。
 
 - 草稿:data/schemes/<group_id>.draft.json(生成中/待勾选)
 - 正式:data/schemes/<group_id>.json(commit 后,冻结)

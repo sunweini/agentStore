@@ -1,6 +1,6 @@
 """6 步流水线节点:每步 websearch → LLM 生成 → 调 skill 分步脚本按格式传回。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §3/§5.1。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §3/§5.1。
 
 每步统一模式:
 1. 加载该步 prompt(graph 内联 system 指令,引用 skill references/output-formats.md 格式)
@@ -26,15 +26,15 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-from agents.agent1.graph.state import AgentState
-from agents.agent1.tools.websearch import websearch
+from agents.sentiment_query_agent.graph.state import AgentState
+from agents.sentiment_query_agent.tools.websearch import websearch
 from common import config
 from common.llm import get_chat_model
 from common.otel import get_tracer
 
 logger = logging.getLogger(__name__)
 
-_AGENT = "agent1"
+_AGENT = "sentiment-query-agent"
 
 
 def _extract_json(text: str) -> dict | None:

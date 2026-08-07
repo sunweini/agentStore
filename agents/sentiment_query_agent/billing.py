@@ -1,6 +1,6 @@
 """计费:创建 group 记 pending,commit 转正式计费。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §8。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §8。
 
 - 一次完整流程 = 1 计费单位。
 - 创建 group:记 pending 记录;commit:转正式(committed)。

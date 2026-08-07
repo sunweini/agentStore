@@ -1,6 +1,6 @@
 """鉴权:apikey 校验 + 资源归属校验。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §8。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §8。
 
 - apikey:`Authorization: Bearer <apikey>`,合法 key 列表配 .env(JSON 格式)。
 - 归属:每个 group 记录 owner(apikey 标识的用户),越权 403。

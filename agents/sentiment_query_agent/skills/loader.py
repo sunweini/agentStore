@@ -1,6 +1,6 @@
 """load_skill 工具:skill 渐进式披露加载(官方 skill 架构)。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §6。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §6。
 官方文档: /oss/python/langchain/multi-agent/skills
 
 - agent 启动只加载 skill 摘要(description)。
@@ -17,7 +17,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_AGENT_SKILLS = _PROJECT_ROOT / "agents" / "agent1" / "skills"
+_AGENT_SKILLS = _PROJECT_ROOT / "agents" / "sentiment-query-agent" / "skills"
 _COMMON_SKILLS = _PROJECT_ROOT / "common" / "skills"
 
 # 本 agent 可用的 skill 摘要(启动即加载,渐进式披露的"摘要层")

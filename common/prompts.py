@@ -1,6 +1,6 @@
 """Prompt 加载:统一加载 agents/<agent>/prompts/<name>.md,返回 ChatPromptTemplate。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-langgraph-design.md 第 5 节。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-langgraph-design.md 第 5 节。
 
 能力:prompt 分离为可选能力,非强制。
 - 默认一个 agent 一个 system.md
@@ -23,7 +23,7 @@ def load_prompt(agent: str, name: str = "system") -> ChatPromptTemplate:
     """加载 agents/<agent>/prompts/<name>.md,返回 ChatPromptTemplate。
 
     Args:
-        agent: agent 目录名(如 "agent1")。
+        agent: agent 目录名(如 "sentiment-query-agent")。
         name: prompt 文件名(不含扩展名),默认 "system"。
 
     Returns:
@@ -39,6 +39,6 @@ def load_prompt(agent: str, name: str = "system") -> ChatPromptTemplate:
             f"prompt 文件不存在: {prompt_file} "
             f"(期望位置 agents/{agent}/prompts/{name}.md)"
         )
-    # from_messages 与模板格式一致;system 单消息足够 agent1 用。
+    # from_messages 与模板格式一致;system 单消息足够 sentiment-query-agent 用。
     content = prompt_file.read_text(encoding="utf-8").strip()
     return ChatPromptTemplate.from_messages([("system", content)])

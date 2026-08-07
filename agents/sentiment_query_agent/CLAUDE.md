@@ -1,4 +1,4 @@
-# agent1 开发指南
+# sentiment-query-agent 开发指南
 
 海外舆情检索方案生成 Agent:用户输入一个中文公司名,自动完成 6 步流水线(实体测绘→主体画像→关键词字典→双轨检索式→属地信源→频次定级),产出方案组 + 组内多方案,经 API 勾选确认后固化入库。
 
@@ -37,8 +37,8 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - **加 skill**:复制到 `skills/`(agent 专属)或 `common/skills/`(共享),`loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要。
 - **接真实搜索**:`tools/websearch.py` 已接 gateway MCP 池;改 `.env` 的 `MCP_GATEWAY_URL/TOKEN`。
 - **配 apikey**:`.env` 的 `API_KEYS_JSON`(apikey→用户映射)。
-- **跑测试**:`pytest tests/test_agent1.py`(脚本/store/鉴权/计费单测;图/端到端需外部服务)。
-- **启动 API**:`uvicorn agents.agent1.api:app --reload`。
+- **跑测试**:`pytest tests/test_sentiment-query-agent.py`(脚本/store/鉴权/计费单测;图/端到端需外部服务)。
+- **启动 API**:`uvicorn agents.sentiment-query-agent.api:app --reload`。
 
 ## 约束
 

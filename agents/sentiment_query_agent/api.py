@@ -1,6 +1,6 @@
 """FastAPI 接口:提交/进度/方案/勾选/入库/导出。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §7/§8。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §7/§8。
 
 鉴权:所有接口需 Bearer apikey(auth.authenticate 依赖)。
 归属:所有 /groups/{id}/* 校验 owner(auth.assert_owner)。
@@ -19,10 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from agents.agent1 import auth, billing
-from agents.agent1.agent import run_pipeline
-from agents.agent1.graph.state import STATUS_COMMITTED, STATUS_GENERATING, STATUS_REVIEW
-from agents.agent1.store import converter, scheme_store
+from agents.sentiment_query_agent import auth, billing
+from agents.sentiment_query_agent.agent import run_pipeline
+from agents.sentiment_query_agent.graph.state import STATUS_COMMITTED, STATUS_GENERATING, STATUS_REVIEW
+from agents.sentiment_query_agent.store import converter, scheme_store
 from common.otel import init_otel, get_tracer
 
 app = FastAPI(title="海外舆情检索方案生成 Agent", version="0.1.0")
@@ -86,7 +86,7 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
             scheme_store.save_draft(group)  # 完成后落草稿(未 commit)
         except Exception as exc:
             # 任务失败:落错误草稿,进度接口可查(不静默)
-            logger.error("service=agent1 event=pipeline_failed group_id=%s error=%s", group_id, exc)
+            logger.error("service=sentiment-query-agent event=pipeline_failed group_id=%s error=%s", group_id, exc)
             scheme_store.save_draft({
                 "group_id": group_id, "owner": user, "company_name": req.company_name,
                 "meta": meta, "status": "failed", "step_status": [],
@@ -122,8 +122,8 @@ async def get_progress(group_id: str, user: str = Depends(_user)):
 async def _load_from_checkpoint(group_id: str) -> dict | None:
     """从 LangGraph checkpoint 读 group 状态(生成中进度)。"""
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    from agents.agent1.graph.flows import build_graph
-    from agents.agent1.agent import _CHECKPOINT_DB
+    from agents.sentiment_query_agent.graph.flows import build_graph
+    from agents.sentiment_query_agent.agent import _CHECKPOINT_DB
 
     try:
         async with AsyncSqliteSaver.from_conn_string(str(_CHECKPOINT_DB)) as saver:

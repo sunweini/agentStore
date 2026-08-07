@@ -1,6 +1,6 @@
 """多供应商模型工厂:按供应商注册表初始化 ChatModel。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-langgraph-design.md 第 4 节。
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-langgraph-design.md 第 4 节。
 
 换供应商:改 .env 的 LLM_PROVIDER 即可,代码不动。
 加供应商:注册表加一项 + requirements.txt 加包。

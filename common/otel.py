@@ -1,6 +1,6 @@
 """OpenTelemetry 全链路可观测初始化。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md §9;
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §9;
 规范见 docs/dev-standards.md §5 与全局可观测性编码规范。
 
 约束(遵循 OBS-CORE-003):
@@ -38,7 +38,7 @@ def init_otel() -> TracerProvider:
     if _PROVIDER is not None:
         return _PROVIDER
 
-    resource = Resource.create({SERVICE_NAME: "function-call-tool-agent1"})
+    resource = Resource.create({SERVICE_NAME: "function-call-tool-sentiment-query-agent"})
     _PROVIDER = TracerProvider(resource=resource)
 
     endpoint = config.get_env("OTEL_ENDPOINT")

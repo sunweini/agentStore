@@ -1,7 +1,7 @@
-"""agent1 图构建入口:6 步流水线 + AsyncSqliteSaver checkpointer。
+"""sentiment-query-agent 图构建入口:6 步流水线 + AsyncSqliteSaver checkpointer。
 
-设计见 docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md。
-langgraph.json 注册入口: "./agents/agent1/agent.py:build_agent"
+设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md。
+langgraph.json 注册入口: "./agents/sentiment_query_agent/agent.py:build_agent"
 """
 
 from __future__ import annotations
@@ -10,13 +10,13 @@ from pathlib import Path
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from agents.agent1.graph.flows import build_graph
+from agents.sentiment_query_agent.graph.flows import build_graph
 
 _CHECKPOINT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "checkpoints.sqlite"
 
 
 def build_agent():
-    """构建 agent1 图(未挂 checkpointer 的裸图)。
+    """构建 sentiment-query-agent 图(未挂 checkpointer 的裸图)。
 
     langgraph.json 注册入口。实际运行时(checkpointer)由 run_pipeline 管理。
 
@@ -46,7 +46,7 @@ async def run_pipeline(group_id: str, company_name: str, owner: str, meta: dict)
         graph = build_graph().compile(checkpointer=saver)
         from datetime import datetime
 
-        from agents.agent1.graph.state import STATUS_GENERATING, STATUS_REVIEW
+        from agents.sentiment_query_agent.graph.state import STATUS_GENERATING, STATUS_REVIEW
 
         initial = {
             "messages": [],

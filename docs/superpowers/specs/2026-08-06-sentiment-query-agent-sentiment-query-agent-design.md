@@ -1,14 +1,14 @@
-# Agent1 重构设计:海外舆情检索方案生成 Agent
+# Sentiment-Query-Agent 重构设计:海外舆情检索方案生成 Agent
 
 日期:2026-08-06
 状态:已批准
 
 ## 1. 背景与目标
 
-- 原 agent1 是通用骨架(占位工具),现重构为第一个真实业务 agent:**海外舆情检索方案生成 Agent**。
+- 原 sentiment-query-agent 是通用骨架(占位工具),现重构为第一个真实业务 agent:**海外舆情检索方案生成 Agent**。
 - 用户只输入一个中文公司名,系统自动完成 6 步流水线,产出方案组 + 组内多方案,用户勾选确认后固化入库。
 - 基于 LangChain/LangGraph,全程依据 langchain MCP 文档/API 开发(见 docs/dev-standards.md)。
-- 重构不新建目录,直接替换 `agents/agent1/` 内容,`langgraph.json` 注册名不变。
+- 重构不新建目录,直接替换 `agents/sentiment-query-agent/` 内容,`langgraph.json` 注册名不变。
 
 ## 2. 技术选型
 
@@ -18,7 +18,7 @@
 | 交互层 | FastAPI(纯 API 接口,勾选是外部事件不塞图) |
 | LLM | DeepSeek(common/llm.py 工厂) |
 | 搜索 | gateway MCP websearch 池(brave/tavily/serpapi 三引擎,MultiServerMCPClient) |
-| 知识 | overseas-sentiment-query-builder skill(项目内 agents/agent1/skills/) |
+| 知识 | overseas-sentiment-query-builder skill(项目内 agents/sentiment-query-agent/skills/) |
 | 入库 | JSON 文件库 |
 | 可观测 | OpenTelemetry 全链路(common/otel.py) |
 
@@ -41,7 +41,7 @@
 ## 4. 目录结构
 
 ```
-agents/agent1/
+agents/sentiment-query-agent/
 ├── CLAUDE.md                    # 按 dev-standards §6 模板
 ├── __init__.py
 ├── agent.py                     # 图构建:6 步流水线 + AsyncSqliteSaver
@@ -56,7 +56,7 @@ agents/agent1/
 ├── skills/
 │   ├── __init__.py
 │   ├── loader.py                # load_skill 工具(渐进式披露,agent→common 查找)
-│   └── overseas-sentiment-query-builder/   # ★ 项目内 skill(agent1 专属,已改造)
+│   └── overseas-sentiment-query-builder/   # ★ 项目内 skill(sentiment-query-agent 专属,已改造)
 │       ├── SKILL.md
 │       ├── references/          # 方法论 4 件 + output-formats.md(6 步格式契约)
 │       ├── assets/              # task_spec_example.json
@@ -109,12 +109,12 @@ Track(轨): key, boolean_query, google_query, sources[], selected
 
 - `common/skills/` — 公共 skill,所有 agent 可访问。
 - `agents/<agent>/skills/` — 仅该 agent 可用。
-- overseas-sentiment-query-builder 放 `agents/agent1/skills/`(从 ~/.claude/skills/ 复制)。
+- overseas-sentiment-query-builder 放 `agents/sentiment-query-agent/skills/`(从 ~/.claude/skills/ 复制)。
 - loader 按 agent → common 顺序查找。
 - **skill 原生加载(官方 skill 架构,渐进式披露)**:agent 把 skill 打包成 `load_skill` 工具,启动只加载 skill 摘要,agent 需要时按需调 `load_skill` 取完整内容(SKILL.md + references)。不手拆 6 个 prompt 文件。官方文档: /oss/python/langchain/multi-agent/skills。
 - **skill 改造:每步一个脚本,按格式传回(用户要求,路线 1)**:
   - skill 现状只有 `scripts/build_task_xlsx.py`(最终 Excel),无分步接口,不分步返回数据 → 需改造。
-  - `agents/agent1/skills/overseas-sentiment-query-builder/scripts/` 加 6 个分步脚本:`step1_entities.py` / `step2_profile.py` / `step3_keywords.py` / `step4_queries.py` / `step5_sources.py` / `step6_cadence.py`。
+  - `agents/sentiment-query-agent/skills/overseas-sentiment-query-builder/scripts/` 加 6 个分步脚本:`step1_entities.py` / `step2_profile.py` / `step3_keywords.py` / `step4_queries.py` / `step5_sources.py` / `step6_cadence.py`。
   - 每个脚本 = 该步的格式契约执行器:输入上步产物 + 本步原始结果(LLM/websearch 输出),**输出固定格式 JSON**(schema 见 §5.1)。职责:校验字段、标准化、补默认值、缺字段记 GAP。
   - 每步节点:调对应脚本 → 拿格式结果 → 写 state。格式由脚本保证,LLM 自由生成,格式错由脚本兜底。
   - 6 步格式定义存 skill 的 `references/output-formats.md`(skill 自包含)。
@@ -172,7 +172,7 @@ fastapi / uvicorn / langchain-mcp-adapters / opentelemetry-sdk / opentelemetry-e
 
 ## 14. 实施步骤
 
-1. 复制 skill 到 agents/agent1/skills/
+1. 复制 skill 到 agents/sentiment-query-agent/skills/
 2. 删原骨架(agent.py/state/nodes/tools/system.md),建新结构
 3. common/otel.py
 4. graph(state/nodes/flows)+ agent.py + 依赖

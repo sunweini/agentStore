@@ -51,7 +51,7 @@ data/
 ### 3.1 启动 API 服务
 
 ```bash
-.venv/bin/uvicorn agents.agent1.api:app --host 0.0.0.0 --port 8000
+.venv/bin/uvicorn agents.sentiment-query-agent.api:app --host 0.0.0.0 --port 8000
 ```
 
 - `--host 0.0.0.0` = 内网可访问;仅本机用 `127.0.0.1`
@@ -129,7 +129,7 @@ curl http://<host>:8000/api/v1/groups/<group_id>/progress \
 ## 7. 目录参考
 
 ```
-agents/agent1/
+agents/sentiment-query-agent/
 ├── agent.py       # 图入口(run_pipeline)
 ├── api.py         # FastAPI 接口
 ├── auth.py        # apikey 鉴权 + 归属校验

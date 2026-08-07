@@ -1,4 +1,4 @@
-# Agent1 目录架构设计(LangGraph)
+# Sentiment-Query-Agent 目录架构设计(LangGraph)
 
 日期:2026-08-06
 状态:已批准
@@ -29,7 +29,7 @@ functionCallTool/
 │   ├── prompts.py                     # prompt 加载工具
 │   └── base.py                        # 公共基类/工具函数
 ├── agents/                            # 各 agent 平级目录
-│   └── agent1/                        # 第一个多步骤任务 Agent
+│   └── sentiment-query-agent/                        # 第一个多步骤任务 Agent
 │       ├── __init__.py
 │       ├── agent.py                   # 图构建 (StateGraph)
 │       ├── prompts/                   # 本 agent 的 prompt
@@ -41,7 +41,7 @@ functionCallTool/
 │           └── tools.py               # 本 agent 专属工具
 ├── tests/                             # pytest 测试
 │   ├── __init__.py
-│   └── test_agent1.py
+│   └── test_sentiment-query-agent.py
 ├── .env                               # 环境变量 (gitignore)
 ├── .env.example                       # 环境变量模板 (提交)
 ├── .gitignore
@@ -50,7 +50,7 @@ functionCallTool/
 └── langgraph.json                     # LangGraph 配置 (agent 注册)
 ```
 
-- `agents/agent1/` 严格对照 LangGraph 官方 application-structure(agent.py + utils/{state,nodes,tools}.py)。
+- `agents/sentiment-query-agent/` 严格对照 LangGraph 官方 application-structure(agent.py + utils/{state,nodes,tools}.py)。
 - `common/` 为多 agent 扩展:共享 LLM 工厂、配置、prompt 加载。
 - 后续 agent 平级加目录 + langgraph.json 注册一行。
 
@@ -118,7 +118,7 @@ class AgentState(TypedDict):
 
 ## 7. 工具层
 
-- 用 LangChain `@tool` 装饰器定义,放 `agents/agent1/utils/tools.py`。
+- 用 LangChain `@tool` 装饰器定义,放 `agents/sentiment-query-agent/utils/tools.py`。
 - 第一版放 2 个占位工具(模拟查库存/算价格),验证工具调用链路;后续替换真实 API 只改工具函数内部,图结构不动。
 - 工具列表在 `agent.py` 构建图时注入,工具增减不影响图结构。
 
@@ -147,7 +147,7 @@ python-dotenv
 
 ## 10. 测试
 
-`tests/test_agent1.py`,三层:
+`tests/test_sentiment-query-agent.py`,三层:
 1. 工具单测:直接调工具函数,断言返回。
 2. 图单测:mock LLM,断言图按预期走节点/路由。
 3. 端到端:真实调 DeepSeek(有 key 时),跑通完整流程。
@@ -158,7 +158,7 @@ python-dotenv
 {
   "dependencies": ["langchain-openai", "./common", "./agents"],
   "graphs": {
-    "agent1": "./agents/agent1/agent.py:build_agent"
+    "sentiment-query-agent": "./agents/sentiment-query-agent/agent.py:build_agent"
   },
   "env": "./.env"
 }
