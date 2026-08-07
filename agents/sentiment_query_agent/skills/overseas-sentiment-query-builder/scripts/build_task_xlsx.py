@@ -38,17 +38,11 @@ FREQ_FONT = {
     "快讯/小时级": Font(name="Arial", size=10, bold=True, color="FFFFFF"),
     "日级": Font(name="Arial", size=10, bold=True, color="FFFFFF"),
 }
-RISK_FILL = {
-    "critical": PatternFill("solid", fgColor="FF4136"),
-    "high": PatternFill("solid", fgColor="FFDC00"),
-}
-RISK_FONT = {"critical": Font(name="Arial", size=10, bold=True, color="FFFFFF")}
-
 TASK_HEADERS = [
     "任务ID", "检索组", "国家/地区", "语种", "检索式(布尔)", "检索式(Google语法)",
-    "目标信源白名单(域名)", "建议频次", "风险等级", "命中期望相关度", "状态", "运营注/说明",
+    "目标信源白名单(域名)", "建议频次", "命中期望相关度", "状态", "运营注/说明",
 ]
-TASK_WIDTHS = [9, 20, 14, 8, 60, 50, 46, 14, 10, 14, 8, 50]
+TASK_WIDTHS = [9, 20, 14, 8, 60, 50, 46, 14, 14, 8, 50]
 
 KW_HEADERS = ["层", "键类别", "关键词/别名", "语种", "context_guard(短缩写强制AND)", "排除词/备注"]
 KW_WIDTHS = [6, 20, 55, 10, 50, 40]
@@ -87,24 +81,20 @@ def build_task_sheet(ws, tasks):
             t.get("id", ""), t.get("group", ""), t.get("region", ""), t.get("lang", ""),
             t.get("boolean", ""), t.get("google", ""),
             "; ".join(t.get("sources", [])) if isinstance(t.get("sources"), list) else t.get("sources", ""),
-            t.get("frequency", ""), t.get("risk", ""), t.get("relevance", ""),
+            t.get("frequency", ""), t.get("relevance", ""),
             t.get("status", "待启用"), t.get("note", ""),
         ]
         for ci, v in enumerate(vals, 1):
             cell = ws.cell(ri, ci, v)
             cell.border = BORDER
             cell.font = MONO if ci in (5, 6, 7) else DFONT
-            cell.alignment = WRAP if ci in (5, 6, 7, 12) else CTR
-        freq, risk = t.get("frequency", ""), t.get("risk", "")
+            cell.alignment = WRAP if ci in (5, 6, 7, 11) else CTR
+        freq = t.get("frequency", "")
         if freq in FREQ_FILL:
             ws.cell(ri, 8).fill = FREQ_FILL[freq]
         if freq in FREQ_FONT:
             ws.cell(ri, 8).font = FREQ_FONT[freq]
-        if risk in RISK_FILL:
-            ws.cell(ri, 9).fill = RISK_FILL[risk]
-        if risk in RISK_FONT:
-            ws.cell(ri, 9).font = RISK_FONT[risk]
-    ws.auto_filter.ref = f"A1:L{len(tasks) + 1}"
+    ws.auto_filter.ref = f"A1:K{len(tasks) + 1}"
 
 
 def build_kw_sheet(ws, keywords):
