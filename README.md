@@ -72,6 +72,7 @@ pytest tests/   # 12 个测试:skill 脚本/数据模型/鉴权/计费/路径
 
 ## 文档
 
+- [版本更新说明](CHANGELOG.md)(v1.0.0 正式交付)
 - [AI Agent 开发规范](docs/dev-standards.md)(所有 agent 开发必须依据 LangChain 官方文档与 API 指引;§7 通用开发经验必读)
 - [API 接口文档](docs/api.md)(7 个接口:提交/进度/方案/勾选/入库/导出 + 错误码)
 - [部署文档](docs/deployment.md)(环境要求/配置/启动/运维/常见问题)
