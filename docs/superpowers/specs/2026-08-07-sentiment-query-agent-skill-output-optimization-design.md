@@ -44,7 +44,14 @@
 3. `graph/nodes.py:114` — step4 prompt 的 key 枚举说明同步
 4. `graph/state.py:16` — `TRACK_KEYS` 注释同步
 
-## 4. 改动二:移除风险等级(全链路 9 处)
+文档层轨名同步(LLM 按这些文档学轨 key,必须同步,否则会输出旧字母):
+
+- `SKILL.md:77,81-83` — 分组说明"双轨三式"表:`a 全量轨`/`b 精准轨`/`c 不点名轨` → `全量新闻轨`/`负面新闻轨`/`行业新闻轨`(保留"双轨三式"概念名与"精准轨"等描述词,仅轨 key 前缀改中文)
+- `references/query-patterns.md:23,29,35` — 三式小节标题同上
+- `references/keyword-dictionary.md:49` — "不点名轨(c 式)" → "行业新闻轨"
+- `assets/task_spec_example.json:7,21` — 注释 "a+b 两式"/"Q0b 集团层精准轨" → "全量+负面两式"/"Q0-负面新闻 集团层负面新闻轨"
+
+## 4. 改动二:移除风险等级(全链路 10 处)
 
 1. **Track 模型**:`graph/state.py:32` 删 `risk` 字段。
 2. **step6 脚本**:`scripts/_common.py:16` 删 `RISKS` 常量;`scripts/step6_cadence.py` 删 risk 校验(norm_choice)与输出字段。
@@ -55,6 +62,8 @@
 7. **SKILL.md**:第 5 步标题"定频次与风险等级"→"频次定级";Sheet 1 列定义删"风险等级";调度说明 sheet 删"频次与风险等级用色标区分优先级"句(保留频次色标句)。
 8. **频次定级参考**:`references/cadence-and-risk.md` 删"风险等级四档"章节;频次五档表删引用 risk 的措辞(如"critical 且涉人员安全"→"涉人员安全");快讯管道小节同步;保留提频/降频信号、承包关系核实、相关度分层。
 9. **前端**:`web/demo.html` 删风险 tag 渲染(demo.html:76-77 风险 tag 样式、298 风险 tag span)、轨细节删 `t.risk`(demo.html:300)、步骤 6 标题"频次定级 · 快讯 / 日 / 周 · 风险等级"→"频次定级 · 快讯 / 日 / 周"(demo.html:170)。
+
+10. **信源参考**:`references/source-whitelists.md:46` "是风险等级跃迁的信号" → "是事件升级的信号";`source-whitelists.md:54` "风险等级要相应上调" → "事件重要性要相应上调"。
 
 附:模板 `assets/task_spec_example.json` 删 4 处 `"risk"` 字段(16/30/44/58 行)。
 
