@@ -73,6 +73,8 @@ pytest tests/   # 12 个测试:skill 脚本/数据模型/鉴权/计费/路径
 ## 文档
 
 - [AI Agent 开发规范](docs/dev-standards.md)(所有 agent 开发必须依据 LangChain 官方文档与 API 指引;§7 通用开发经验必读)
+- [API 接口文档](docs/api.md)(7 个接口:提交/进度/方案/勾选/入库/导出 + 错误码)
+- [部署文档](docs/deployment.md)(环境要求/配置/启动/运维/常见问题)
 - [Agent1 重构设计(舆情方案生成)](docs/superpowers/specs/2026-08-06-agent1-sentiment-query-agent-design.md)
 - [Agent1 原始骨架设计](docs/superpowers/specs/2026-08-06-agent1-langgraph-design.md)(已被重构取代,留档)
 - agent 开发指南:`agents/<agent>/CLAUDE.md`
