@@ -55,7 +55,7 @@
 ```json
 {
   "schemes": [
-    {"id": "Q0",
+    {"id": "Q0", "name": "集团层·实体全量", "region": "全语种", "lang": "中/英",
      "tracks": [{"key": "全量新闻", "boolean": "(...)", "google": "(...)"}]}
   ]
 }
