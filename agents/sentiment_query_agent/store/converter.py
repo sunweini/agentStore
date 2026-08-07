@@ -40,7 +40,6 @@ def group_to_spec(group: dict) -> dict:
                 "google": tr.get("google_query", ""),
                 "sources": tr.get("sources", []),
                 "frequency": tr.get("frequency", "周级"),
-                "risk": tr.get("risk", "medium"),
                 "relevance": tr.get("relevance", "direct"),
                 "status": "待启用",
                 "note": sc.get("desc", ""),

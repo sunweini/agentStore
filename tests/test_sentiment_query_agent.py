@@ -133,11 +133,11 @@ def _sample_group() -> dict:
             {"id": "Q0", "name": "集团层", "region": "全语种", "lang": "中",
              "desc": "", "gaps": ["GAP001 拼写待证"], "selected": True,
              "tracks": [
-                 {"key": "a", "boolean_query": "(A)", "google_query": "(A)",
-                  "sources": ["media.com"], "frequency": "周级", "risk": "medium",
+                 {"key": "全量新闻", "boolean_query": "(A)", "google_query": "(A)",
+                  "sources": ["media.com"], "frequency": "周级",
                   "relevance": "direct", "selected": True},
-                 {"key": "b", "boolean_query": "(A) AND (strike)", "google_query": "(A) strike",
-                  "sources": [], "frequency": "日级", "risk": "high",
+                 {"key": "负面新闻", "boolean_query": "(A) AND (strike)", "google_query": "(A) strike",
+                  "sources": [], "frequency": "日级",
                   "relevance": "direct", "selected": False},
              ]},
         ],
@@ -149,9 +149,10 @@ def _sample_group() -> dict:
 def test_converter_selected_only():
     """转换层:只导出勾选的轨(方案 selected 且轨 selected)。"""
     spec = converter.group_to_spec(_sample_group())
-    assert len(spec["tasks"]) == 1  # 只有 a 轨(b 未选)
+    assert len(spec["tasks"]) == 1  # 只有 全量新闻 轨(负面新闻 未选)
     assert spec["tasks"][0]["boolean"] == "(A)"
     assert spec["tasks"][0]["sources"] == ["media.com"]
+    assert "risk" not in spec["tasks"][0]
     assert spec["keywords"][0]["layer"] == "A"
     # GAP → extra_notes
     assert any(n["key"].startswith("GAP") for n in spec["extra_notes"])

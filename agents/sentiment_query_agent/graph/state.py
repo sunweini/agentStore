@@ -13,7 +13,7 @@ from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 
 # 轨类型固定 6 类(与 skill references/output-formats.md 对齐)
-TRACK_KEYS = ("a", "b", "c", "快讯", "司法", "招标")
+TRACK_KEYS = ("全量新闻", "负面新闻", "行业新闻", "快讯", "司法", "招标")
 
 # 方案状态
 STATUS_GENERATING = "generating"   # 生成中
@@ -24,12 +24,11 @@ STATUS_COMMITTED = "committed"     # 已入库(冻结)
 class Track(TypedDict, total=False):
     """检索轨:一组检索式 = 一个任务行。"""
 
-    key: str                 # a/b/c/快讯/司法/招标
+    key: str                 # 全量新闻/负面新闻/行业新闻/快讯/司法/招标
     boolean_query: str       # 布尔语法检索式
     google_query: str        # Google 语法检索式
     sources: list[str]       # 属地信源白名单(域名)
     frequency: str           # 快讯/小时级/日级/周级/双周/月级
-    risk: str                # critical/high/medium/low
     relevance: str           # direct/indirect/context
     selected: bool           # 勾选状态
 

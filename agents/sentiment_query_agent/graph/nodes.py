@@ -111,19 +111,19 @@ _STEP_PROMPTS = {
        '"terms": "\\"中文全称\\" \\"ABBR\\"", "lang": "全", "guard": "", "note": ""}}]}}',
     4: "你是检索式构建专家。基于关键词字典,按国别×项目群分组,写双轨(布尔+Google)检索式。"
        "先 websearch 验证,再输出 JSON。\n"
-       "重要:每轨的 key 字段只允许这 6 个值之一: a(全量轨) b(精准轨) c(不点名轨) 快讯 司法 招标。"
+       "重要:每轨的 key 字段只允许这 6 个值之一: 全量新闻 负面新闻 行业新闻 快讯 司法 招标。"
        "boolean 字段是检索式本身,不是 key。\n"
        "输出格式(JSON,schemes 数组,每项含 tracks 数组):\n"
        '{{"schemes": [{{"id": "Q0", "name": "集团层", "region": "全语种", "lang": "中/英", '
-       '"desc": "", "gaps": [], "tracks": [{{"key": "a", "boolean": "(...)", "google": "(...)"}}]}}]}}',
+       '"desc": "", "gaps": [], "tracks": [{{"key": "全量新闻", "boolean": "(...)", "google": "(...)"}}]}}]}}',
     5: "你是属地信源专家。为每轨配属地信源白名单域名(属地媒体/判例库/政府/NGO)。"
        "先 websearch 验证域名活性,再输出 JSON。\n"
        "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
        '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "a", "sources": ["属地媒体.com"]}}]}}]}}',
-    6: "你是频次定级专家。按信号为每轨定频次与风险等级。先 websearch 验证时效,再输出 JSON。\n"
+    6: "你是频次定级专家。按信号为每轨定频次与相关度。先 websearch 验证时效,再输出 JSON。\n"
        "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
-       '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "a", "frequency": "周级", '
-       '"risk": "medium", "relevance": "direct"}}]}}]}}',
+       '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "全量新闻", "frequency": "周级", '
+       '"relevance": "direct"}}]}}]}}',
 }
 
 
@@ -231,7 +231,6 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
                         cd_tracks = cd.get("tracks", []) if isinstance(cd, dict) else []
                         meta = cd_tracks[t] if t < len(cd_tracks) else {}
                         tr["frequency"] = meta.get("frequency", "周级")
-                        tr["risk"] = meta.get("risk", "medium")
                         tr["relevance"] = meta.get("relevance", "direct")
 
         step_status[-1] = {"step": step, "status": "done", "output": normalized}
