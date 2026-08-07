@@ -73,9 +73,6 @@ input:focus,select:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-
 .sm-name{font-weight:600;font-size:13.5px}
 .tag{font-size:11px;padding:2px 9px;border-radius:12px;font-weight:500}
 .tag.reg{background:var(--pri-bg);color:var(--pri-2)}
-.tag.risk-critical{background:var(--err-bg);color:var(--err)}
-.tag.risk-high{background:var(--warn-bg);color:var(--warn)}
-.tag.risk-medium{background:#F0F1F4;color:var(--t2)}
 .tag.freq{background:#fff;border:1px solid var(--line2);color:var(--t2)}
 .trks{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
 .trk{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:var(--r);padding:4px 9px;font-size:12px;cursor:pointer;background:#fff}
@@ -167,7 +164,7 @@ const STEPS = [
   ["关键词字典", "A/B/C/D/R/X 六层 · context_guard"],
   ["双轨检索式", "布尔 + Google 双语法"],
   ["属地信源", "属地媒体 · 判例库 · NGO 白名单"],
-  ["频次定级", "快讯 / 日 / 周 · 风险等级"],
+  ["频次定级", "快讯 / 日 / 周"],
 ];
 
 function renderSteps() {
@@ -295,9 +292,9 @@ function renderSchemes() {
     const el = document.createElement("div");
     el.className = "scheme on"; el.dataset.i = i;
     const tags = `<span class="tag reg">${sc.region || ""}</span><span class="tag freq">${sc.lang || ""}</span>` +
-      `<span class="tag risk-${sc.risk || "medium"}">${sc.risk || "medium"}</span><span class="tag freq">${sc.frequency || ""}</span>`;
+      `<span class="tag freq">${sc.frequency || ""}</span>`;
     const trks = (sc.tracks || []).map((t, j) =>
-      `<label class="trk on" data-j="${j}"><span class="tb"></span><span><b>${t.key}</b> <span class="tkd">${t.frequency || ""}/${t.risk || ""}</span></span></label>`).join("");
+      `<label class="trk on" data-j="${j}"><span class="tb"></span><span><b>${t.key}</b> <span class="tkd">${t.frequency || ""}</span></span></label>`).join("");
     const gaps = (sc.gaps || []).map(g => `<div class="gap">⚠ ${g}</div>`).join("");
     el.innerHTML = `<div class="cbx"></div><div>
       <div class="sm-top"><span class="sm-name">${sc.id} · ${sc.name || ""}</span>${tags}</div>
