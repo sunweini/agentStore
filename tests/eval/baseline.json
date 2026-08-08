@@ -1,6 +1,7 @@
 {
   "total": 3,
   "compile_pass_rate": 1.0,
+  "trigger_pass_rate": 1.0,
   "review_reject_rate": null,
   "results": [
     {
@@ -8,6 +9,7 @@
       "plugin_type": "bill",
       "compiled": true,
       "review_passed": false,
+      "trigger_ok": true,
       "errors": []
     },
     {
@@ -15,6 +17,7 @@
       "plugin_type": "list",
       "compiled": true,
       "review_passed": false,
+      "trigger_ok": true,
       "errors": []
     },
     {
@@ -22,6 +25,7 @@
       "plugin_type": "service",
       "compiled": true,
       "review_passed": false,
+      "trigger_ok": true,
       "errors": []
     }
   ]
