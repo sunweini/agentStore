@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from agents.kingdee_plugin_agent.seed.seed_load import load_seed_data
 from common.rag import RagClient, RagError
 
 
@@ -46,3 +49,10 @@ def test_unknown_collection_raises(tmp_path):
     client = RagClient(data_dir=tmp_path)
     with pytest.raises(RagError):
         client.add_documents("not_a_library", ["x"], [{}])
+
+
+def test_seed_load_idempotent(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    n1 = load_seed_data(client)
+    n2 = load_seed_data(client)
+    assert n1 >= 5 and n2 == 0  # 二次灌入 0(幂等)
