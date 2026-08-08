@@ -16,7 +16,8 @@ START
 supervisor ────conditional route(route 函数,机械映射,终态判定在 Supervisor.decide)───►
   │ run:<sid>   → dispatcher
   │ ask_user    → w1(交互节点,interrupt 挂起)
-  │ finish|fail → END
+  │ finish      → END
+  │ fail:*      → w6_fail(失败收尾打包:先交"未完成"包再 END)
   │
   ▼
 dispatcher ── 返回 Command(update=…, goto=[Send(worker, payload), …])──► worker ×N(并行 ≤3)
@@ -26,6 +27,7 @@ dispatcher ── 返回 Command(update=…, goto=[Send(worker, payload), …])�
   ▼
 worker 节点(w2/w3/w4/w5/w5_5/w6/w7)── 静态回边 ──► supervisor(回环,直至 finish/fail)
 w1 ── 静态边 ──► supervisor
+w6_fail(失败打包,非分支 worker)── 静态边 ──► END
 ```
 
 要点:
@@ -33,6 +35,7 @@ w1 ── 静态边 ──► supervisor
 - **主管循环**:每个 worker/w1 完成后都回主管,主管重决策(依赖失败传递 → 终态检查 → 就绪批派发 → LLM 决策)。`rework_events` 由分支上报、主管统一扣减预算(`rework_budget_left` 是普通字段,主管唯一写者,防并行覆盖)。
 - **Send 分支**:节点返回 `Command(update=…, goto=[Send(...)])` 并行派发,并发 ≤ `MAX_PARALLEL=3`;分支结果按通道 reducer 合并(`todo` 按 id,见 state.py `_merge_todo`)。**dispatcher 不加静态边**(实测:节点返回 Command(goto=[Send...]) 时静态边会同时生效,导致主管在分支执行中被再次调度)。
 - **interrupt 语义**:`interrupt(value)` 挂起 → 结果含 `__interrupt__`;`Command(resume=answer)` 恢复。挂起节点 resume 时**整体重跑**,payload 必须由 state 确定性得出(w1 问题清单/确认摘要均预先存 state,不依赖 LLM 重算)。
+- **失败收尾(设计 §8)**:终态 fail 不直接 END —— route 进 `w6_fail` 节点(`agent.py::fail_package_node`)打"未完成"包 `deliverable-failed-<ts>.zip` 再 END(先交包后结束):逐未交付子任务收集已有产物(design.md / Plugin.cs / review.json,缺失容忍)+ compile_errors + 审查裁决(含 Minor 全部意见)+ 失败原因,records/status.json 记原因 + spec_version + 冻结 spec 快照;CLI/API 与正常交付包同一通道展示。
 - **recursion_limit 是运行时 config 参数**(`graph.invoke(..., config={"recursion_limit": N})`),不是 compile 参数;预算公式见 §10.1。
 - **checkpointer**:缺省 `MemorySaver`(interrupt 必需);生产可换 `AsyncSqliteSaver`。CLI/API 每次运行用唯一 `thread_id` 隔离会话。
 - **终态**:`Supervisor.decide` 顺序(确定性优先,LLM 只做无法机械判定时的选择):
@@ -96,6 +99,7 @@ w1 ── 静态边 ──► supervisor
 | `todo` | 按 id 合并 | 子任务池(并行分支各自回写自己的子任务) |
 | `rework_budget_left` | 普通字段(默认 3) | 返工预算,主管唯一写者;分支只报 `rework_events` 不直写(并行同步写普通通道会 InvalidUpdateError) |
 | `rework_events` | 替换合并 | 分支报 `[1]`,主管下超步应用并写 `[]` 清空;同一步两分支同时报事件 last-wins 丢一次(v1 接受该近似,并行返工属边缘场景) |
+| `metrics` | Annotated dict + `_merge_metrics`(按 key 求和) | 任务指标计数器(v1.10,设计 §9/§12):`compile_pass_count` / `compile_fail_count`(w5 每次编译结果)/ `smoke_pass_count` / `smoke_fail_count`(w5_5 冒烟结果)/ `rework_rounds`(主管按返工事件累计,与预算扣减同源);分支 worker 只上报**增量**(执行前后差值),reducer 求和合并 —— 并行分支 + 跨多轮派发不重复累计 |
 | `final_deliverable` | last-wins | 最近一个交付包(兼容既有契约) |
 | `final_deliverables` | 追加去重 | 多子任务交付包合并(v1 逐包) |
 | `environment` | — | 环境配置:`env_name`(CLI/API `--env` 记录,节点可感知)+ `form_id`(w1 确认时从 spec 提取,冒烟验证用) |
@@ -214,7 +218,7 @@ w3 确定性骨架保证全部 `{{TOKEN}}` 渲染,防 w4 把未渲染占位符�
 
 - **摘要层**:`_AVAILABLE_SKILLS` 6 个摘要;`skill_summary()`(摘要 JSON)仅注入 w1 澄清问题生成(`generate_questions` 系统提示,帮助 LLM 选题),其余 worker 不注入摘要;`SKILL_HINT`(load_skill 提示)逐节点注入(w1 拆解、w2~w5),告诉 LLM 可调 `load_skill(skill_name)` 拿方法论;supervisor 决策无 skill 注入。
 - **工具层**:`load_skill` 按 agent → common 顺序查找 skill 目录,返回 `{skill, summary, references(name→content 映射,模板正文全量交付 —— agent 的 LLM 没有文件工具,只给文件名等于没给), scripts(恒空), content}`;非法 skill 名返回 error JSON 与可用列表。
-- **绑定形态**:`structured_with_skill(schema, messages)` = `with_structured_output(schema, tools=[load_skill], include_raw=True)`(**必须用官方 tools 参数;bind_tools 后再 with_structured_output 会经 `__getattr__` 委派丢失 tools**,loader docstring 注明)。模型回合 1 调 load_skill → 执行喂回 ToolMessage → 回合 2 出 schema JSON,最多 2 回合;parsed 仍空 → None → worker 确定性骨架降级。不传 strict(worker 输出 schema 含默认值字段,OpenAI strict json_schema 禁止默认值)。脚本/fake LLM(无 bind_tools)自动跳过绑定。
+- **绑定形态**:`structured_with_skill(schema, messages)` = `with_structured_output(schema, tools=[load_skill], include_raw=True)`(**必须用官方 tools 参数;bind_tools 后再 with_structured_output 会经 `__getattr__` 委派丢失 tools**,loader docstring 注明)。模型回合 1 调 load_skill → 执行喂回 ToolMessage → 回合 2 出 schema JSON,最多 2 回合;parsed 仍空 → None → worker 确定性骨架降级。**畸形 JSON 重试(设计 §8,v1.10)**:解析失败(parsed=None 且无 tool_calls)→ 同一输入重试 1 次(共 2 次尝试),仍失败返回 None;重试与工具 2 回合上限**正交** —— 工具回合后的结果直接返回(成功出 schema / 又调工具强制停止),不参与解析重试。不传 strict(worker 输出 schema 含默认值字段,OpenAI strict json_schema 禁止默认值)。脚本/fake LLM(无 bind_tools)自动跳过绑定。
 - **⚠️ 未线上验证**:该绑定形态未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 `generate_questions` smoke,被 API 拒绝则改用 sentiment 的 JSON Mode 模式(见 CLAUDE.md 约束)。
 
 ### 4.3 prompt 变薄原则(单源)
@@ -267,8 +271,8 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 4 | 编译 5 轮仍失败 | 扣返工预算 → BLOCKED → needs_rework → 退回 w3 重新生成 |
 | 5 | 冒烟失败(assembly 未加载/FormId 映射错) | 扣返工预算 → BLOCKED → needs_rework → 退回 w3 重新生成 |
 | 6 | 冒烟客户端未配置 | BLOCKED 不扣预算 → failed(基础设施缺失走重工无意义) |
-| 7 | 全局返工预算耗尽(≤3 轮) | fail,剩余子任务标记 failed,输出 TodoList 摘要(部分产物 + 原因) |
-| 8 | LLM 结构化输出失败(畸形 JSON/异常) | 返回 None → worker 确定性骨架降级(w1 默认问题 / w2 骨架 / w3 渲染 token / w4 占位符 Critical / w5 原样重编译轮次兜底),不中断图 |
+| 7 | 全局返工预算耗尽(≤3 轮) | fail,剩余子任务标记 failed,route 进 w6_fail 打"未完成"包 `deliverable-failed-<ts>.zip`(逐未交付子任务收已有产物 + compile_errors + 审查裁决含 Minor + 原因 + spec_version + 冻结 spec 快照,records/status.json),CLI/API 与正常交付包同一通道展示(替代原 TodoList 摘要) |
+| 8 | LLM 结构化输出失败(畸形 JSON/异常) | 解析失败(parsed=None 且无 tool_calls)→ 同一输入重试 1 次(共 2 次尝试,设计 §8),仍失败返回 None → worker 确定性骨架降级(w1 默认问题 / w2 骨架 / w3 渲染 token / w4 占位符 Critical / w5 原样重编译轮次兜底),不中断图;重试与工具 2 回合上限正交 |
 | 9 | 依赖失败传递 | pending 依赖者 → failed(派发前做,防把失败依赖的依赖者派发出去) |
 | 10 | LLM 幻觉 finish(澄清期) | `_all_delivered` 门控拦截,回退确定性兜底(防零交付误报成功) |
 | 11 | LLM 决策非法 run sid | 校验 sid ∈ 就绪集合,否则回退派批首 |
@@ -287,6 +291,7 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 24 | 澄清无限循环 | 逐问 ≤10 轮;确认最多 1 次补充,仍不确认带假设强制收口 |
 | 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 中断后内存任务存储重启即丢(v1 债务),重建任务重跑 |
 | 26 | 非法 skill 名 | load_skill 返回 error JSON + 可用列表 |
+| 27 | 反馈端点沉淀失败(`POST /tasks/{id}/feedback`) | 部署后行为错误手动上报 → 经验库 `propose("DEPLOY", sha256(reason)[:12], …)`(proposed 态,签名去重,不同原因各自累计);沉淀失败不阻塞反馈(记录 warning 日志,SSE 发 `feedback` 事件);404 未知任务 / 401 无有效 apikey |
 
 ## 7. 安全
 
@@ -329,7 +334,7 @@ services:
 
 ## 9. 测试
 
-- **规模**:164 项全过(CHANGELOG v1.8.0 记录):`tests/test_kingdee_agent.py`(86 项,图全链路/CLI/worker/skill)+ `tests/test_kingdee_api.py`(8 项)+ test_compile_service / test_rag / test_templates。
+- **规模**:212 项全过(CHANGELOG v1.12.0 记录):`tests/test_kingdee_agent.py`(图全链路/CLI/API/worker/skill/metrics/otel/失败收尾包)+ `tests/test_kingdee_api.py` + test_compile_service / test_rag / test_templates + eval 集(`tests/eval/`)。
 - **注入约定**:只注入 LLM/外部服务(`build_graph(llm=None)` + fake 编译/冒烟),**不 mock LangGraph 本身**;CLI 测试 monkeypatch 模块级 `build_graph`。
 - **图可达性测试**:覆盖 主管循环、依赖拓扑、并行派发(≤3)、返工预算、finish/fail 终态、interrupt 澄清流、Send 分支 payload 快照、reducer 合并、防"supervisor↔dispatcher 空派发忙循环"。
 - **eval 集**(tests/eval/):`cases/*.json`(3 类型样例)+ `run_eval.py`(w3 生成 → mock 编译 → 事件断言)+ `baseline.json`(确定性基线,`llm=None`,提交/CI 对比回归);评估用 `EVAL_MOCK_RULES`(CS9990 未渲染占位符残留 —— 默认 MockCompiler 规则对真实插件误报,勿用);`trigger_ok` 断言覆盖方法声明(裸子串会命中设计摘要注释,误报)。

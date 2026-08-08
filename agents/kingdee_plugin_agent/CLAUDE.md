@@ -23,7 +23,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 |---|---|
 | [agent.py](agent.py) | 图构建入口:`build_graph()`(依赖全可注入,测试传 fake;缺省 MemorySaver checkpointer)+ `default_recursion_limit()`(100+20×子任务数) |
 | [cli.py](cli.py) | CLI 入口 `run_cli`:环境硬门槛(KD_BASE_URL)→ stdin 交互澄清循环 → TodoList 摘要 + 交付包路径 |
-| [api.py](api.py) | Web 入口 `create_app()`:apikey 鉴权 + KD_* 4 项硬门槛(503)+ SSE 实时流 + 澄清应答 + 验收 |
+| [api.py](api.py) | Web 入口 `create_app()`:apikey 鉴权 + KD_* 4 项硬门槛(503)+ SSE 实时流 + 澄清应答 + 验收 + **反馈端点** `POST /tasks/{id}/feedback`(部署后行为错误手动上报 → 经验库 DEPLOY 通道,沉淀失败不阻塞反馈) |
 | [graph/state.py](graph/state.py) | 任务契约 TaskState/Subtask + 常量(GLOBAL_REWORK_BUDGET=3 / MAX_PARALLEL=3,todo 按 id reducer 合并) |
 | [graph/supervisor.py](graph/supervisor.py) | 主管节点:依赖拓扑/就绪批派发/返工预算唯一写者/终态判定(finish/fail) |
 | [graph/workers/base.py](graph/workers/base.py) | worker 统一基类:`run(state, subtask)` 契约,产物经 store 落盘,report 上报 |
@@ -42,6 +42,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **改任务契约**:`graph/state.py` 的 Subtask/TaskState 字段 —— 加普通字段注意并行写冲突(用 reducer 或改由主管统一写);`Send` 分支入参是 payload 快照,新字段要在 `agent.py::_send_payload` 带上(`todo` 是全量快照,Subtask 新字段经 `_as_state` 的 `_SUBTASK_FIELDS` 自动随行,无需单独改 payload;TaskState 级新字段则要显式加进 `_send_payload` + `_as_state`)。
 - **接经验库**:`build_graph(experience=...)` 一次注入,w2(设计历史坑参考)/w5(修复检索)/w7(沉淀)共享;w2 按子任务标题 `search_related(title, title, k=3)` 检索(title 同时充当 code/message 双信号,设计阶段无错误码),命中注入设计上下文"历史踩坑参考"段(verified 优先、仅作规避参考非必须满足),检索故障降级空命中不阻塞设计。
 - **接真实金蝶环境**:`.env` 配 `KD_BASE_URL/KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 4 项(硬门槛:CLI 缺 KD_BASE_URL exit 1;API 4 项全校验,缺任一 503);编译服务配 `COMPILE_SERVICE_URL`(缺省 http://localhost:8000,起 `docker-compose up`);API 鉴权配 `KINGDEE_API_KEY`。
+- **可观测与指标(设计 §9/§12)**:指标计数随 State 统计 —— `TaskState.metrics`(reducer 求和,键见 `METRIC_KEYS`):w5/w5_5 每次编译/冒烟结果计数、rework_rounds 由主管按返工事件累计;分支 worker 只上报**增量**(执行前后差值),并行分支不重复累计。otel spans 打主管决策(`kingdee.supervisor.decide`,action 只记动作类型)/ worker 状态变迁(`kingdee.worker.<name>`,subtask_id/plugin_type/status)/ 编译轮次(`kingdee.w5.compile_round`,round/success)三处,属性全为**低基数**,遵循 OBS-CORE-003 —— 用户问题文本/需求原文等自由文本绝不进 span;无 collector(no-op tracer)不崩,`api.py` 启动时 `init_otel()`。
 - **改 skill**:`skills/<skill>/` 下 SKILL.md(方法论:目标/输入/流程/输出契约/踩坑)+ `references/`(类型要点;requirement-clarify 老形态模板直放 skill 目录,无 references/),`skills/loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要(渐进式披露);**方法论只写进 skill,不要写回 prompts** —— w2/w3/w4 的 worker TYPE_PROMPTS 与 load_skill 都从 `skills/<skill>/references/` 取同一份内容(单源)。改 LLM 侧工具提示:loader 的 `SKILL_HINT`(每步注入)+ `structured_with_skill`(绑定形态:官方 tools 参数,勿用 bind_tools 再 with_structured_output —— `__getattr__` 委派会丢 tools,已在 loader docstring 注明)。注意:prompts/ 与 skill references 被 worker 拼进系统提示后都经 ChatPromptTemplate f-string 解析,含 `{...}` 的样例(如 JSON 契约)必须转义 `{{...}}`(dev-standards §7.2);作为 load_skill JSON 交付时保持文本原样 —— 转义是模板安全,不是内容变更。
 - **跑测试**:`pytest tests/test_kingdee_agent.py -v`(图全链路 + CLI + API,确定性注入 llm=None + fake 编译/冒烟)+ `pytest tests/test_kingdee_api.py`;全量 `pytest tests/ -q`。
 - **启动 CLI**:`python -m agents.kingdee_plugin_agent.cli "给采购单审核加库存校验" --env test`。
@@ -60,6 +61,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **interrupt 语义**:挂起节点 resume 时整体重跑,payload 必须由 state 确定性得出(不依赖 LLM 重算);恢复用 `Command(resume=answer)`。
 - **recursion_limit 是运行时 config 参数**,不是 compile 参数;按子任务数给足(100+20×n,澄清期按上限 10 算 —— 旧 50+10×n 在 n=10 时 150<实际需求 ~160,复合任务触发 GraphRecursionError)。
 - **w1 澄清上限**:逐问 interrupt ≤10 轮;确认摘要最多再确认 1 次,仍不确认带假设强制收口(防无限循环)。
+- **LLM 畸形输出重试(设计 §8)**:`structured_with_skill` 解析失败(parsed=None 且无 tool_calls)→ 同一输入重试 1 次(**共 2 次尝试**),仍失败返回 None → 确定性骨架降级;重试与 load_skill 工具 2 回合上限正交(工具回合后结果直接返回,不参与解析重试)。改这里时同步看 loader.py docstring 与测试(`test_structured_with_skill_parse_failure_*`)。
 - **测试注入约定**:只注入 LLM/外部服务(build_graph(llm=None) + fake 编译/冒烟),不 mock LangGraph 本身。
 - **load_skill 绑定未线上验证**:w1-w5 的 `structured_with_skill` 用 tools + json_schema response_format 组合绑定 load_skill,未对真实 DeepSeek 线上验证;首次真实环境联调时先跑 w1 generate_questions smoke,若被 API 拒绝改用 sentiment 的 JSON Mode 模式(`bind_tools([load_skill], strict=True).bind(response_format={"type": "json_object"})` + 手动 2 回合循环)。
 

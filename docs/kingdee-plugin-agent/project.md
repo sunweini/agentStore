@@ -54,13 +54,17 @@
 
 ### 5.1 已完成
 
-三个实现 plan 全部交付(Plan A 编译服务 / Plan B 知识基建 / Plan C 编排与入口),当前 **164 项测试全过**(记录于 CHANGELOG v1.8.0,含图全链路、CLI、API、RAG、模板、编译服务、eval 集)。
+三个实现 plan 全部交付(Plan A 编译服务 / Plan B 知识基建 / Plan C 编排与入口),此后 v1.9~v1.12 持续补强,当前 **212 项测试全过**(记录于 CHANGELOG v1.12.0,含图全链路、CLI、API、RAG、模板、编译服务、eval 集)。
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | Plan A 编译服务 | 编译 HTTP 服务(mock/msbuild 双后端)、错误解析器、编译客户端、Dockerfile/docker-compose | ✅ 交付 |
 | Plan B 知识基建 | RAG 四库、混合检索(BM25+向量)、经验库两态+去重、三类型模板、金蝶 WebAPI 客户端、冒烟/打包工具 | ✅ 交付 |
 | Plan C 编排与入口 | 1 主管 + 8 worker 循环图、任务契约、CLI + Web API + 演示页、skill 体系(6 个) | ✅ 交付 |
+| v1.9 时间预算 + 需求版本冻结 | 全流程 30min 图级总闸(started_at,设计 §8);spec 确认即冻结(spec_version 盖章 + API 409 锁 + 交付包 records/spec.json) | ✅ 交付 |
+| v1.10 P2 五项 | 指标随 State 统计(TaskState.metrics 五计数器)+ OTel span(低基数)、失败收尾"未完成"包(w6_fail → deliverable-failed-*.zip)、LLM 畸形 JSON 重试(2 次尝试)、交付包 records 接线(design/review 进包)、.env 配置组 | ✅ 交付 |
+| v1.11 冒烟链路 + 反馈通道 | 冒烟链路结构级修复(FormId 提取 + DLL 传递,验证对象改 DLL)、反馈端点 POST /tasks/{id}/feedback(经验库 DEPLOY 通道)、`--env` 记录进 state.environment | ✅ 交付 |
+| v1.12 下发模板字段 | 验收标准(Subtask.acceptance_criteria,w4 审查对照)+ 子任务退回上限(Subtask.max_rework/rework_count,超限子任务 failed 而非 needs_rework) | ✅ 交付 |
 
 ### 5.2 待办(未验证项)
 
@@ -69,12 +73,12 @@
 - **团队金蝶 BOS DLL 到位 → 真实容器编译(里程碑 1 启动门)**:真实 msbuild 后端在容器内编译需金蝶 BOS 引用 DLL(授权合规);启动门 = 真实容器编译 bill/service/list 三类型样例插件各一通过。当前 CI/测试走 mock 编译后端,不当质量门。
 - **真实金蝶环境联调**:WebAPI 客户端(FormId/字段/操作查询)与冒烟客户端的端点路径、响应结构目前是**文档化初始契约(占位)**,需在真实实例上对照金蝶文档验证调整;Linux 容器内 BOS 编译兼容性(mono/.NET 兼容层或 Windows 容器)待验证。
 - **线上 DeepSeek 验证 load_skill 绑定**:w1-w5 的 `structured_with_skill`(tools + json_schema 组合)未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 smoke,被 API 拒绝则回退 JSON Mode 模式(见 `agents/kingdee_plugin_agent/CLAUDE.md` 约束)。
-- **v1 已知债务**(见 tech.md §11):API 内存任务存储重启即丢、线程无并发上限、apikey 非 timing-safe、`--env` 未消费、CLI 门控仅查 KD_BASE_URL。
+- **v1 已知债务**(见 tech.md §11):API 内存任务存储重启即丢、线程无并发上限、apikey 非 timing-safe、`--env` 部分消费(v1.11:记录进 requirement_spec + `state.environment["env_name"]`,节点可感知;未做环境级差异化,单环境 v1)、CLI 门控仅查 KD_BASE_URL。
 
 ## 6. 后续规划
 
 - **知识自生长**:经验库"种子 + w7 沉淀 + 人工 review"滚动运转,proposed → verified 流转,编译修复命中率持续提升;错误映射单一来源经验库(动态),skill 只含方法论。
-- **多环境支持**:`--env` 目前只进 requirement_spec 未做差异化(v1 单环境);后续按环境隔离金蝶配置与数据目录。
+- **多环境支持**:`--env` 已记录进 requirement_spec + `state.environment["env_name"]`(v1.11,节点可感知),未做环境级差异化(单环境 v1);后续按环境隔离金蝶配置与数据目录。
 - **交付包合并**:多子任务 v1 逐包交付,后续合并为单一 zip。
 - **任务持久化与限流**:内存任务存储换持久化(如 AsyncSqliteSaver + DB),API 加线程池/并发闸门。
 - **其他 ERP 扩展方向**:金蝶能力已封装在 `tools/kingdee_api.py`(客户端)+ `templates/`(类型模板)+ `compile_service`(编译容器),agent 编排层与金蝶细节解耦,具备向同类 ERP(BOS 系)或新插件类型横向扩展的形态;扩展时优先补模板/检索库而非改图。
