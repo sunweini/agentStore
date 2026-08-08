@@ -1,0 +1,58 @@
+# kingdee-plugin-agent 开发指南
+
+金蝶云星空插件开发 Agent:输入自然语言需求,自动完成 澄清 → 设计 → 生成 → 审查 → 编译修复 → 冒烟 → 打包 → 沉淀 全流程,交付可部署的插件包(TodoList + 交付产物)。
+
+## 本 agent 是什么
+
+- 职责:把"给金蝶 X 单据加 Y 功能"的模糊需求,变成经过设计/审查/编译/冒烟的插件交付物;踩坑自动沉淀经验库,越用越准。
+- 开发前必读:根目录 [CLAUDE.md](../../CLAUDE.md) 和 [docs/dev-standards.md](../../docs/dev-standards.md)(必须依据 langchain MCP 文档/API 开发)。
+
+## 架构
+
+1 主管 + dispatcher + 8 worker 的循环图,worker 经 `Send` 并行派发(并发 ≤3):
+
+```
+START → supervisor ──run:──→ dispatcher ──Send──→ w2/w3/w4/w5/w5.5/w6/w7(并行 ≤3)
+          │                     │                        │
+          └──ask_user──→ w1     └──finish|fail──→ END    └──→ supervisor(回环)
+```
+
+w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约:主管拆解需求为 Subtask(id/title/plugin_type/depends_on/status/priority),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。
+
+| 文件 | 职责 |
+|---|---|
+| [agent.py](agent.py) | 图构建入口:`build_graph()`(依赖全可注入,测试传 fake;缺省 MemorySaver checkpointer)+ `default_recursion_limit()`(50+10×子任务数) |
+| [cli.py](cli.py) | CLI 入口 `run_cli`:环境硬门槛(KD_BASE_URL)→ stdin 交互澄清循环 → TodoList 摘要 + 交付包路径 |
+| [api.py](api.py) | Web 入口 `create_app()`:apikey 鉴权 + KD_* 4 项硬门槛(503)+ SSE 实时流 + 澄清应答 + 验收 |
+| [graph/state.py](graph/state.py) | 任务契约 TaskState/Subtask + 常量(GLOBAL_REWORK_BUDGET=3 / MAX_PARALLEL=3,todo 按 id reducer 合并) |
+| [graph/supervisor.py](graph/supervisor.py) | 主管节点:依赖拓扑/就绪批派发/返工预算唯一写者/终态判定(finish/fail) |
+| [graph/workers/base.py](graph/workers/base.py) | worker 统一基类:`run(state, subtask)` 契约,产物经 store 落盘,report 上报 |
+| [graph/workers/w1..w7](graph/workers/) | 8 worker:w1 需求澄清(interrupt 逐问 + 确认摘要)/ w2 设计 / w3 生成 / w4 审查 / w5 编译修复 / w5.5 冒烟 / w6 打包 / w7 知识沉淀 |
+| [prompts/](prompts/) | 节点 prompt 与代码分离:`supervisor.md` + 每 worker 一个;w2/w3/w4 按插件类型拆 bill/list/service |
+| [tools/](tools/) | 外部能力:compile_client(编译服务)/ kingdee_api(金蝶元数据)/ smoke_client(冒烟)/ package(打包) |
+| [store/artifact_store.py](store/artifact_store.py) | 产物落盘(JSON 文件库:spec/plan/代码/审查/编译/交付) |
+| [seed/](seed/) | 经验库种子数据(compile_errors.json)+ 灌入脚本 seed_load |
+| [templates/](templates/) | 三类型插件模板(bill/list/service),w3 生成参照 |
+
+## 常用操作
+
+- **加 worker**:`graph/workers/` 新建 wN_xxx.py(继承 base.WorkerBase)→ `agent.py` 的 `workers` dict 注册 → `supervisor.py` 的 STATUS_TO_WORKER/状态机补状态迁移 → 按需加 prompt。
+- **改 prompt**:`prompts/<name>.md`,节点内按名字加载;注意 ChatPromptTemplate 是 f-string 语法(JSON 样例 `{}` 转义 `{{}}`,见 dev-standards §7.2)。
+- **改任务契约**:`graph/state.py` 的 Subtask/TaskState 字段 —— 加普通字段注意并行写冲突(用 reducer 或改由主管统一写);`Send` 分支入参是 payload 快照,新字段要在 `agent.py::_send_payload` 带上。
+- **接真实金蝶环境**:`.env` 配 `KD_BASE_URL/KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 4 项(硬门槛:CLI 缺 KD_BASE_URL exit 1;API 4 项全校验,缺任一 503);编译服务配 `COMPILE_SERVICE_URL`(缺省 http://localhost:8000,起 `docker-compose up`);API 鉴权配 `KINGDEE_API_KEY`。
+- **跑测试**:`pytest tests/test_kingdee_agent.py -v`(图全链路 + CLI + API,确定性注入 llm=None + fake 编译/冒烟)+ `pytest tests/test_kingdee_api.py`;全量 `pytest tests/ -q`。
+- **启动 CLI**:`python -m agents.kingdee_plugin_agent.cli "给采购单审核加库存校验" --env test`。
+- **启动 API**:`uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload`(演示页 web/kingdee-demo.html)。
+
+## 约束
+
+- **langchain MCP 铁律**:开发前必须查 docs-langchain / reference-langchain MCP 确认 API 用法,禁止凭记忆写 API(见根 CLAUDE.md)。
+- **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail(交付"未完成"包:部分产物 + 全部退回意见);预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。
+- **并发上限**:`MAX_PARALLEL = 3`(send() 并行子任务 ≤3,防 DeepSeek 限流/超时风暴)。
+- **编译轮次**:w5 循环编译至多 `MAX_COMPILE_ROUNDS = 5` 轮;编译服务不可用 → 报 BLOCKED,不算轮次不扣预算。
+- **环境硬门槛**:无金蝶环境不进图 —— CLI 未配 KD_BASE_URL 直接退出;API 4 项缺失 503 并点明缺项;冒烟客户端未配置 → BLOCKED → failed(防无限重试循环)。
+- **知识沉淀两态**:w7 写入经验库走 proposed/verified 两态 + "code|file_pattern" 签名去重(防幻觉污染);验收拒绝原因同通道(proposed 态,sha256 摘要入签名,失败不阻塞验收)。
+- **interrupt 语义**:挂起节点 resume 时整体重跑,payload 必须由 state 确定性得出(不依赖 LLM 重算);恢复用 `Command(resume=answer)`。
+- **recursion_limit 是运行时 config 参数**,不是 compile 参数;按子任务数给足(50+10×n,澄清期按上限 10 算)。
+- **w1 澄清上限**:逐问 interrupt ≤10 轮;确认摘要最多再确认 1 次,仍不确认带假设强制收口(防无限循环)。
+- **测试注入约定**:只注入 LLM/外部服务(build_graph(llm=None) + fake 编译/冒烟),不 mock LangGraph 本身。

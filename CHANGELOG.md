@@ -5,6 +5,26 @@
 
 ---
 
+## v1.4.0 — 2026-08-08(kingdee-plugin-agent 全流程交付首版:CLI + Web + 文档)
+
+### 新增功能
+
+- **CLI 入口(cli.py)**:`run_cli` 需求文本 + `--env` 目标环境;环境硬门槛(未配 KD_BASE_URL → exit 1,不进图);stdin 交互澄清循环(interrupt 挂起 → 打印问题/确认摘要 → 答复恢复);结束打印 TodoList 摘要 + 交付包路径(全部交付返回 0,失败/中止返回 1)
+- **Web API(api.py)**:`create_app` 工厂 + 5 接口 —— POST /tasks(apikey 鉴权 + KD_* 4 项硬门槛,缺任一 503)/ GET /tasks/{id}/events(SSE 实时流,断线重连按 seq 重放)/ GET /tasks/{id}/state(全量快照兜底)/ POST /tasks/{id}/answers(澄清恢复,`Command(resume=...)`)/ POST /tasks/{id}/acceptance(验收,拒绝原因喂 w7 经验库);每任务独立图 + MemorySaver + 后台线程
+- **前端演示页**:`web/kingdee-demo.html`(SSE 任务矩阵 + 澄清流 + 验收)
+- **agent 专属 CLAUDE.md**:`agents/kingdee_plugin_agent/CLAUDE.md`(按 dev-standards §6 模板:职责/架构/常用操作/约束)
+
+### 修复
+
+- api.py 补 CORS 中间件(演示页跨域访问;test_api_cors_preflight)
+- acceptance→w7 沉淀签名 reason 感知(sha256 摘要入 file_pattern,不同拒绝原因不被去重吞掉;同原因仍去重)
+
+### 测试
+
+- tests/test_kingdee_agent.py 67 项全过(图全链路 + CLI/API 确定性注入路径),tests/test_kingdee_api.py 8 项全过;全套 139 项全过
+
+---
+
 ## v1.3.0 — 2026-08-08(kingdee-plugin-agent 主管图构建 C10)
 
 ### 新增功能
