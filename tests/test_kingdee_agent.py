@@ -112,3 +112,25 @@ def test_next_ready_no_shadow_by_blocked_dep():
     s = Supervisor(llm=None, workers={})
     nxt = s._next_ready(st)
     assert nxt is not None and nxt.id == "B1"  # 阻塞项不遮蔽后面的就绪项
+
+
+from agents.kingdee_plugin_agent.graph.workers.w1_requirement import (
+    RequirementWorker,
+    build_confirmation_summary,
+)
+
+
+def test_confirmation_summary_lists_decisions_and_assumptions():
+    spec = {"decisions": [{"q": "校验字段", "a": "FQty"}],
+            "assumptions": ["未说明拦截方式,默认硬拦截"]}
+    text = build_confirmation_summary(spec)
+    # 决策(问题+答案)与假设必须同时列出,防"点确认但需求已丢"的假确认
+    assert "校验字段" in text and "FQty" in text  # 决策:问题与答案都在摘要里
+    assert "默认硬拦截" in text                   # 假设清单也在
+
+
+def test_spec_split_subtasks():
+    spec = {"plugin_types": ["bill", "service"],
+            "subtasks": [{"id": "A", "plugin_type": "bill", "deps": ["B"]},
+                          {"id": "B", "plugin_type": "service", "deps": []}]}
+    assert spec["subtasks"][0]["deps"] == ["B"]
