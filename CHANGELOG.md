@@ -5,6 +5,20 @@
 
 ---
 
+## v1.8.0 — 2026-08-08(w2 设计阶段经验库回流:历史坑 → 设计规避)
+
+### 新增功能
+
+- **w2 设计接经验库(DesignWorker experience 参数,默认 None 与 rag 同模式)**:按子任务标题 `search_related(title, title, k=3)` 检索历史踩坑(设计阶段无编译错误码,标题同时充当 code/message 双信号),命中注入设计 LLM 上下文的"历史踩坑参考"段 —— 条目带 text + status/confidence,verified 优先排序(proposed 自核后采用),显式标注"仅供参考、非必须满足";检索故障 try/except 降级为空命中,不阻塞设计(与 RAG 检索同一纪律)。`build_graph` 把 experience 透传给 w2(原仅 w5/w7),docstring 同步。
+- **knowledge-steward 路由表**:experience 行补 w2(设计时历史坑检索、title 语义、命中注入设计上下文、verified 优先)。
+- **design-builder 方法论**:流程步骤插入"查历史踩坑(经验库)"(设计前先查历史坑,把已知错误模式转化为设计规避 —— 如签名级联 → 设计时核对基类事件签名),输入清单补经验库检索上下文。
+
+### 测试
+
+- tests/test_kingdee_agent.py 新增 2 项:w2 经验命中注入设计 LLM 上下文(标题双信号 + k=3 调用契约、human 消息含"历史踩坑参考"与命中文本、verified 排在 proposed 前、设计落盘)/ 经验库故障降级仍 DONE;既有 w2 测试(experience=None)不变;全套 164 项全过(162 既有 + 2 新增)
+
+---
+
 ## v1.7.1 — 2026-08-08(评审修复:seed_load CLI 入口 + ExperienceStore.archive + 路由表勘误)
 
 ### 修复(评审)

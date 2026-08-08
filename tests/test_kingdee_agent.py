@@ -187,6 +187,68 @@ def test_design_worker_executes(tmp_path):
     assert "STATUS: DONE" in msg
 
 
+def test_w2_experience_hits_reach_design_context(tmp_path):
+    """经验库命中注入设计 LLM 上下文:human 消息含"历史踩坑参考"标记与命中文本,
+    标题作双信号检索(k=3),verified 条目排在 proposed 之前(历史坑 → 设计规避)。"""
+    from pathlib import Path
+
+    from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignOutput
+
+    class FakeExperience:
+        def __init__(self):
+            self.calls = []
+
+        def search_related(self, error_code, message, k=3):
+            self.calls.append((error_code, message, k))
+            return [
+                {"text": "[CS0506] 基类无此成员 修复:核对基类事件签名", "score": 0.8,
+                 "metadata": {"status": "proposed", "confidence": "unverified"}},
+                {"text": "[CS0115] 找不到可重写方法 修复:确认事件名与签名一致", "score": 0.7,
+                 "metadata": {"status": "verified", "confidence": "verified"}},
+            ]
+
+    class _DesignLLM:
+        """捕获消息的 fake:with_structured_output 返回自身,invoke 返回契约对象。"""
+
+        def __init__(self):
+            self.seen = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            return DesignOutput(design_markdown="# 设计文档(历史坑已规避)")
+
+    exp = FakeExperience()
+    w = DesignWorker(llm=_DesignLLM(), store=ArtifactStore(root=tmp_path),
+                     experience=exp)
+    sub = Subtask("A1", "bill", "审核校验", [], "pending")
+    sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
+    assert "STATUS: DONE" in msg
+    assert exp.calls == [("审核校验", "审核校验", 3)]  # 标题双信号语义 + k=3
+    assert "历史坑已规避" in Path(sub.design_path).read_text(encoding="utf-8")  # 设计落盘
+    human = next(m.content for m in w.llm.seen[0] if getattr(m, "type", "") == "human")
+    assert "历史踩坑参考" in human
+    assert "[CS0115] 找不到可重写方法" in human and "[CS0506] 基类无此成员" in human
+    assert human.index("[CS0115]") < human.index("[CS0506]")  # verified 优先
+
+
+def test_w2_experience_failure_degrades_to_done(tmp_path):
+    """经验库故障 → 设计仍 DONE(检索降级为空命中,不阻塞;与 RAG 检索同一纪律)。"""
+
+    class BrokenExperience:
+        def search_related(self, error_code, message, k=3):
+            raise RuntimeError("chroma 不可用")
+
+    w = DesignWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None,
+                     experience=BrokenExperience())
+    sub = Subtask("A1", "bill", "x", [], "pending")
+    sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
+    assert "STATUS: DONE" in msg
+    assert sub.design_path.endswith("design.md")
+
+
 from agents.kingdee_plugin_agent.graph.workers.w3_generate import GenerateWorker
 from agents.kingdee_plugin_agent.graph.workers.w4_review import ReviewWorker, VERDICTS
 

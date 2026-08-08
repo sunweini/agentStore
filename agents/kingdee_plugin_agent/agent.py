@@ -116,7 +116,7 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
         api_client: 金蝶元数据客户端(冒烟验证用;缺省从 KD_* 环境变量构造)
         llm: 聊天模型(缺省 get_chat_model();显式传 None = 确定性骨架路径)
         smoke_client: 冒烟客户端(缺省基于 api_client/环境构造,无环境则 None)
-        experience: 经验库(w5 修复检索 / w7 沉淀;None = 跳过)
+        experience: 经验库(w2 设计历史坑参考 / w5 修复检索 / w7 沉淀;None = 跳过)
         package_builder/output_dir: 交付包构建(缺省 PackageBuilder(output_dir))
         checkpointer: 缺省 MemorySaver(interrupt 必需);生产可换 AsyncSqliteSaver
 
@@ -131,7 +131,7 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
 
     workers = {
         "w1": RequirementWorker(llm=llm, store=store),
-        "w2": DesignWorker(llm=llm, store=store, rag=rag),
+        "w2": DesignWorker(llm=llm, store=store, rag=rag, experience=experience),
         "w3": GenerateWorker(llm=llm, store=store, rag=rag),
         "w4": ReviewWorker(llm=llm, store=store, rag=rag, standards=standards),
         "w5": CompileWorker(llm=llm, store=store, compile_client=compile_client,
