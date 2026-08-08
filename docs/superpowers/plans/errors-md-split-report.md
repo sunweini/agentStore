@@ -119,3 +119,49 @@
    建议把该格式定义收进 errors.md 检索策略一节(本次未动,避免范围蔓延)。
 3. 执行期间并发跑了一次被污染的全量基线(155+1,失败项即被更新的旧断言),
    最终以改动完成后全量 158 绿为准。
+
+---
+
+## 评审修复补记(Important + Minor,提交 2:`fix(seed): 签名类错误种子(CS0506/CS0115)+ 契约测试覆盖 SKILL.md`)
+
+### Important — B 类(签名不匹配)具体指引回归经验库
+
+评审指出:errors.md 删除静态映射后,B 类(签名不匹配)失去唯一具体指引(旧文件
+携带 OnLoad(EventArgs e)/ AfterDoOperation(AfterDoOperationEventArgs e)/
+AfterExecuteOperationTransaction / PrepareFilterParameter(FilterArgs e)/
+AfterBindData(EventArgs e) 等正确签名 —— 恰是 errors.md 自指为级联源的类别),
+而种子只覆盖 CS0246×2/CS0103/CS0234/CS1061,无 CS0506/CS0115 条目。
+
+**修复**:`agents/kingdee_plugin_agent/seed/compile_errors.json` 追加 2 条(共 7 条):
+
+- `CS0506`(不是重写,基类中不存在该成员):fix 含模板指针 —— "核对基类事件签名并
+  完全匹配(如 OnLoad(EventArgs e) / AfterDoOperation(AfterDoOperationEventArgs e)),
+  模板 templates/<type>/template.cs 有基准"。
+- `CS0115`(找不到合适的方法可重写):fix 含级联提示 —— "确认事件名与签名与基类
+  完全一致;签名错误是级联源头,先修签名再处理后续错误"。
+
+具体签名示例进种子(经验库)而非 skill:符合"具体映射单一来源经验库"契约;契约测试
+零 `CS\d{4}` 只扫 skill 文件,种子条目不受限(种子即契约允许的映射载体)。
+
+### Minor — 契约测试覆盖 SKILL.md
+
+`test_errors_md_pure_methodology_no_static_mappings` 扩展:断言同时扫描
+`errors.md` 与 `payload["content"]`(SKILL.md),双文件零 `CS\d{4}` —— 不变量声明
+由"errors.md 纯方法论"升级为"compile-fixer skill 全文件零静态错误码映射"。
+
+### 测试
+
+- 全量:`158 passed`(158 项全绿 —— seed_load 幂等 `n1 >= 7`、双文件契约、
+  原 158 项无回归;本轮为断言更新与种子扩容,未新增测试函数)。
+- 种子验证:load_seed_data 幂等(二次灌入 0),CS0506/CS0115 以
+  "[错误码] message 修复:fix" 统一格式入 experience 库,与 propose 格式一致。
+
+### 变更文件(提交 2)
+
+| 文件 | 改动 |
+|---|---|
+| `agents/kingdee_plugin_agent/seed/compile_errors.json` | 追加 CS0506/CS0115 签名类种子(5 → 7 条) |
+| `tests/test_rag.py` | seed_load 幂等断言 n1 >= 7 |
+| `tests/test_kingdee_agent.py` | 契约测试双文件扫描(errors.md + SKILL.md 零 CS\\d{4}) |
+| `CHANGELOG.md` | v1.6.1 追加修复(评审)块 |
+| 本报告 | 评审修复补记 |

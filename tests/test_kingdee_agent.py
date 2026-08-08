@@ -1332,15 +1332,15 @@ def test_load_skill_codegen_review_fixer_references():
 
 
 def test_errors_md_pure_methodology_no_static_mappings():
-    """errors.md 纯方法论契约:分类框架/根因分析/检索策略/修复纪律在,
-    不含任何静态 错误码 → 修法 映射 —— 具体映射单一来源为经验库
-    (启动种子 seed/compile_errors.json + w7 沉淀),防静态表与动态库双份维护漂移。"""
+    """compile-fixer skill 纯方法论契约(errors.md + SKILL.md):分类框架/根因分析/
+    检索策略/修复纪律在,不含任何静态 错误码 → 修法 映射 —— 具体映射单一来源为
+    经验库(启动种子 seed/compile_errors.json + w7 沉淀),防静态表与动态库双份维护漂移。"""
     import json
     import re
     from agents.kingdee_plugin_agent.skills.loader import load_skill
 
-    errors_md = json.loads(
-        load_skill.invoke({"skill_name": "compile-fixer"}))["references"]["errors.md"]
+    payload = json.loads(load_skill.invoke({"skill_name": "compile-fixer"}))
+    errors_md = payload["references"]["errors.md"]
     # 方法论四件套
     assert "错误分类框架" in errors_md
     assert "根因分析方法" in errors_md
@@ -1349,8 +1349,10 @@ def test_errors_md_pure_methodology_no_static_mappings():
     # 具体映射单一来源指向经验库(启动种子 + w7 沉淀,新踩坑走 w7 不写本文件)
     assert "经验库" in errors_md and "seed" in errors_md and "w7" in errors_md
     assert "新踩坑不写这里" in errors_md
-    # 无静态错误码 → 修法映射(旧分类表 CS0246/CS0506/CS0103/CS1061/CS1002 等全部移除)
+    # 无静态错误码 → 修法映射:errors.md + SKILL.md 全文件清零
+    # (旧分类表 CS0246/CS0506/CS0103/CS1061/CS1002 等全部移除,只留经验库种子)
     assert not re.search(r"CS\d{4}", errors_md)
+    assert not re.search(r"CS\d{4}", payload["content"])   # SKILL.md 同样不含
     assert "经验条目(seed)" not in errors_md
 
 

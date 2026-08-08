@@ -17,6 +17,11 @@
 
 - 新增 2 项:errors.md 纯方法论契约(无 `CS\d{4}` 静态映射、"经验条目(seed)" 标记消失、单一来源指向经验库)/ 经验库命中真实进入修复 LLM context(捕获 fake LLM 每轮 human 消息断言附注注入);更新 1 项(codegen+review+fixer references 断言从错误码改为方法论词)
 
+### 修复(评审)
+
+- **B 类(签名不匹配)具体指引回归经验库**:评审发现 errors.md 删除后签名类失去唯一具体指引(旧文件含 OnLoad/AfterDoOperation 等正确签名),且种子无 CS0506/CS0115 条目 → 种子补 2 条(共 7 条):CS0506(不是重写,基类无此成员 → 核对基类签名 + 模板基准)、CS0115(找不到可重写方法 → 确认事件名与签名一致,签名错是级联源头);条目 message/fix 含类型模板指针(templates/<type>/template.cs 基准)
+- **契约测试覆盖 SKILL.md**:errors.md 纯方法论契约扩展为 errors.md + SKILL.md 双文件扫描,均断言零 `CS\d{4}` 静态映射;seed_load 幂等测试断言更新为 n1 >= 7
+
 ---
 
 ## v1.6.0 — 2026-08-08(每 worker 方法论 skill:design/codegen/review/compile-fix + prompt 变薄)
