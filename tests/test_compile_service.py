@@ -91,3 +91,11 @@ def test_compile_unavailable_returns_503():
     client = TestClient(create_app(backend=DownBackend()))
     r = client.post("/compile", json={"code": "x", "project_name": "T"})
     assert r.status_code == 503
+
+import pytest
+from compile_service.backends.msbuild import MsbuildCompiler
+from compile_service.server import CompileUnavailableError
+
+def test_msbuild_requires_dlls():
+    with pytest.raises(CompileUnavailableError):
+        MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[])  # 无 DLL = 不可用
