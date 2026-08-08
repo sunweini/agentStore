@@ -99,3 +99,33 @@ from compile_service.server import CompileUnavailableError
 def test_msbuild_requires_dlls():
     with pytest.raises(CompileUnavailableError):
         MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[])  # 无 DLL = 不可用
+
+# --- agent 侧编译客户端(真实/mock 无感切换) ---
+from agents.kingdee_plugin_agent.tools.compile_client import CompileClient
+
+def test_client_health_ok(monkeypatch):
+    client = CompileClient(base_url="http://test")
+    monkeypatch.setattr(client.session, "get",
+        lambda *a, **k: type("R", (), {"status_code": 200})())
+    assert client.health() is True
+
+def test_client_compile_parses_json(monkeypatch):
+    client = CompileClient(base_url="http://test")
+    # 注:type() 类字典里的 lambda 作为实例方法会被隐式传入 self,须以 *a, **k 接收
+    resp = type("R", (), {"status_code": 200, "json": lambda *a, **k: {
+        "success": False, "raw_output": "", "duration_ms": 5,
+        "errors": [{"file": "P.cs", "line": 1, "code": "CS0103", "message": "m", "is_fatal": True}]}})()
+    monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
+    result = client.compile(code="x", project_name="T")
+    assert result.errors[0].code == "CS0103"
+
+def test_client_503_raises_unavailable(monkeypatch):
+    from compile_service.server import CompileUnavailableError
+    client = CompileClient(base_url="http://test")
+    resp = type("R", (), {"status_code": 503, "json": lambda *a, **k: {"detail": "compiler unavailable"}})()
+    monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
+    try:
+        client.compile(code="x", project_name="T")
+        assert False, "should raise"
+    except CompileUnavailableError:
+        pass

@@ -3,6 +3,9 @@
 
 # 运行时数据(方案组/计费/checkpoint,不提交)
 data/
+data/kingdee-rag/
+data/kingdee-artifacts/
+data/kingdee-deliverables/
 
 # Python
 __pycache__/
