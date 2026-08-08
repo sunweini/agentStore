@@ -5,6 +5,20 @@
 
 ---
 
+## v1.7.1 — 2026-08-08(评审修复:seed_load CLI 入口 + ExperienceStore.archive + 路由表勘误)
+
+### 修复(评审)
+
+- **seed_load 补 `__main__` 入口(Important)**:维护手册步骤 1.4 记录的 `python -m agents.kingdee_plugin_agent.seed.seed_load` 原为 no-op(无 `__main__` 块,import 后直接退出);新增 `main(argv)` + argparse(`--data-dir` 可选,默认 data/kingdee-rag 与 RagClient 一致),打印 "种子灌入完成:新增 N 条";maintenance.md 步骤 1.4 同步为真实调用
+- **ExperienceStore 补 `archive()`(Minor)**:维护手册归档步骤原为手搓 chromadb 元数据更新;新增 `archive(signature)`(与 verify 同路径 `_set_status` 重构,status → archived,文档与向量不动),search_related 既有过滤逻辑天然排除 archived(仅返回 proposed/verified);maintenance.md 步骤 4 改用该 API
+- **knowledge-steward SKILL.md 路由表勘误(Minor)**:api_ref 行删除 "w4 审查(API 抽查指引)"(ReviewWorker 不检索 api_ref),补脚注 "w4 的 API 抽查凭模型知识与模板基线比对完成,未接 api_ref 检索;接入属后续增强"
+
+### 测试
+
+- 新增 3 项:seed_load CLI `main(["--data-dir", tmp])` 冒烟(首跑 n>=7 + 打印契约 + 二次幂等 0)/ ExperienceStore archive 流程(proposed 与 verified 均可归档,归档后 search_related 排除,文档与元数据仍在库内)/ archive 未知签名抛 RagError;全套 162 项全过(159 既有 + 3 新增)
+
+---
+
 ## v1.7.0 — 2026-08-08(knowledge-steward 知识库全生命周期方法论)
 
 ### 新增功能

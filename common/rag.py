@@ -247,13 +247,15 @@ class StandardsLoader:
 class ExperienceStore:
     """经验库:proposed/verified 两态 + 错误签名去重。防 w7 幻觉污染。
 
-    状态机:proposed ──verify()──▶ verified。签名 = "错误码|文件模式"。
+    状态机:proposed ──verify()──▶ verified;archived 由 archive() 写入。
+    签名 = "错误码|文件模式"。
       - propose():写 proposed 条目,同签名已存在则直接返回签名,不重复入库
         (按 B2 结论用 filter={"signature": sig} 精确查重,不用裸向量检索)。
-      - verify():按签名定位条目,仅更新元数据 status → verified(文档与向量
+      - verify()/archive():按签名定位条目,仅更新元数据 status(文档与向量
         不动;机制见模块 docstring"元数据更新"条目,实测 chromadb 1.5.9)。
       - search_related():仅返回 proposed / verified 条目;proposed 标注
-        confidence="unverified",其余标注 confidence="verified"。
+        confidence="unverified",其余标注 confidence="verified";
+        archived 等其余状态被过滤,不再出现在 w5 检索。
         B2 种子条目无 status 元数据,视为人工策展、等同已核验。
     """
 
@@ -270,8 +272,8 @@ class ExperienceStore:
         }])
         return sig
 
-    def verify(self, signature: str) -> None:
-        """proposed → verified:按签名定位条目,元数据 status 置为 verified。"""
+    def _set_status(self, signature: str, status: str) -> None:
+        """按签名定位条目,仅更新元数据 status(文档与向量不动)。"""
         store = self.client._store("experience")
         found = store.get(where={"signature": signature})
         ids = found.get("ids") or []
@@ -279,8 +281,21 @@ class ExperienceStore:
             raise RagError(f"经验不存在: {signature}")
         metas = found.get("metadatas") or []
         new_meta = dict(metas[0])
-        new_meta["status"] = "verified"
+        new_meta["status"] = status
         store._collection.update(ids=[ids[0]], metadatas=[new_meta])
+
+    def verify(self, signature: str) -> None:
+        """proposed → verified:按签名定位条目,元数据 status 置为 verified。"""
+        self._set_status(signature, "verified")
+
+    def archive(self, signature: str) -> None:
+        """proposed/verified → archived:按签名定位条目,元数据 status 置为
+        archived(文档与向量不动)。
+
+        归档条目被 search_related 过滤(仅返回 proposed/verified),不再出现
+        在 w5 检索结果;用于 review 时剔除一次性/无法归因的沉淀噪音。
+        """
+        self._set_status(signature, "archived")
 
     def search_related(self, error_code: str, message: str, k: int = 3) -> list[dict]:
         """经验检索:仅返回 proposed/verified(种子无 status 视为已核验)。

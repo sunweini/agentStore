@@ -49,7 +49,7 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 
 | 库 | 内容 | 检索方式 | 使用 worker |
 |---|---|---|---|
-| api_ref | 金蝶 BOS API 参考片段 | hybrid_search(bm25_weight=0.7 约定,精确 API 名优先) | w2 设计(按子任务标题)、w4 审查(API 抽查指引) |
+| api_ref | 金蝶 BOS API 参考片段 | hybrid_search(bm25_weight=0.7 约定,精确 API 名优先) | w2 设计(按子任务标题) |
 | guide | 团队开发向导/指南 | hybrid_search + filter={plugin_type} 类型过滤 | w2 设计、w3 生成 |
 | experience | 编译错误经验(seed + w7 沉淀) | search_related(错误码+消息语义向量检索) | w5 修复(命中附注 experience,自核后采用) |
 | standards | 规范库(markdown 整库注入,不建向量索引) | StandardsLoader.inject_text(8k token 预算) | w4 审查(整库逐条对照) |
@@ -59,6 +59,8 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
   量纲不同,**不可跨方法比较**,阈值/排序逻辑各自解释,勿混用。
 - bm25_weight 约定:api_ref 检索传 0.7(精确 API 名优先,rag.py 约定);
   guide 用默认 0.5。当前 worker 实现仍走默认值,后续调参按本表约定。
+- w4 的"API 抽查"(事件签名/using 引用核对)凭模型知识与模板基线比对完成,
+  **未接 api_ref 检索**(ReviewWorker 不检索 api_ref);接入检索属后续增强。
 
 ## 维护手册(人工读)
 

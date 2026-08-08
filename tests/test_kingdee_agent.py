@@ -1370,6 +1370,19 @@ def test_load_skill_knowledge_steward():
     assert "幂等" in maint
 
 
+def test_seed_load_cli_main(tmp_path, capsys):
+    """seed_load __main__ 入口(维护手册步骤 1.4 的命令真实可跑):
+    main(["--data-dir", tmp]) 灌入种子并打印新增条数;二次运行幂等 0。"""
+    from agents.kingdee_plugin_agent.seed.seed_load import main
+
+    n1 = main(["--data-dir", str(tmp_path)])
+    assert n1 >= 7                                # 7 条种子(含签名类 CS0506/CS0115)
+    out = capsys.readouterr().out
+    assert f"种子灌入完成:新增 {n1} 条" in out    # 打印契约(步骤 1.4 依赖的输出)
+    n2 = main(["--data-dir", str(tmp_path)])
+    assert n2 == 0                                # 幂等:签名已存在跳过
+
+
 def test_errors_md_pure_methodology_no_static_mappings():
     """compile-fixer skill 纯方法论契约(errors.md + SKILL.md):分类框架/根因分析/
     检索策略/修复纪律在,不含任何静态 错误码 → 修法 映射 —— 具体映射单一来源为

@@ -201,3 +201,29 @@ def test_experience_confidence_marking(tmp_path):
     hit = store.search_related("CS0019", "运算符")[0]
     assert hit["metadata"]["status"] == "verified"
     assert hit["metadata"]["confidence"] == "verified"
+
+
+def test_experience_archive_flow(tmp_path):
+    """接口契约:archive() 置 status=archived 并过滤出检索(proposed 与 verified 均可归档)。"""
+    client = RagClient(data_dir=tmp_path)
+    store = ExperienceStore(client)
+    # proposed 归档
+    sig = store.propose("CS0201", "Plugin.cs", "常量无效", "检查常量定义")
+    assert store.search_related("CS0201", "常量")[0]["metadata"]["status"] == "proposed"
+    store.archive(sig)
+    assert store.search_related("CS0201", "常量") == []      # archived 被过滤
+    # verified 归档
+    sig2 = store.propose("CS0161", "", "并非所有代码路径都返回值", "补 return")
+    store.verify(sig2)
+    store.archive(sig2)
+    assert store.search_related("CS0161", "返回值") == []
+    # 文档与元数据仍在库内(status 翻转只改元数据,防重复 propose 误判幂等)
+    hits = client.search("experience", "CS0201", k=10)
+    assert hits and hits[0]["metadata"]["status"] == "archived"
+
+
+def test_experience_archive_unknown_signature_raises(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    store = ExperienceStore(client)
+    with pytest.raises(RagError):
+        store.archive("CS9999|None.cs")

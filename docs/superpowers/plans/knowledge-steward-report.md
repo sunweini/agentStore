@@ -42,3 +42,35 @@
 - **w7 fix 占位质量问题**是现存设计取舍(非本次引入):w7 propose 的 fix 是"w7 沉淀,待人工验证",条目只有症状没有配方;distillation.md 已写明 verify 时补全。若未来要让沉淀闭环,建议把 w7 改为 LLM 决策(绑定本 skill,按"什么值得沉淀"标准过滤 + 生成真实修法),本 skill 即为该改动的运行时输入。
 - **bm25_weight 0.7 约定尚未落到 worker 代码**(当前全部默认 0.5);本 skill 记录了约定,调参属独立小改动,未顺手改(避免无测试覆盖的静默行为变化)。
 - SKILL_HINT 现在向 w1-w5 提示了 knowledge-steward(含路由表),w2/w4/w5 的 LLM 理论上可调它取检索指引 —— 属预期收益;w7 无 LLM 不消费。
+
+---
+
+# 评审修复补充(2026-08-08,提交见下)
+
+评审结论:1 Important + 2 Minor,全部修复,全套测试 162 过(159 + 3 新增)。
+
+## 修复清单
+
+1. **Important — seed_load 灌入命令 no-op**:`seed_load.py` 原无 `__main__` 块,文档命令 import 后退出什么都没灌。修复:新增 `main(argv)` + argparse(`--data-dir` 可选,默认 data/kingdee-rag 与 RagClient 一致),打印 "种子灌入完成:新增 N 条";`maintenance.md` 步骤 1.4 同步真实调用。冒烟验证(真实子进程):首跑 "新增 7 条",二次 "新增 0 条"(幂等生效)。测试选**进程内直接调 main()**(capsys 断言打印契约)—— 与子进程相比不额外加载嵌入模型,且覆盖同一 argparse 路径,更干净。
+2. **Minor 2 — 路由表高估 w4 api_ref 使用**:ReviewWorker 不检索 api_ref(rag 注入但 _execute 只用 standards.inject_text)。修复:SKILL.md 路由表 api_ref 行删掉 w4,加脚注 "w4 的 API 抽查(事件签名/using 引用核对)凭模型知识与模板基线比对完成,未接 api_ref 检索;接入检索属后续增强"。
+3. **Minor 3 — 归档步骤无 API**:修复:`ExperienceStore.archive(signature)` 新增(与 verify 共用 `_set_status` 重构路径,status → archived,文档与向量不动);`search_related` 既有过滤(仅 proposed/verified 返回)天然排除 archived,已验证;`maintenance.md` 步骤 4 改用该 API。
+
+## 测试
+
+- tests/test_rag.py 新增 2 项:archive 流程(proposed/verified 均可归档 → search_related 排除 → 文档与元数据仍在库内,status=archived)/ archive 未知签名抛 RagError;
+- tests/test_kingdee_agent.py 新增 1 项:seed_load CLI main 冒烟(首跑 n>=7 + 打印契约 + 二次幂等 0);
+- 全量 `.venv/bin/python -m pytest tests/ -q` → **162 passed**(159 基线 + 3 新增),105s,绿。
+
+## 变更文件
+
+- 修改:`agents/kingdee_plugin_agent/seed/seed_load.py`(__main__ + main())、`common/rag.py`(ExperienceStore._set_status 重构 + archive())、`agents/kingdee_plugin_agent/skills/knowledge-steward/SKILL.md`(路由表脚注)、`skills/knowledge-steward/references/maintenance.md`(步骤 1.4/4)、`tests/test_rag.py`、`tests/test_kingdee_agent.py`、`CHANGELOG.md`(v1.7.1)
+
+## 自审
+
+- archive 的过滤侧是既有逻辑(非新加):search_related 对 status 不在 proposed/verified/None 的分支直接 continue —— 新增测试覆盖确认。
+- 种子灌入 CLI 的 `--data-dir` 默认值与 RagClient 默认值一致(data/kingdee-rag),避免文档与实际不一致。
+- SKILL.md 测试断言("api_ref" in content)在脚注修改后仍成立,无需改测试。
+
+## 关注点
+
+- 无新增:修复后唯一遗留建议仍是 w7 fix 占位质量(前报关注点,非本次范围)。

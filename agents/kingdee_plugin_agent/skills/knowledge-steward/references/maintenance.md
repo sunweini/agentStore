@@ -16,7 +16,10 @@
    ```
 3. 幂等语义:`seed_load.py::load_seed_data` 按签名 `code|file_pattern` 查重,
    已存在跳过,重跑不产生重复条目;
-4. 灌入:python -m agents.kingdee_plugin_agent.seed.seed_load(需已初始化 RAG 数据目录);
+4. 灌入(seed_load 有命令行入口,幂等可重跑):
+   `python -m agents.kingdee_plugin_agent.seed.seed_load [--data-dir <dir>]`
+   (默认 data/kingdee-rag,与 RagClient 默认一致;输出 "种子灌入完成:新增 N 条",
+   二次运行 N=0 即幂等生效);
 5. 验证:`tests/test_kingdee_agent.py` 中 seed_load 幂等断言 n>=N(当前 7)更新为新
    条数,跑 `pytest tests/ -q` 全绿后提交。
 
@@ -73,8 +76,9 @@ plugin_type 元数据缺失会导致该类型检索漏召回。
 2. 逐条按蒸馏标准判定:
    - 有复现/修法确认 → `ExperienceStore.verify(signature)` 翻转 verified
      (仅元数据翻转,文档与向量不动),补全真实修法(fix 占位文案必须替换);
-   - 一次性/无法归因 → 归档:元数据 status 置 archived(被
-     search_related 过滤,不再出现在 w5 检索);
+   - 一次性/无法归因 → `ExperienceStore.archive(signature)` 归档(元数据
+     status 置 archived,文档与向量不动;被 search_related 过滤,不再出现在
+     w5 检索);
    - 不确定 → 保持 proposed,下轮再看;
 3. 记录:review 结论与归档原因可写回条目 message 或单独 review 笔记;
 4. 验证:verify 后 `search_related` 对应条目 confidence 变为 "verified";
