@@ -62,3 +62,36 @@ class RagClient:
         store = self._store(collection)
         hits = store.similarity_search_with_score(query, k=k, filter=filter)
         return [{"text": h.page_content, "score": s, "metadata": h.metadata} for h, s in hits]
+
+
+class StandardsLoader:
+    """规范库:纯 markdown 整库注入,超预算自动转检索标注。"""
+
+    def __init__(self, standards_dir: Path):
+        self.standards_dir = Path(standards_dir)
+
+    def load_all(self) -> list[str]:
+        if not self.standards_dir.exists():
+            return []
+        return sorted(p.read_text(encoding="utf-8") for p in self.standards_dir.glob("*.md"))
+
+    def inject_text(self, limit_tokens: int = 8000) -> str:
+        files = self.load_all()
+        if not files:
+            return ""
+        # 粗略 token 估算:中文 ~1.5 字/token,ASCII ~4 字符/token
+        budget = limit_tokens
+        parts, used = [], 0
+        for i, content in enumerate(files):
+            est = len(content) // 2  # 保守估算
+            if used + est > budget:
+                remaining = len(files) - i
+                parts.append(f"[已截断,剩余 {remaining} 个文件请检索]")
+                break
+            parts.append(content)
+            used += est
+        return "\n\n---\n\n".join(parts)
+
+    def search(self, query: str, k: int = 3) -> list[str]:
+        """超限降级:复用 RagClient.guide 检索,返回命中文本列表。"""
+        return [h["text"] for h in RagClient().search("guide", query, k=k)]

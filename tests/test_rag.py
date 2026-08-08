@@ -56,3 +56,28 @@ def test_seed_load_idempotent(tmp_path):
     n1 = load_seed_data(client)
     n2 = load_seed_data(client)
     assert n1 >= 5 and n2 == 0  # 二次灌入 0(幂等)
+
+
+from common.rag import StandardsLoader
+
+
+def test_standards_inject_within_budget(tmp_path):
+    (tmp_path / "rule1.md").write_text("规则一:事件签名必须匹配元数据\n", encoding="utf-8")
+    (tmp_path / "rule2.md").write_text("规则二:异常必须记录日志\n", encoding="utf-8")
+    loader = StandardsLoader(standards_dir=tmp_path)
+    text = loader.inject_text(limit_tokens=100000)  # 大预算:全量注入
+    assert "规则一" in text and "规则二" in text
+
+
+def test_standards_truncate_over_budget(tmp_path):
+    big = "规则:" + "内容" * 5000
+    (tmp_path / "big.md").write_text(big, encoding="utf-8")
+    (tmp_path / "small.md").write_text("小规则\n", encoding="utf-8")
+    loader = StandardsLoader(standards_dir=tmp_path)
+    text = loader.inject_text(limit_tokens=100)  # 小预算:截断 + 标注
+    assert "[已截断" in text
+
+
+def test_standards_empty_dir(tmp_path):
+    loader = StandardsLoader(standards_dir=tmp_path)
+    assert loader.inject_text() == ""
