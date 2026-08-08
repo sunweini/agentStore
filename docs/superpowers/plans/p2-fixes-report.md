@@ -2,7 +2,17 @@
 
 日期:2026-08-09 | 分支:main(前 head 8548b85) | 范围:kingdee-plugin-agent P2-6/7/8/9/11,不动 P1/P3
 
-测试基线:172 项全过 → 实现后 184 项全过(12 新增)。
+测试基线:172 项全过 → 实现后 184 项全过(12 新增)→ 评审修复后 185 项全过(+1 新测试,otel 测试扩展断言)。
+
+---
+
+## 评审修复(2026-08-09,提交 "fix(otel/package): span 低基数 action + zip 条目 id 净化")
+
+任务复核 1 Important + 2 Minors,全部修复:
+
+- **Important — span action 高基数违规(OBS-CORE-003)**:`kingdee.supervisor.decide` span 原记录完整 action,`ask_user:<问题>` 的问题文本是用户输入/LLM 生成的高基数自由文本。修复:`span.set_attribute("action", action.split(":", 1)[0])` 只记动作类型(run/ask_user/finish/fail);核对其余新 span 均无用户派生文本(worker span 的 subtask_id 已过 ArtifactStore 白名单、plugin_type/status 为枚举值;编译轮次 span 的 round/success 为数值/布尔)。测试:`test_otel_spans_wired_without_collector` 追加 ask_user 带问题场景 —— 断言 span 属性只含 "ask_user",且**所有** span 属性值不含问题原文。
+- **Minor — build_failed zip 条目 id 未净化**:`subtasks/<sid>/...` 的 sid 直接进 zip 条目路径,脏数据(../ 等)可致路径穿越。修复:复用 ArtifactStore 白名单模式 `^[A-Za-z0-9_-]+$`,非法字符替换为 "_"、空 id 兜底 "unknown"(产物保留,不丢弃)。测试:`test_build_failed_sanitizes_subtask_ids` 断言 "../evil" → "___evil"、"B1/x" → "B1_x"、空 id → "unknown",且无任何 ".." 条目。
+- **Minor — 注入 builder 契约静默扩展**:`fail_package_node` 调用 `builder.build_failed`,只实现 build 的注入实例会静默漏掉失败收尾。修复:PackageBuilder 类 docstring 显式注明注入契约(必须同时实现 build 与 build_failed,缺失时 AttributeError 显式暴露,不做静默降级)。
 
 ---
 
@@ -94,8 +104,9 @@ KINGDEE_API_KEY(Web API 鉴权,缺省 401)
 
 ## 验证与测试
 
-- 全量:`pytest tests/ -q` → **184 passed**(172 基线 + 12 新增),0 失败。
+- 全量:`pytest tests/ -q` → **185 passed**(172 基线 + 12 新增 + 1 评审修复新增),0 失败。
 - 新增 12 项:metrics 5 项(w5 通过/超限、w5_5 通过/失败、默认 0、图全链路返工、并行合并)、otel 1 项、失败收尾包 2 项、records 接线 2 项、JSON 重试 2 项。
+- 评审修复:新增 zip 条目 id 净化测试 1 项(非法 id 替换/兜底,无穿越);span action 低基数断言并入既有 otel 测试(ask_user 问题文本不进任何 span 属性)。
 
 ## 变更文件
 

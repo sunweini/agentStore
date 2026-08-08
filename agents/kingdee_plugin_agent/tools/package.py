@@ -1,11 +1,25 @@
 """交付包组装:源码 + DLL + 部署说明 + 设计/审查记录 + 失败收尾"未完成"包。"""
 import json
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
+#: 子任务 id 白名单(与 store/artifact_store.py 同源,防 zip 条目路径穿越)
+_SUBTASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 class PackageBuilder:
+    """交付包组装:源码 + DLL + 部署说明 + 设计/审查记录 + 失败收尾"未完成"包。
+
+    注入契约(评审 Minor):build_graph 的 package_builder 参数可注入自定义
+    构建器(测试用),注入实例必须同时实现 **build**(deliverable,正常交付,w6)
+    与 **build_failed**(subtasks, reason, ..., 失败收尾未完成包,w6_fail)两个
+    方法 —— 后者由 agent.py::fail_package_node 在终态 fail 时调用,只实现
+    build 的注入实例会在失败收尾时报 AttributeError(接口缺失显式暴露,
+    不做静默降级)。
+    """
+
     def __init__(self, output_dir: Path):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -42,7 +56,10 @@ class PackageBuilder:
                 "requirement_spec": requirement_spec or {},
             }, ensure_ascii=False, indent=2))
             for entry in subtasks:
-                sid = entry.get("id", "unknown")
+                # id 净化(评审 Minor):只允许 [A-Za-z0-9_-](与 ArtifactStore 白名单
+                # 同源),非法字符替换为 "_"、空 id 兜底 "unknown" —— 防 zip 条目
+                # 路径穿越(../ 等)。正常流程 id 已过 store 白名单,此处防脏数据。
+                sid = re.sub(r"[^A-Za-z0-9_-]", "_", entry.get("id", "")) or "unknown"
                 base = f"subtasks/{sid}"
                 if entry.get("code"):
                     z.writestr(f"{base}/source/Plugin.cs", entry["code"])

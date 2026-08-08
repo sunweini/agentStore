@@ -18,6 +18,13 @@
 ### 测试
 
 - tests/test_kingdee_agent.py 新增 12 项:指标(w5 通过/超限计数、w5_5 通过/失败计数、默认全 0、图全链路含返工 rework_rounds=1、并行双任务合并不重复累计)、OTel span(fake tracer 记录 worker/编译轮次/主管决策 span 名与低基数属性,无 collector 不崩)、失败收尾包(返工预算耗尽 → zip 含原因 + compile_errors + 部分产物 + Minor 意见;时间预算耗尽 → 同样出包)、records 接线(design/review 真实内容进包;缺失容忍)、JSON 重试(失败 1 次重试成功返回;失败 2 次返回 None)。全套 184 项全过(172 既有 + 12 新增)。
+- **评审修复(185 项全过)**:新增 zip 条目 id 净化测试 1 项(非法 id 替换为 "_"、空 id 兜底 unknown,无 "../" 穿越条目);span action 低基数断言并入既有 otel 测试(ask_user 带问题文本 → span 属性只记动作类型,所有 span 属性不含问题原文,遵循 OBS-CORE-003)。
+
+### 修复(评审)
+
+- **span action 高基数违规(OBS-CORE-003,Important)**:`kingdee.supervisor.decide` span 原记录完整 action,`ask_user:<问题>` 的问题文本是用户输入/LLM 生成的高基数自由文本;改为 `action.split(":", 1)[0]` 只记动作类型。其余新 span 已核验无用户派生文本(worker 的 subtask_id 过 ArtifactStore 白名单、plugin_type/status 枚举;编译轮次 round/success 数值)。
+- **失败包 zip 条目 id 未净化(Minor)**:`build_failed` 的 `subtasks/<sid>/` 直接用 sid,脏数据可致 zip 路径穿越;非法字符替换为 "_"、空 id 兜底 "unknown"(复用 ArtifactStore 白名单模式,产物保留不丢弃)。
+- **注入 builder 契约静默扩展(Minor)**:PackageBuilder 类 docstring 显式注明注入契约 —— 注入实例必须同时实现 build 与 build_failed(缺失时 AttributeError 显式暴露,不做静默降级)。
 
 ### 文档
 

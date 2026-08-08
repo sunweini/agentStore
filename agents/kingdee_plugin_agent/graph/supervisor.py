@@ -174,12 +174,13 @@ class Supervisor:
     def decide(self, state: TaskState) -> str:
         """返回动作:run:<subtask_id> | ask_user[:<问题>] | finish | fail[:<原因>]
 
-        可观测(设计 §12):决策打 span,action 为低基数属性(无用户信息)。
-        决策顺序与细节见 _decide。
+        可观测(设计 §12):决策打 span;action 属性**只记动作类型**(低基数,
+        遵循 OBS-CORE-003 —— ask_user:<问题> 的问题文本是用户输入/LLM 生成的
+        高基数自由文本,不进 span)。决策顺序与细节见 _decide。
         """
         with get_tracer().start_as_current_span("kingdee.supervisor.decide") as span:
             action = self._decide(state)
-            span.set_attribute("action", action)
+            span.set_attribute("action", action.split(":", 1)[0])
             return action
 
     def _decide(self, state: TaskState) -> str:

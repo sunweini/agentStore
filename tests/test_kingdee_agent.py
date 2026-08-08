@@ -953,6 +953,28 @@ def test_graph_time_budget_exhausted_produces_failed_package(tmp_path):
     assert status["reason"] == "fail:时间预算耗尽"
 
 
+def test_build_failed_sanitizes_subtask_ids(tmp_path):
+    """评审 Minor:失败包 zip 条目 id 净化 —— 非法 id(路径穿越字符)替换为 "_",
+    空 id 兜底 "unknown";产物保留且无 "../" 穿越条目。"""
+    import zipfile
+    from agents.kingdee_plugin_agent.tools.package import PackageBuilder
+    builder = PackageBuilder(output_dir=tmp_path)
+    p = builder.build_failed([
+        {"id": "A1", "status": "failed", "code": "class A1 {}"},
+        {"id": "../evil", "status": "failed", "code": "class Evil {}"},
+        {"id": "B1/x", "status": "failed", "code": "class B {}"},
+        {"id": "", "status": "failed", "code": "class C {}"},
+    ], reason="fail:测试")
+    with zipfile.ZipFile(p) as z:
+        names = z.namelist()
+    assert "subtasks/A1/source/Plugin.cs" in names       # 合法 id 原样
+    assert "subtasks/___evil/source/Plugin.cs" in names  # "../evil" → "___evil"
+    assert "subtasks/B1_x/source/Plugin.cs" in names     # "B1/x" → "B1_x"
+    assert "subtasks/unknown/source/Plugin.cs" in names  # 空 id → "unknown"
+    assert all(".." not in n for n in names)             # 无路径穿越条目
+    assert all(not n.startswith("subtasks/../") for n in names)
+
+
 def test_supervisor_decide_terminal_logic():
     """主管 decide 终态确定性子集(finish/fail),依赖失败传递在派发前生效。"""
     s = Supervisor(llm=None, workers={})
@@ -1200,6 +1222,25 @@ def test_otel_spans_wired_without_collector(tmp_path, monkeypatch):
     assert s.decide(st) == "finish"
     decide_span = next(s for s in rec.spans if s.name == "kingdee.supervisor.decide")
     assert decide_span.attrs["action"] == "finish"
+
+    # OBS-CORE-003(评审 Important):ask_user:<问题> 的问题文本是用户/LLM 生成的
+    # 高基数自由文本 —— span 只记动作类型,任何 span 属性都不得含问题原文
+    class AskLLM:
+        def with_structured_output(self, schema):
+            return self
+
+        def invoke(self, messages):
+            return DecideAction(action="ask_user", question="校验规则确认?")
+
+    s_ask = Supervisor(llm=AskLLM(), workers={})
+    st_ask = TaskState(requirement_spec={}, todo=[])
+    assert s_ask.decide(st_ask) == "ask_user:校验规则确认?"
+    ask_spans = [sp for sp in rec.spans if sp.name == "kingdee.supervisor.decide"
+                 and sp.attrs.get("action") == "ask_user"]
+    assert ask_spans                                   # 动作类型保留
+    for sp in rec.spans:
+        for v in sp.attrs.values():
+            assert "校验规则确认?" not in str(v)       # 无用户派生文本进 span
 
 
 # ── 各终审 carry-over 修复点 ──────────────────────────────────────────
