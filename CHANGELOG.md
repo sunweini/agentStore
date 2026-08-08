@@ -5,6 +5,20 @@
 
 ---
 
+## v1.6.1 — 2026-08-08(errors.md 纯方法论化:错误条目单一来源经验库(动态))
+
+### 重构
+
+- **compile-fixer/references/errors.md 改为纯方法论**:移除全部静态 错误码 → 根因 → 修法 映射(旧分类表 CS0246/CS0103/CS0234/CS1061/CS0506/CS0115/CS1002/CS1525/CS1519 + "经验条目(seed)" 标注),只保留 错误分类框架(分析维度+判断自问)/ 根因分析方法(级联找源头、签名错是级联源、阻断性优先)/ 经验库检索策略(按错误码+消息语义 search_related,verified 优先、自核后采用)/ 修复纪律(5 轮上限、禁止原样重提交、修复后必重编);显式声明 "具体错误映射见经验库(启动种子 seed/compile_errors.json + w7 沉淀),新踩坑不写这里,走 w7 沉淀"
+- **SKILL.md / loader 摘要 / w5_compile.md 措辞同步**:load_skill('compile-fixer') 交付内容描述从"错误模式库"改为"方法论 + 检索指引";根因定位步骤不再列举具体错误码(具体根因链与修法从 compile_errors 的 experience 附注取)
+- **w5 检索路径核实为纯动态、无需改动**:`_retrieve_fix` 按错误码+消息语义 `search_related`(k=2)把命中附注到 compile_errors 的 experience 字段,`_llm_fix` 将含 experience 附注的 compile_errors 序列化进修复 context —— 修复 LLM 看到的是 编译错误 + 经验库命中 + 方法论(load_skill),无静态错误表参与
+
+### 测试
+
+- 新增 2 项:errors.md 纯方法论契约(无 `CS\d{4}` 静态映射、"经验条目(seed)" 标记消失、单一来源指向经验库)/ 经验库命中真实进入修复 LLM context(捕获 fake LLM 每轮 human 消息断言附注注入);更新 1 项(codegen+review+fixer references 断言从错误码改为方法论词)
+
+---
+
 ## v1.6.0 — 2026-08-08(每 worker 方法论 skill:design/codegen/review/compile-fix + prompt 变薄)
 
 ### 新增功能

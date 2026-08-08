@@ -373,6 +373,43 @@ def test_compile_error_retrieves_experience(tmp_path):
     assert sub.compile_errors[0]["experience"][0].startswith("[CS0103]")
 
 
+def test_compile_experience_hits_reach_llm_fix_context(tmp_path):
+    """经验库命中真实进入修复 LLM 上下文:每轮 _llm_fix 的 human 消息
+    含 experience 附注(具体错误映射走动态检索,不在静态 skill 内容里)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w3_generate import CodeOutput
+
+    class FakeExperience:
+        def search_related(self, error_code, message, k=3):
+            return [{"text": "[CS0103] 名称不存在(变量/方法拼写或作用域) 修复:核对元数据字段名/事件签名",
+                     "score": 0.9, "metadata": {}}]
+
+    class _CodeLLM:
+        """无 bind_tools 的 fake:捕获每轮消息,返回改写后代码(触发写回重编)。"""
+
+        def __init__(self):
+            self.seen = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            return CodeOutput(code="class X { /* w5 fixed */ }")
+
+    llm = _CodeLLM()
+    w = CompileWorker(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=99),
+                      experience=FakeExperience())
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert len(llm.seen) == MAX_COMPILE_ROUNDS           # 每失败轮 LLM 都收到 context
+    for messages in llm.seen:
+        human = next(m.content for m in messages if getattr(m, "type", "") == "human")
+        assert "[CS0103] 名称不存在" in human            # 经验库命中随 context 注入修复 prompt
+
+
 def test_smoke_ok_no_budget_change(tmp_path):
     class FakeSmoke:
         def deploy_and_verify(self, dll_path, form_id):
@@ -1288,9 +1325,33 @@ def test_load_skill_codegen_review_fixer_references():
 
     fix = json.loads(load_skill.invoke({"skill_name": "compile-fixer"}))
     assert "5 轮" in fix["content"]
-    assert "CS0246" in fix["references"]["errors.md"]
-    assert "CS1061" in fix["references"]["errors.md"]
-    assert "CS0506" in fix["references"]["errors.md"]      # 签名不匹配模式
+    # errors.md 纯方法论契约(具体错误映射不进 skill,单一来源经验库)
+    assert "分类框架" in fix["references"]["errors.md"]
+    assert "根因分析" in fix["references"]["errors.md"]
+    assert "经验库" in fix["references"]["errors.md"]
+
+
+def test_errors_md_pure_methodology_no_static_mappings():
+    """errors.md 纯方法论契约:分类框架/根因分析/检索策略/修复纪律在,
+    不含任何静态 错误码 → 修法 映射 —— 具体映射单一来源为经验库
+    (启动种子 seed/compile_errors.json + w7 沉淀),防静态表与动态库双份维护漂移。"""
+    import json
+    import re
+    from agents.kingdee_plugin_agent.skills.loader import load_skill
+
+    errors_md = json.loads(
+        load_skill.invoke({"skill_name": "compile-fixer"}))["references"]["errors.md"]
+    # 方法论四件套
+    assert "错误分类框架" in errors_md
+    assert "根因分析方法" in errors_md
+    assert "检索策略" in errors_md
+    assert "修复纪律" in errors_md
+    # 具体映射单一来源指向经验库(启动种子 + w7 沉淀,新踩坑走 w7 不写本文件)
+    assert "经验库" in errors_md and "seed" in errors_md and "w7" in errors_md
+    assert "新踩坑不写这里" in errors_md
+    # 无静态错误码 → 修法映射(旧分类表 CS0246/CS0506/CS0103/CS1061/CS1002 等全部移除)
+    assert not re.search(r"CS\d{4}", errors_md)
+    assert "经验条目(seed)" not in errors_md
 
 
 def test_worker_type_branches_read_from_skill_references():
