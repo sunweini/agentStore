@@ -12,7 +12,9 @@ class PackageBuilder:
 
     def build(self, deliverable: dict) -> Path:
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        out = self.output_dir / f"deliverable-{ts}.zip"
+        # 文件名带子任务 id:多子任务并行打包各得各的包,互不覆盖(C9 合并契约 v1)
+        sid = deliverable.get("subtask_id", "all")
+        out = self.output_dir / f"deliverable-{sid}-{ts}.zip"
         with zipfile.ZipFile(out, "w") as z:
             z.writestr("source/Plugin.cs", deliverable.get("code", ""))
             dll = deliverable.get("dll_path")

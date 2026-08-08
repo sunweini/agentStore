@@ -6,7 +6,7 @@
 - 记录:design/review 产物随包归档
 
 打包方法:
-1. 组装 deliverable:{code=Plugin.cs 内容, dll_path=编译产物(存在时)}。
+1. 组装 deliverable:{{code=Plugin.cs 内容, dll_path=编译产物(存在时)}}。
 2. 调用 PackageBuilder.build 产出 zip:source/Plugin.cs + bin/Plugin.dll(如有)+ deploy.md 部署说明 + records/ 设计/审查记录。
 3. 交付包路径写入 state.final_deliverable,上报 evidence 含包路径。
 

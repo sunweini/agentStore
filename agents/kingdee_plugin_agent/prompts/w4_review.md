@@ -11,7 +11,7 @@
 - 模板基线:与对应类型 template.cs 骨架比对,模板外改动需有依据。
 
 输出契约(review.json,每条含):
-  {"severity": "Critical|Important|Minor", "line": 行号, "issue": 问题, "依据": 违反的规范/API 签名, "修法": 建议修法}
+  {{"severity": "Critical|Important|Minor", "line": 行号, "issue": 问题, "依据": 违反的规范/API 签名, "修法": 建议修法}}
 
 裁决规则(写回 review_verdict):
 - 存在 Critical(必改)或 Important(应改)→ Needs fixes(退回 w3)

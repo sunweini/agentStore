@@ -5,7 +5,32 @@
 
 ---
 
-## v1.2.0 — 2026-08-07(轨 key 语义化 + 移除风险等级)
+## v1.3.0 — 2026-08-08(kingdee-plugin-agent 主管图构建 C10)
+
+### 新增功能
+
+- **kingdee-plugin-agent 主管图(agent.py)**:LangGraph 循环图接线 —— 主管决策节点(supervisor)+ 批量派发节点(dispatcher)+ 8 个 worker 节点(w1 需求澄清 / w2 设计 / w3 生成 / w4 审查 / w5 编译修复 / w5.5 冒烟 / w6 打包 / w7 沉淀)+ interrupt/send。
+- **用户交互(interrupt)**:w1 澄清循环逐问挂起(问题清单 → 确认摘要,上限 10 轮),中途主管 ask_user 挂起;`Command(resume=answer)` 恢复。
+- **并行派发(send)**:`Command(update, goto=[Send...])` fan-out,依赖满足的子任务批量 in_progress,并发 ≤3;todo 按 id reducer 合并。
+- **终态处理**:全部 delivered → finish;返工预算耗尽/存在失败 → fail(剩余子任务标记 failed,依赖失败级联);LLM 结构化决策(run/ask_user/finish/fail)带动作校验,确定性路径兜底。
+- **langgraph.json 注册** `kingdee_plugin_agent`(graphs 入口 build_graph)。
+- **LLM 接线(worker 内真实调用点,可注入)**:w1 提问/拆解、w2 设计(RAG guide+api_ref)、w3 生成(模板+指南)、w4 审查(规范注入)、w5 编译修复改写(经验库附注)—— ChatPromptTemplate + with_structured_output,失败回退确定性骨架。
+
+### 修复(C1-C9 终审 carry-over,随 C10 一并落地)
+
+- 未知 plugin_type → worker ERROR 上报 → 子任务 failed(不再裸 KeyError)
+- w4 审查产物改走 `review_path` 字段(移除 run() 覆写,基类契约原样)
+- w5 编译修复循环:LLM 真实改写代码写回重编(非原样重提交);经验库检索 try/except 不阻断
+- w5.5 冒烟:显式传 Path(契约对齐 SmokeClient);客户端未配置 → BLOCKED 不扣预算 → failed(防无限重试)
+- w1 spec/plan 落盘 JSON(非 repr)
+- w6 多子任务交付合并(v1 逐包):包文件名带子任务 id,全部记入 `final_deliverables`
+- 并行分支同一步写通道问题:todo/deliverables 用 reducer;预算改由主管统一扣减(rework_events 上报)
+
+### 测试
+
+- tests/test_kingdee_agent.py 追加 20 项:图全链路可达性(fake LLM 脚本化)、interrupt/resume、并行派发(2 独立子任务同步 in_progress + 并发上限)、终态(finish/fail/失败依赖级联)、返工循环、中途 ask_user、各 carry-over 修复点单测;`pytest tests/test_kingdee_agent.py` 50 项全过,全套 122 项全过。
+
+ — 2026-08-07(轨 key 语义化 + 移除风险等级)
 
 ### 变更
 

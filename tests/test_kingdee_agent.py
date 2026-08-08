@@ -129,11 +129,29 @@ def test_confirmation_summary_lists_decisions_and_assumptions():
     assert "默认硬拦截" in text                   # 假设清单也在
 
 
-def test_spec_split_subtasks():
-    spec = {"plugin_types": ["bill", "service"],
-            "subtasks": [{"id": "A", "plugin_type": "bill", "deps": ["B"]},
-                          {"id": "B", "plugin_type": "service", "deps": []}]}
-    assert spec["subtasks"][0]["deps"] == ["B"]
+def test_w1_split_subtasks_deterministic(tmp_path):
+    """真实拆解逻辑(终审 C3:替换 tautological 测试):按 spec.plugin_types 拆单子任务。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import RequirementWorker
+    w = RequirementWorker(llm=None, store=ArtifactStore(root=tmp_path))
+    st = TaskState(requirement_spec={"requirement": "审核校验插件"}, todo=[])
+    todo = w.split_subtasks(st, {"plugin_types": ["bill", "service"], "requirement": "审核校验插件"})
+    assert [t.id for t in todo] == ["A1", "B1"]
+    assert [t.plugin_type for t in todo] == ["bill", "service"]
+    assert todo[0].deps == []  # 无依赖标注
+
+
+def test_w1_split_subtasks_llm(tmp_path):
+    """LLM 拆解:subtasks 契约(id/plugin_type/title/deps)真实生效。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import (
+        RequirementWorker, PlanOutput)
+    llm = ScriptedLLM(scripts={PlanOutput: [{"subtasks": [
+        {"id": "A1", "plugin_type": "bill", "title": "单据插件", "deps": ["B1"]},
+        {"id": "B1", "plugin_type": "service", "title": "服务插件", "deps": []}]}]})
+    w = RequirementWorker(llm=llm, store=ArtifactStore(root=tmp_path))
+    st = TaskState(requirement_spec={}, todo=[])
+    todo = w.split_subtasks(st, {"requirement": "x"})
+    assert [t.id for t in todo] == ["A1", "B1"]
+    assert todo[0].deps == ["B1"]  # 依赖标注生效
 
 
 from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignWorker, TYPE_PROMPTS
@@ -400,3 +418,365 @@ def test_distill_proposes_real_experience(tmp_path):
     hits = client.search("experience", "CS0103", k=5)
     assert hits and hits[0]["metadata"].get("source") == "w7"
     assert hits[0]["metadata"].get("status") == "proposed"
+
+
+# ═══════════════════════════ C10 主管图构建 ═══════════════════════════
+import json as _json
+from pathlib import Path as _Path
+
+from langgraph.types import Command
+
+from agents.kingdee_plugin_agent.agent import AGENT_NAME, build_graph, default_recursion_limit
+from agents.kingdee_plugin_agent.graph.supervisor import DecideAction, Supervisor, worker_for_subtask
+from agents.kingdee_plugin_agent.graph.workers.w1_requirement import (
+    PlanOutput, QuestionsOutput, RequirementWorker,
+)
+from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignOutput, DesignWorker
+from agents.kingdee_plugin_agent.graph.workers.w3_generate import CodeOutput, GenerateWorker
+from agents.kingdee_plugin_agent.graph.workers.w4_review import ReviewOutput, ReviewWorker
+from agents.kingdee_plugin_agent.graph.workers.w5_5_smoke import SmokeWorker
+from agents.kingdee_plugin_agent.graph.workers.w5_compile import CompileWorker
+
+
+class ScriptedLLM:
+    """按 schema 弹出脚本化结构化输出;脚本耗尽返回 default(通常用于主管 DecideAction)。
+
+    不 mock LangGraph —— 图结构/路由/interrupt/send/终态全部真实执行,
+    只替换 LLM 输出(LLM 调用点可注入,铁律:不要 mock LangGraph 本身)。
+    """
+
+    def __init__(self, scripts: dict | None = None, default=None):
+        self.scripts = {k: list(v) for k, v in (scripts or {}).items()}
+        self.default = default
+        self.calls = []
+
+    def with_structured_output(self, schema, **kwargs):
+        return _ScriptedStructured(self, schema)
+
+
+class _ScriptedStructured:
+    def __init__(self, parent, schema):
+        self.parent, self.schema = parent, schema
+
+    def invoke(self, *args, **kwargs):
+        self.parent.calls.append(args)
+        queue = self.parent.scripts.get(self.schema)
+        if queue:
+            raw = queue.pop(0)
+            return raw if isinstance(raw, self.schema) else self.schema(**raw)
+        if self.parent.default is not None:
+            raw = self.parent.default
+            return raw if isinstance(raw, self.schema) else self.schema(**raw)
+        raise AssertionError(f"{self.schema.__name__} 结构化输出脚本耗尽")
+
+
+class _OkSmoke:
+    def __init__(self, ok=True, detail="assembly 加载 + 映射验证通过"):
+        self.ok = ok
+        self.detail = detail
+
+    def deploy_and_verify(self, dll_path, form_id):
+        return SmokeResult(ok=self.ok, detail=self.detail)
+
+
+def _cfg(thread: str, todo_count: int = 1) -> dict:
+    """运行时 config:recursion_limit 按子任务数预算(设计 §6.2),非 compile 参数。"""
+    return {"configurable": {"thread_id": thread},
+            "recursion_limit": default_recursion_limit(todo_count)}
+
+
+def _status_map(todo) -> dict:
+    return {t.id: (t.status if hasattr(t, "status") else t["status"]) for t in todo}
+
+
+# ── 图可达性:完整流水线(澄清 interrupt → spec → 拆解 → 设计 → 生成 → 审查
+#    → 编译 → 冒烟 → 打包 → 沉淀 → finish)───────────────────────────────
+
+def test_graph_full_flow_to_finish(tmp_path):
+    """真实图全链路:fake LLM 脚本化 + fake 编译/冒烟,interrupt/resume 驱动澄清。"""
+    llm = ScriptedLLM(scripts={
+        QuestionsOutput: [{"questions": ["目标单据 FormId?", "校验规则?"]}],
+        PlanOutput: [{"subtasks": [{"id": "A1", "plugin_type": "bill",
+                                    "title": "销售订单审核校验", "deps": []}]}],
+        DesignOutput: [{"design_markdown": "# 设计:A1\n数量>0 校验"}],
+        CodeOutput: [{"code": "public class A1 : AbstractBillPlugIn {}"},
+                     {"code": "public class A1 : AbstractBillPlugIn { /* 修复 */ }"}],
+        ReviewOutput: [{"findings": []}],
+    }, default={"action": "run"})
+    app = build_graph(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=1),
+                      smoke_client=_OkSmoke(), output_dir=tmp_path)
+    cfg = _cfg("happy")
+    initial = {"requirement_spec": {"requirement": "销售订单审核校验插件"}, "todo": []}
+
+    # 澄清:逐问 interrupt → 答案 resume
+    r = app.invoke(initial, cfg)
+    assert r["__interrupt__"][0].value["type"] == "question"
+    assert r["__interrupt__"][0].value["round"] == 0
+    r = app.invoke(Command(resume="SAL_SaleOrder"), cfg)
+    assert r["__interrupt__"][0].value["round"] == 1
+    r = app.invoke(Command(resume="数量必须大于 0"), cfg)
+    # 问题问完 → 确认摘要(决策 + 假设都在)
+    assert r["__interrupt__"][0].value["type"] == "confirm"
+    assert "SAL_SaleOrder" in r["__interrupt__"][0].value["summary"]
+    r = app.invoke(Command(resume="确认"), cfg)
+
+    # spec 确认 → 拆解 → 全流水线自动跑完
+    assert r["spec_confirmed"] is True
+    assert _status_map(r["todo"]) == {"A1": "delivered"}
+    assert r["action"] == "finish"
+    assert r["rework_budget_left"] == 3          # 无返工不扣预算
+    assert r["final_deliverables"]               # 交付包已记录
+    assert r["final_deliverable"].endswith(".zip")
+    # spec 落盘为 JSON(终审 C5:非 repr)
+    spec = _json.loads((tmp_path / "requirement" / "spec.json").read_text(encoding="utf-8"))
+    assert spec["decisions"][0]["a"] == "SAL_SaleOrder"
+
+
+def test_graph_rework_loop_review_needs_fixes(tmp_path):
+    """w4 Needs fixes → needs_rework → w3 重新生成 → w4 Approved → 走完 finish,预算扣 1。"""
+    llm = ScriptedLLM(scripts={
+        QuestionsOutput: [{"questions": ["FormId?"]}],
+        PlanOutput: [{"subtasks": [{"id": "A1", "plugin_type": "bill", "title": "x", "deps": []}]}],
+        DesignOutput: [{"design_markdown": "# 设计"}],
+        CodeOutput: [{"code": "class A1 {}"}, {"code": "class A1 { /* 重写 */ }"}],
+        ReviewOutput: [{"findings": [{"severity": "Critical", "issue": "缺校验"}]},
+                       {"findings": []}],
+    }, default={"action": "run"})
+    app = build_graph(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("rework")
+    r = app.invoke({"requirement_spec": {"requirement": "x"}, "todo": []}, cfg)
+    r = app.invoke(Command(resume="SAL_SaleOrder"), cfg)
+    r = app.invoke(Command(resume="确认"), cfg)
+    assert r["action"] == "finish"
+    assert _status_map(r["todo"]) == {"A1": "delivered"}
+    assert r["rework_budget_left"] == 2          # 审查重工 1 轮扣 1
+
+
+def test_graph_midrun_ask_user_interrupt(tmp_path):
+    """主管 LLM 决策 ask_user:问题 interrupt → 用户答复记入 user_feedback 后继续派发。"""
+    llm = ScriptedLLM(scripts={
+        DecideAction: [{"action": "ask_user", "question": "校验规则确认?"}],
+        DesignOutput: [{"design_markdown": "# 设计"}],
+        CodeOutput: [{"code": "class A1 {}"}],
+        ReviewOutput: [{"findings": []}],
+    }, default={"action": "run"})
+    app = build_graph(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("midask")
+    initial = {"requirement_spec": {"requirement": "x"},
+               "todo": [Subtask("A1", "bill", "x", [], "pending")],
+               "spec_confirmed": True}
+    r = app.invoke(initial, cfg)
+    assert r["__interrupt__"][0].value["type"] == "ask_user"
+    assert r["__interrupt__"][0].value["question"] == "校验规则确认?"
+    r = app.invoke(Command(resume="按 0 校验"), cfg)
+    assert r["user_feedback"] == ["按 0 校验"]
+    assert r["action"] == "finish"
+    assert _status_map(r["todo"]) == {"A1": "delivered"}
+
+
+# ── 终态处理(终审 C4):finish / fail / 失败依赖传递 ────────────────────
+
+def test_graph_all_delivered_finishes(tmp_path):
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path), output_dir=tmp_path)
+    r = app.invoke({"requirement_spec": {"requirement": "x"},
+                    "todo": [Subtask("A1", "bill", "x", [], "delivered")]}, _cfg("fin"))
+    assert r["action"] == "finish"
+
+
+def test_graph_budget_exhausted_fails(tmp_path):
+    """返工预算耗尽 + 剩余工作 → fail,剩余子任务标记 failed。"""
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path), output_dir=tmp_path)
+    r = app.invoke({"requirement_spec": {"requirement": "x"},
+                    "todo": [Subtask("A1", "bill", "x", [], "pending")],
+                    "rework_budget_left": 0}, _cfg("budget"))
+    assert r["action"].startswith("fail")
+    assert _status_map(r["todo"]) == {"A1": "failed"}
+
+
+def test_graph_failed_dep_marks_dependents_failed(tmp_path):
+    """依赖失败传递:dep failed → pending 依赖者标记 failed → fail(不派发被阻塞者)。"""
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path), output_dir=tmp_path)
+    r = app.invoke({"requirement_spec": {"requirement": "x"}, "todo": [
+        Subtask("B1", "service", "y", [], "failed"),
+        Subtask("A1", "bill", "x", ["B1"], "pending"),
+    ]}, _cfg("depfail"))
+    assert r["action"].startswith("fail")
+    assert _status_map(r["todo"]) == {"A1": "failed", "B1": "failed"}
+
+
+def test_supervisor_decide_terminal_logic():
+    """主管 decide 终态确定性子集(finish/fail),依赖失败传递在派发前生效。"""
+    s = Supervisor(llm=None, workers={})
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "delivered")])
+    assert s.decide(st) == "finish"
+    st2 = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "pending")],
+                    rework_budget_left=0)
+    assert s.decide(st2).startswith("fail")
+    assert st2.todo[0].status == "failed"
+    st3 = TaskState(requirement_spec={}, todo=[
+        Subtask("B1", "service", "y", [], "failed"),
+        Subtask("A1", "bill", "x", ["B1"], "pending")])
+    assert s.decide(st3).startswith("fail")
+    assert {t.id: t.status for t in st3.todo} == {"A1": "failed", "B1": "failed"}
+
+
+def test_worker_for_subtask_mapping():
+    """状态生命周期 → 阶段 worker 映射(终审 C4 契约)。"""
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "pending")) == "w2"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "design_done")) == "w3"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "gen_done")) == "w4"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "needs_rework")) == "w3"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "review_done")) == "w5"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "compile_done")) == "w5_5"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "smoke_done")) == "w6"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "packaged")) == "w7"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "blocked")) == "w1"
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "delivered")) is None
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "failed")) is None
+    assert worker_for_subtask(Subtask("A1", "bill", "x", [], "in_progress")) is None
+
+
+# ── 并行派发(send() fan-out)与多子任务交付包合并 ──────────────────────
+
+def test_graph_parallel_dispatch_two_independent_subtasks(tmp_path):
+    """send() 并行:两个无依赖子任务同一超步同时 in_progress(≤MAX_PARALLEL),最终合并交付。"""
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("para", todo_count=2)
+    initial = {"requirement_spec": {"requirement": "复合需求"},
+               "todo": [Subtask("A1", "bill", "a"), Subtask("B1", "service", "b")]}
+    seen_in_progress = False
+    final = None
+    for chunk in app.stream(initial, cfg, stream_mode="values"):
+        statuses = _status_map(chunk["todo"])
+        if statuses == {"A1": "in_progress", "B1": "in_progress"}:
+            seen_in_progress = True   # dispatcher 超步:两个同时 in_progress
+        final = chunk
+    assert seen_in_progress, "两个独立子任务应同一步 in_progress(send 并行派发)"
+    assert final["action"] == "finish"
+    assert _status_map(final["todo"]) == {"A1": "delivered", "B1": "delivered"}
+    # 多子任务交付包合并(v1 逐包):两个包都记录,文件名互不覆盖
+    assert len(final["final_deliverables"]) == 2
+    assert len(set(final["final_deliverables"])) == 2
+
+
+def test_graph_parallel_caps_at_max_parallel(tmp_path):
+    """并发上限:4 个独立子任务同一轮只派 3 个 in_progress,第 4 个排队等空位。"""
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("cap", todo_count=4)
+    initial = {"requirement_spec": {"requirement": "x"},
+               "todo": [Subtask(f"T{i}", "bill", f"t{i}") for i in range(4)]}
+    max_in_progress = 0
+    final = None
+    for chunk in app.stream(initial, cfg, stream_mode="values"):
+        n = sum(1 for st in _status_map(chunk["todo"]).values() if st == "in_progress")
+        max_in_progress = max(max_in_progress, n)
+        final = chunk
+    assert max_in_progress <= 3                    # MAX_PARALLEL 生效
+    assert final["action"] == "finish"
+    assert len(final["final_deliverables"]) == 4
+
+
+# ── 各终审 carry-over 修复点 ──────────────────────────────────────────
+
+def test_graph_unknown_plugin_type_friendly_error(tmp_path):
+    """终审 C6:未知 plugin_type → worker ERROR 上报 → 子任务 failed → fail(无 KeyError 裸抛)。"""
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    r = app.invoke({"requirement_spec": {"requirement": "x"},
+                    "todo": [Subtask("A1", "weird", "x")]}, _cfg("unk"))
+    assert r["action"].startswith("fail")
+    assert _status_map(r["todo"]) == {"A1": "failed"}
+    assert "未知插件类型" in r["todo"][0].report.get("concerns", "")
+
+
+def test_w2_unknown_type_no_keyerror(tmp_path):
+    w = DesignWorker(llm=None, store=ArtifactStore(root=tmp_path))
+    sub = Subtask("A1", "weird", "x", [], "pending")
+    sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
+    assert sub.report["status"] == "ERROR"
+    assert "未知插件类型" in msg
+
+
+def test_w4_review_artifact_key_is_path_field(tmp_path):
+    """终审 C7:审查产物走 review_path 字段,不再覆写 run()(基类契约原样)。"""
+    w = ReviewWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "review_done")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub, msg = w.run(st, sub)
+    assert sub.review_path.endswith("review.json")   # 路径进 review_path
+    assert sub.review_verdict in VERDICTS            # 裁决值不被路径冲掉
+
+
+def test_w5_llm_fix_rewrites_code(tmp_path):
+    """终审 C8:编译失败 → LLM 改写代码写回重编(非原样重提交)。"""
+    store = ArtifactStore(root=tmp_path)
+    llm = ScriptedLLM(scripts={CodeOutput: [{"code": "class X { /* 修复 */ }"}]})
+    client = FakeCompileClient(fail_first=1)
+    w = CompileWorker(llm=llm, store=store, compile_client=client)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert client.calls == 2                        # 失败 1 轮 + 改写后通过 1 轮
+    assert "STATUS: DONE" in msg
+    assert "修复" in store.read("A1", "Plugin.cs")  # 改写后的代码落盘
+
+
+def test_smoke_worker_passes_path(tmp_path):
+    """终审 C8:SmokeWorker 传 Path 给 deploy_and_verify(契约是 Path 非 str)。"""
+
+    class PathAssertSmoke:
+        def deploy_and_verify(self, dll_path, form_id):
+            assert isinstance(dll_path, _Path)
+            return SmokeResult(ok=True, detail="ok")
+
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    w = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                    smoke_client=PathAssertSmoke())
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "STATUS: DONE" in msg
+
+
+def test_w1_spec_persisted_as_json(tmp_path):
+    """终审 C5:spec/plan 落盘 JSON(非 repr)。"""
+    store = ArtifactStore(root=tmp_path)
+    w = RequirementWorker(llm=None, store=store)
+    spec = {"decisions": [{"q": "FormId", "a": "SAL_SaleOrder"}], "assumptions": ["默认硬拦截"]}
+    w.persist(spec, [Subtask("A1", "bill", "x")])
+    raw = (tmp_path / "requirement" / "spec.json").read_text(encoding="utf-8")
+    assert _json.loads(raw) == spec                 # JSON 往返一致
+    plan = _json.loads((tmp_path / "requirement" / "plan.json").read_text(encoding="utf-8"))
+    assert plan[0]["id"] == "A1" and plan[0]["plugin_type"] == "bill"
+
+
+def test_w1_interrupt_message_and_record_answer(tmp_path):
+    """w1 澄清循环接口:interrupt_message 逐题出题,record_answer 记录,问完转确认摘要。"""
+    w = RequirementWorker(llm=None, store=ArtifactStore(root=tmp_path))
+    st = TaskState(requirement_spec={}, todo=[], clarify_questions=["Q1", "Q2"])
+    assert w.interrupt_message(st) == "Q1"
+    w.record_answer(st, "A1")
+    assert st.clarify_answers == ["A1"]
+    st.clarify_round = 1
+    assert w.interrupt_message(st) == "Q2"
+    st.clarify_round = 2
+    assert "需求确认摘要" in w.interrupt_message(st)   # 问题问完 → 确认摘要
+
+
+def test_agent_name_and_recursion_formula():
+    assert AGENT_NAME == "kingdee_plugin_agent"
+    assert default_recursion_limit(0) == 50
+    assert default_recursion_limit(3) == 80
