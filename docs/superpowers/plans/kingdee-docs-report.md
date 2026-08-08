@@ -41,3 +41,27 @@
 1. **测试未在本环境复跑**:本环境未安装 langchain 依赖,pytest 收集失败(ImportError),"164 项测试全过"引用自 CHANGELOG v1.8.0 记录,未现场验证。
 2. **CHANGELOG 更新**:按项目规则(dev-standards §4)"每次开发收尾必须更新 CHANGELOG.md",本次 docs 交付追加 v1.8.1 文档条目,与三份文档同一提交。
 3. **范围裁剪**:task 要求的"16+ 错误场景表"实收 25 条;"检索路由表"以代码实际接线为准(w2/w3/w4/w5/w7 六行);设计文档 §8 中的"时间预算 15/30min、需求版本冻结、任务进行中改需求"等项在代码中无实现,未写入(避免文档与代码脱节,以 CLAUDE.md 债务标注为准)。
+
+---
+
+## 勘误(评审修复,提交:docs: 三份文档勘误(容器启动语义/交付物内容/bm25 接线声明))
+
+文档评审发现 1 Critical + 2 Important + 6 Minor,全部修复(均已对照代码核实):
+
+### Critical
+
+- **manual.md §1.3 容器启动语义错误**:原文"未提供 DLL 时容器会以 mock 后端启动"不成立 —— Dockerfile **无条件**设 `COMPILE_SERVICE_REQUIRES_DLLS=1`,references 为空时 `create_factory` 构造 MsbuildCompiler 抛 CompileUnavailableError,容器启动即失败(报"DLL 未到位")。已改为:无 DLL 时 `docker-compose up -d` 启动失败;mock 后端仅在本机不带该环境变量直接运行 `create_factory`(开发/测试)时生效。
+
+### Important
+
+- **manual.md §6/Q7 交付物内容失实**:w6_package.py 恒传 `dll_path:""`(任何后端下 DLL 都不入包),且从不提供 design/review → records/*.json 恒为 `{}`。已改为如实描述:records 为空占位(未接线)、DLL 待真实编译后端产出后入包;tech.md §3 w6 产物行同步修正。
+- **tech.md §5.1 api_ref 行 bm25_weight=0.7 声称已接线**:w2/w3 调用 `hybrid_search` 未传 bm25_weight(默认 0.5),0.7 仅是知识库路由表约定。已改为"默认 bm25_weight=0.5;0.7 为约定,未接线"。
+
+### Minor
+
+- tech.md §4.3 prompt 行数范围:实际 4~18 行(w1 仅 4 行),已修正措辞。
+- tech.md §3 w5/w5.5 + 错误表 row5:"退回 w3/w4 或问用户"/"退回 w5/w3" → 均改"退回 w3 重新生成"(needs_rework 恒映射 w3,代码 STATUS_TO_WORKER 核实)。
+- tech.md §8.1:compose 文件在 Plan C 落地后未更新,api 服务仍注释未启用(原文"待 Plan C 落地后启用"过时)。
+- manual.md §3.2 任务矩阵阶段条:演示页 PHASES 以"交付"结尾(非"沉淀"),已改。
+- manual.md Q2:删除不可达分支"编译客户端未配置(COMPILE_SERVICE_URL 缺失)"(compile_client_from_env 恒返回默认 localhost:8000 客户端)。
+- tech.md §4.2 摘要层精度:`skill_summary()` 仅注入 w1 generate_questions,其余 worker 只有 SKILL_HINT,supervisor 无注入 —— 已按实际接线修正。

@@ -13,6 +13,7 @@
 - **`docs/kingdee-plugin-agent/tech.md`(技术文档)**:LangGraph 图结构(节点/边/interrupt/send/终态 + 完整 ASCII 图)、任务契约(Subtask/TaskState 字段、生命周期状态机、上报契约、审查裁决)、8 worker 详解(职责/输入输出/LLM 调用/降级)、skill 体系(6 个结构 + 渐进式披露 + load_skill 机制 + prompt 变薄单源原则)、知识库(四库设计/混合检索/经验库两态 + 签名去重/种子/检索路由表)、错误处理 25 场景表、安全(apikey/环境凭证/CORS/路径白名单)、部署(docker-compose 拓扑/compile_service/数据目录 gitignore)、测试(eval 集/注入约定/E2E 门)、性能与预算(recursion_limit 公式/并发上限/token 控制)、已知债务与未验证项。
 - **`docs/kingdee-plugin-agent/manual.md`(使用手册)**:快速开始(.env 的 KD_* 4 项 + COMPILE_SERVICE_URL + KINGDEE_API_KEY + 种子灌入命令)、CLI 用法(命令/澄清交互/输出解读/退出码)、Web 用法(API + 演示页:澄清流/任务矩阵/验收操作)、API 端点表(5 端点)、常见问题 7 条、交付物解读(zip 内容)、限制与未验证项。
 - 三份文档均基于代码实读编写,与 `agents/kingdee_plugin_agent/CLAUDE.md` 约束数值一致(返工预算 3/并发 3/编译轮次 5/澄清 10 轮/recursion 100+20n),未验证项(线上 DeepSeek/真实金蝶环境/E2E 门)显式标注。交付报告:`docs/superpowers/plans/kingdee-docs-report.md`。
+- **勘误(评审修复)**:容器启动语义(无 DLL 时 docker-compose 启动即失败,非"mock 兜底")/ 交付物内容(DLL 恒不入包、records 为空占位)/ api_ref bm25_weight 接线声明(默认 0.5,0.7 为约定未接线)/ needs_rework 恒映射 w3 / 演示页 PHASES 以"交付"结尾 / skill_summary 仅注入 w1 等 9 处修正,详见交付报告"勘误"节。
 
 ---
 

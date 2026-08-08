@@ -49,14 +49,14 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 
 ### 1.3 起编译服务(需要时)
 
-编译环节(w5)依赖编译服务;容器未起时该环节报 BLOCKED 并最终标记失败(不算编译轮次)。真实 msbuild 后端需要金蝶 BOS DLL 放入 `compile_service/build/references/`(**团队解锁项,未到位前只能跑 mock 后端**):
+编译环节(w5)依赖编译服务;服务不可用时该环节报 BLOCKED(不计编译轮次)并最终标记失败。真实 msbuild 后端需要金蝶 BOS DLL 放入 `compile_service/build/references/`(**团队解锁项,未到位前无法起真实编译**):
 
 ```bash
-docker-compose up -d            # 起 compile-service(8000 端口)
+docker-compose up -d            # 起 compile-service(8000 端口;无 DLL 会启动失败)
 curl http://localhost:8000/health   # {"status":"ok"}
 ```
 
-> 未提供 DLL 时容器会以 mock 后端启动(开发/CI 用,不当质量门);`COMPILE_SERVICE_REQUIRES_DLLS=1` 且 references 为空时容器拒绝启动(显式报错标记"DLL 未到位")。
+> 重要:镜像 Dockerfile **无条件**设置 `COMPILE_SERVICE_REQUIRES_DLLS=1`(固定走真实后端分支),references 目录为空时容器**启动即失败**(真实后端构造时抛 CompileUnavailableError,报"DLL 未到位")—— 未提供金蝶 BOS DLL 前不要依赖 docker-compose 起编译服务。mock 后端仅在**本机不带该环境变量**直接运行 `uvicorn compile_service.server:create_factory`(开发/测试)时生效,不当质量门;测试环境(w5)在无编译服务时按 BLOCKED → 标记失败处理。
 
 ### 1.4 校验环境
 
@@ -125,7 +125,7 @@ uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload
 
 1. **输入区**:填需求描述(如"给采购订单审核增加库存校验…")、选目标环境(test/prod)、填 API Key(默认 `sk-demo-key`,须与 `KINGDEE_API_KEY` 一致)。
 2. **澄清对话流**:AI 一次一问,输入框逐条回答;最后出现确认摘要面板,可"确认通过,开始开发"或输入补充意见修正。
-3. **任务矩阵(TodoList)**:每个子任务一张卡片,实时显示状态徽章与阶段进度条(设计→生成→审查→编译→冒烟→打包→沉淀)。
+3. **任务矩阵(TodoList)**:每个子任务一张卡片,实时显示状态徽章与阶段进度条(设计→生成→审查→编译→冒烟→打包→交付,与演示页 PHASES 一致)。
 4. **验收操作**:任务完成后对交付物做 **accept / reject**;拒绝时必须填原因 —— 拒绝原因会写入经验库(proposed 态),让后续任务避开同样的符合性问题。
 5. **SSE 实时流**:进度事件实时推送;断线自动重连(重放已发事件,seq 去重),兜底可用 `GET /tasks/{id}/state` 拉全量快照。
 
@@ -149,7 +149,7 @@ uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload
 → 环境硬门槛:不配金蝶环境不进图。补齐 `.env` 的 `KD_BASE_URL/KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 4 项后重试。
 
 **Q2: 任务到编译环节失败,报"编译服务不可用"**
-→ 编译容器未起:先 `docker-compose up -d` 并 `curl http://localhost:8000/health` 确认 ok。服务故障报 BLOCKED,**不计编译轮次**;但当前任务会标记 failed,修复服务后需重新建任务。若报"编译客户端未配置(COMPILE_SERVICE_URL 缺失)",补环境变量。真实 msbuild 后端需金蝶 BOS DLL 到位(见 1.3)。
+→ 编译容器未起:先 `docker-compose up -d` 并 `curl http://localhost:8000/health` 确认 ok(注意:无金蝶 BOS DLL 时容器启动即失败,见 1.3)。服务故障报 BLOCKED,**不计编译轮次**;但当前任务会标记 failed,修复服务后需重新建任务。真实 msbuild 后端需金蝶 BOS DLL 到位(见 1.3)。
 
 **Q3: 如何清空经验库重灌种子?**
 ```bash
@@ -168,18 +168,18 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 → `X-API-Key` 头值须与 `KINGDEE_API_KEY`(或 `API_KEYS_JSON` 首个 key)一致;未配置任何 key 时默认拒绝全部请求。
 
 **Q7: 交付包能直接用吗?**
-→ 交付包含源码 + DLL(真实编译后端下)+ 部署说明 + 设计/审查记录;**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁。
+→ 交付包含源码 + 部署说明 + records 占位文件(设计/审查记录未接线,当前为空 `{}`);DLL 当前不入包(w6 未接编译输出,待真实编译后端产出后入包)。**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁。
 
 ## 6. 交付物解读(zip 内容)
 
 ```
 deliverable-<子任务id>-<时间戳>.zip
 ├── source/Plugin.cs        # 插件源码(w3 生成 + w5 修复后的最终版)
-├── bin/Plugin.dll          # 编译产物(真实 msbuild 后端下才有;mock 后端为空)
+├── bin/Plugin.dll          # 编译产物(当前为空:打包器未接编译输出,DLL 待真实编译后端产出后入包)
 ├── deploy.md               # 部署说明(上传 DLL 到金蝶 BOS 插件目录,刷新注册)
 └── records/
-    ├── design.json         # 设计决策记录(需求确认摘要)
-    └── review.json         # w4 审查 findings(severity/line/issue/依据/修法)
+    ├── design.json         # 当前为空占位 {} (设计记录未接线)
+    └── review.json         # 当前为空占位 {} (审查记录未接线)
 ```
 
 部署步骤:把 `bin/Plugin.dll` 上传到金蝶 BOS 插件目录 → 刷新插件注册 → 按部署说明绑定单据 → 冒烟验证。

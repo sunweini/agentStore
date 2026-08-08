@@ -165,19 +165,19 @@ w3 确定性骨架保证全部 `{{TOKEN}}` 渲染,防 w4 把未渲染占位符�
 
 ### w5 编译修复(CompileWorker)
 
-- **流程**:① 编译前 `health()` 探测(容器未起 → BLOCKED,**不计编译轮次**);② 循环编译至多 `MAX_COMPILE_ROUNDS=5` 轮:成功 → compile_errors 清空 + DONE;失败 → 错误记 `subtask.compile_errors`,按错误码 `search_related(code, message, k=2)` 命中附注 experience,再让 LLM 依 w5_compile.md + 错误(含经验附注)改写代码写回重编(**必须真实改写,禁止原样重提交**);③ 5 轮仍失败 → `rework_budget_left -= 1` 后 BLOCKED(退回 w3/w4 或问用户)。
+- **流程**:① 编译前 `health()` 探测(容器未起 → BLOCKED,**不计编译轮次**);② 循环编译至多 `MAX_COMPILE_ROUNDS=5` 轮:成功 → compile_errors 清空 + DONE;失败 → 错误记 `subtask.compile_errors`,按错误码 `search_related(code, message, k=2)` 命中附注 experience,再让 LLM 依 w5_compile.md + 错误(含经验附注)改写代码写回重编(**必须真实改写,禁止原样重提交**);③ 5 轮仍失败 → `rework_budget_left -= 1` 后 BLOCKED(needs_rework 恒映射 w3,退回 w3 重新生成;预算耗尽则由主管 fail)。
 - **降级**:编译服务 503(`CompileUnavailableError`)/超时/连接失败(`httpx.HTTPError`)→ BLOCKED 不计轮次不扣预算;经验库故障 → 无附注继续;LLM 修复失败 → 原样重提交受轮次上限约束。
 
 ### w5.5 部署冒烟(SmokeWorker)
 
 - **职责**:运行时验证(assembly 加载 + FormId→plugin 映射),防"编译过跑不起来"。
-- **流程**:`smoke_client.deploy_and_verify(Path(code_path), form_id)`(form_id 取 `state.environment`);失败 → `rework_budget_left -= 1` 后 BLOCKED(退回 w5/w3);成功 → DONE。
+- **流程**:`smoke_client.deploy_and_verify(Path(code_path), form_id)`(form_id 取 `state.environment`);失败 → `rework_budget_left -= 1` 后 BLOCKED(needs_rework 恒映射 w3,退回 w3 重新生成);成功 → DONE。
 - **降级**:冒烟客户端未配置(KD_BASE_URL 缺失)→ BLOCKED 但不扣预算 → 图包装器标记 failed(基础设施缺失走重工无意义)。⚠️ 端点 `/metadata/verify` 为初始契约占位,真实环境可用后按部署 API 调整。
 
 ### w6 打包(PackageWorker)
 
 - **职责**:子任务产物 → 交付包 zip。**v1 按子任务逐包交付**(文件名带子任务 id,并行打包互不覆盖);图上包装器把包路径追加进 `state.final_deliverables`,`final_deliverable` 保留最近一个。v2 合并为单一 zip。
-- **产物**:`deliverable-{sid}-{ts}.zip` = `source/Plugin.cs` + `bin/Plugin.dll`(dll_path 存在时)+ `deploy.md`(部署说明)+ `records/design.json` + `records/review.json`。
+- **产物**:`deliverable-{sid}-{ts}.zip` = `source/Plugin.cs` + `bin/Plugin.dll`(dll_path 存在时;**当前 w6 恒传空串,DLL 未入包**)+ `deploy.md`(部署说明)+ `records/design.json` + `records/review.json`(**均为空占位 `{}`:打包器未接线设计/审查记录**)。
 
 ### w7 知识沉淀(DistillWorker)
 
@@ -199,14 +199,14 @@ w3 确定性骨架保证全部 `{{TOKEN}}` 渲染,防 w4 把未渲染占位符�
 
 ### 4.2 渐进式披露 + load_skill 机制(skills/loader.py)
 
-- **摘要层**:`_AVAILABLE_SKILLS` 6 个摘要,agent 启动即注入(w1 系统提示含 `skill_summary()`);`SKILL_HINT` 每步注入,告诉 LLM 可调 `load_skill(skill_name)` 拿方法论。
+- **摘要层**:`_AVAILABLE_SKILLS` 6 个摘要;`skill_summary()`(摘要 JSON)仅注入 w1 澄清问题生成(`generate_questions` 系统提示,帮助 LLM 选题),其余 worker 不注入摘要;`SKILL_HINT`(load_skill 提示)逐节点注入(w1 拆解、w2~w5),告诉 LLM 可调 `load_skill(skill_name)` 拿方法论;supervisor 决策无 skill 注入。
 - **工具层**:`load_skill` 按 agent → common 顺序查找 skill 目录,返回 `{skill, summary, references(name→content 映射,模板正文全量交付 —— agent 的 LLM 没有文件工具,只给文件名等于没给), scripts(恒空), content}`;非法 skill 名返回 error JSON 与可用列表。
 - **绑定形态**:`structured_with_skill(schema, messages)` = `with_structured_output(schema, tools=[load_skill], include_raw=True)`(**必须用官方 tools 参数;bind_tools 后再 with_structured_output 会经 `__getattr__` 委派丢失 tools**,loader docstring 注明)。模型回合 1 调 load_skill → 执行喂回 ToolMessage → 回合 2 出 schema JSON,最多 2 回合;parsed 仍空 → None → worker 确定性骨架降级。不传 strict(worker 输出 schema 含默认值字段,OpenAI strict json_schema 禁止默认值)。脚本/fake LLM(无 bind_tools)自动跳过绑定。
 - **⚠️ 未线上验证**:该绑定形态未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 `generate_questions` smoke,被 API 拒绝则改用 sentiment 的 JSON Mode 模式(见 CLAUDE.md 约束)。
 
 ### 4.3 prompt 变薄原则(单源)
 
-w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/references/<type>.md`** —— worker 的 `TYPE_PROMPTS` 与 `load_skill` 交付读同一份文件,改方法论只改 skill 一处,不写回 prompts。prompts/ 只留各 worker 的通用节点 prompt(每文件 10~18 行)。注意:prompts/ 与 skill references 拼进系统提示后都经 ChatPromptTemplate f-string 解析,含 `{...}` 的 JSON 样例必须转义 `{{...}}`(dev-standards §7.2);作为 load_skill JSON 交付时保持文本原样。
+w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/references/<type>.md`** —— worker 的 `TYPE_PROMPTS` 与 `load_skill` 交付读同一份文件,改方法论只改 skill 一处,不写回 prompts。prompts/ 只留各 worker 的通用节点 prompt(每文件 4~18 行,w1 澄清 prompt 最薄仅 4 行,其余 10~18 行)。注意:prompts/ 与 skill references 拼进系统提示后都经 ChatPromptTemplate f-string 解析,含 `{...}` 的 JSON 样例必须转义 `{{...}}`(dev-standards §7.2);作为 load_skill JSON 交付时保持文本原样。
 
 ## 5. 知识库(common/rag.py)
 
@@ -214,7 +214,7 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 
 | 库 | 存储 | 消费者 | 检索方式 |
 |---|---|---|---|
-| `api_ref`(API 参考) | Chroma 向量库 | w2/w3 | 混合检索(bm25_weight=0.7,精确 API 名优先) |
+| `api_ref`(API 参考) | Chroma 向量库 | w2/w3 | 混合检索(默认 bm25_weight=0.5;0.7 为知识库路由表约定,未接线) |
 | `guide`(开发指南) | Chroma 向量库 | w2/w3 | 混合检索(按 plugin_type 相等过滤) |
 | `experience`(经验库) | Chroma 向量库 | w2 历史坑 / w5 修复 / w7 写入 | `ExperienceStore.search_related`(k=2~3) |
 | `standards`(规范库) | 纯 markdown | w4 审查 | 整库注入 `inject_text(limit=8000 token)`,超限标注"请调用 guide_fallback 检索"(⚠️ guide_fallback 返回的是 guide 库命中,不是 standards 内容,不得误当作规范检索) |
@@ -252,7 +252,7 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 2 | 编译服务不可用(容器未起/503/超时/连接失败) | w5 先 health() 探测;BLOCKED,**不计编译轮次、不扣返工预算** → 图包装器标记 failed |
 | 3 | 编译失败(有错误列表) | 错误记 compile_errors + 经验库检索附注 + LLM 改写重编,≤5 轮 |
 | 4 | 编译 5 轮仍失败 | 扣返工预算 → BLOCKED → needs_rework → 退回 w3 重新生成 |
-| 5 | 冒烟失败(assembly 未加载/FormId 映射错) | 扣返工预算 → BLOCKED → 退回 w5/w3 |
+| 5 | 冒烟失败(assembly 未加载/FormId 映射错) | 扣返工预算 → BLOCKED → needs_rework → 退回 w3 重新生成 |
 | 6 | 冒烟客户端未配置 | BLOCKED 不扣预算 → failed(基础设施缺失走重工无意义) |
 | 7 | 全局返工预算耗尽(≤3 轮) | fail,剩余子任务标记 failed,输出 TodoList 摘要(部分产物 + 原因) |
 | 8 | LLM 结构化输出失败(畸形 JSON/异常) | 返回 None → worker 确定性骨架降级(w1 默认问题 / w2 骨架 / w3 渲染 token / w4 占位符 Critical / w5 原样重编译轮次兜底),不中断图 |
@@ -299,7 +299,7 @@ services:
   #   volumes: [./data/kingdee-rag:/data/kingdee-rag]
 ```
 
-首版仅编译容器;API 服务注释待 Plan C 落地后启用(本地开发直接 `uvicorn agents.kingdee_plugin_agent.api:create_app --factory`)。
+首版仅编译容器;**compose 文件在 Plan C(API 入口)落地后未更新,api 服务仍处于注释未启用状态**(本地开发直接 `uvicorn agents.kingdee_plugin_agent.api:create_app --factory` 起 API)。
 
 ### 8.2 compile_service(编译容器)
 
