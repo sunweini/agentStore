@@ -75,12 +75,20 @@ class RagClient:
         store.add_texts(docs, metadatas=metadatas)
 
     def search(self, collection: str, query: str, k: int = 5, filter: dict | None = None) -> list[dict]:
+        """向量检索(Chroma L2 距离相似度)。
+
+        返回 [{text, score, metadata}];score 为 Chroma 的 L2 距离,
+        **越小越相关**。⚠️ hybrid_search 的融合得分(加权 RRF)是**越大越
+        相关**,两者方向相反、量纲不同,**不可跨方法比较**;调用方须按各自
+        语义解释(如各取最小/最大,勿混用阈值)。
+        """
         store = self._store(collection)
         hits = store.similarity_search_with_score(query, k=k, filter=filter)
         return [{"text": h.page_content, "score": s, "metadata": h.metadata} for h, s in hits]
 
     def hybrid_search(
-        self, collection: str, query: str, k: int = 5, bm25_weight: float = 0.5
+        self, collection: str, query: str, k: int = 5, bm25_weight: float = 0.5,
+        filter: dict | None = None,
     ) -> list[dict]:
         """混合检索:BM25(关键词精确,如 API 名)+ 向量语义,加权融合。
 
@@ -89,7 +97,13 @@ class RagClient:
         倒数排名融合(weighted RRF),score(doc) = Σ_i w_i / (rank_i(doc) + c),
         c=60,rank 从 1 起,权重 [bm25_weight, 1 - bm25_weight](API 参考库调用
         方传 bm25_weight=0.7 让精确 API 名优先)。
-        返回 [{text, score, metadata}];score 为融合得分,仅相对可比,非概率。
+        返回 [{text, score, metadata}];score 为融合得分,**越大越相关**,仅相对
+        可比、非概率(⚠️ 与 search() 的 L2 距离方向相反,不可跨方法比较)。
+
+        filter:元数据过滤,支持简单 {key: value} 相等匹配(大小写敏感)。
+        两通道均生效:向量通道透传 chromadb where 语法(仅该通道支持更丰富的
+        chromadb 过滤语法,如 $eq/$in/$and);BM25 通道在重建索引前按相等
+        匹配预过滤文档。传 None 时不做过滤,行为与旧版一致。
         """
         if not 0.0 <= bm25_weight <= 1.0:
             raise ValueError(f"bm25_weight 必须在 [0, 1] 范围内,实际为 {bm25_weight}")
@@ -100,11 +114,23 @@ class RagClient:
             return []
         ids = all_data.get("ids") or []
         metadatas = all_data.get("metadatas") or []
+        # BM25 通道元数据预过滤:仅保留满足 filter 相等匹配的文档再建索引
+        if filter:
+            keep = [i for i, meta in enumerate(metadatas)
+                    if all(meta.get(k) == v for k, v in filter.items())]
+            texts = [texts[i] for i in keep]
+            ids = [ids[i] for i in keep]
+            metadatas = [metadatas[i] for i in keep]
+        if not texts:
+            return []
         by_id = {doc_id: (text, meta) for doc_id, text, meta in zip(ids, texts, metadatas)}
         # BM25 通道(API 名精确匹配);向量通道 query 结果 Document 携带 chroma id
         bm25 = _BM25Ranker(texts)
         bm25_ranked = [ids[pos] for pos, _ in bm25.search(query, k)]
-        vec_ranked = [d.id for d, _ in store.similarity_search_with_score(query, k=k)]
+        if filter is None:
+            vec_ranked = [d.id for d, _ in store.similarity_search_with_score(query, k=k)]
+        else:
+            vec_ranked = [d.id for d, _ in store.similarity_search_with_score(query, k=k, filter=filter)]
         fused = _weighted_rrf([bm25_ranked, vec_ranked], [bm25_weight, 1 - bm25_weight])
         results = []
         for doc_id, score in fused[:k]:
@@ -176,7 +202,7 @@ def _weighted_rrf(
 
 
 class StandardsLoader:
-    """规范库:纯 markdown 整库注入,超预算自动转检索标注。"""
+    """规范库:纯 markdown 整库注入,超预算自动转 guide 检索兜底标注。"""
 
     def __init__(self, standards_dir: Path):
         self.standards_dir = Path(standards_dir)
@@ -200,14 +226,21 @@ class StandardsLoader:
             est = len(content) * 2 // 3
             if used + est > budget:
                 remaining = len(files) - i
-                parts.append(f"[已截断,剩余 {remaining} 个文件请检索]")
+                parts.append(f"[已截断,剩余 {remaining} 个文件,请调用 guide_fallback 检索]")
                 break
             parts.append(content)
             used += est
         return "\n\n---\n\n".join(parts)
 
-    def search(self, query: str, k: int = 3) -> list[str]:
-        """超限降级:复用 RagClient.guide 检索,返回命中文本列表。"""
+    def guide_fallback(self, query: str, k: int = 3) -> list[str]:
+        """超限降级:复用 RagClient.guide 检索,返回命中文本列表。
+
+        ⚠️ 返回的是 guide 库(开发向导)命中,**不是 standards 库内容**:
+        规范库按设计为纯 markdown 整库注入(四库分离),不建向量索引,故
+        无规范检索可用;超限时只能回退到 guide 检索兜底。w4/w7 调用方
+        不得将本方法结果误当作规范检索结果;预算充足时 inject_text 全量
+        注入,无需调用本方法。
+        """
         return [h["text"] for h in RagClient().search("guide", query, k=k)]
 
 

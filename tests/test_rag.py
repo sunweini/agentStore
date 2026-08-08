@@ -56,6 +56,9 @@ def test_seed_load_idempotent(tmp_path):
     n1 = load_seed_data(client)
     n2 = load_seed_data(client)
     assert n1 >= 5 and n2 == 0  # 二次灌入 0(幂等)
+    # 种子文本与 ExperienceStore.propose 格式统一(设计 §6.2:种子即 w7 格式样本)
+    hits = client.search("experience", "CS0246", k=5, filter={"signature": "CS0246|"})
+    assert hits[0]["text"] == "[CS0246] 命名空间或类型找不到(缺 Kingdee.BOS 引用) 修复:csproj 加 Reference 到 Kingdee.BOS.dll"
 
 
 from common.rag import StandardsLoader
@@ -75,7 +78,7 @@ def test_standards_truncate_over_budget(tmp_path):
     (tmp_path / "small.md").write_text("小规则\n", encoding="utf-8")
     loader = StandardsLoader(standards_dir=tmp_path)
     text = loader.inject_text(limit_tokens=100)  # 小预算:截断 + 标注
-    assert "[已截断,剩余 2 个文件请检索]" in text
+    assert "[已截断,剩余 2 个文件,请调用 guide_fallback 检索]" in text
     assert "内容" not in text  # 大文件正文不得残留
 
 
@@ -97,6 +100,20 @@ def test_hybrid_search_returns_merged(tmp_path):
 def test_hybrid_search_empty(tmp_path):
     client = RagClient(data_dir=tmp_path)
     assert client.hybrid_search("guide", "任何", k=2) == []
+
+
+def test_hybrid_search_metadata_filter(tmp_path):
+    """filter 契约:简单 {key: value} 相等过滤,BM25/向量两通道均只返回匹配文档。"""
+    client = RagClient(data_dir=tmp_path)
+    client.add_documents("api_ref",
+        ["Kingdee.BOS 单据提交操作说明", "Kingdee.BOS 服务端插件注册向导"],
+        [{"plugin_type": "bill"}, {"plugin_type": "service"}])
+    for w in (1.0, 0.0):  # 纯 BM25 与纯向量通道都要过滤
+        hits = client.hybrid_search("api_ref", "Kingdee.BOS", k=5, bm25_weight=w,
+                                    filter={"plugin_type": "bill"})
+        assert hits, f"bm25_weight={w}: 应有命中"
+        assert all(h["metadata"].get("plugin_type") == "bill" for h in hits)
+        assert all("单据" in h["text"] for h in hits)
 
 
 def test_hybrid_search_weighting_logic(tmp_path, monkeypatch):

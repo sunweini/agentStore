@@ -66,7 +66,12 @@ class KingdeeApiClient:
                 raise KingdeeApiUnavailable("金蝶 API 重试超限(429/5xx)")
             if r.status_code != 200:
                 raise KingdeeApiUnavailable(f"金蝶 API 错误:HTTP {r.status_code}")
-            data = r.json()
+            try:
+                data = r.json()
+            except ValueError:
+                # 200 但响应体非 JSON(如网关 HTML 错误页)→ 统一按不可用处理,
+                # 不向调用方泄漏裸 ValueError
+                raise KingdeeApiUnavailable(f"金蝶 API 响应非 JSON(HTTP {r.status_code})") from None
             status = data.get("Result", {}).get("ResponseStatus", {})
             if not status.get("IsSuccess", False):
                 raise KingdeeApiUnavailable(str(status.get("Errors", "未知错误")))

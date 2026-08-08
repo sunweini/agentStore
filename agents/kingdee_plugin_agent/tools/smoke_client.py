@@ -4,6 +4,9 @@ from pathlib import Path
 
 from agents.kingdee_plugin_agent.tools.kingdee_api import KingdeeApiClient, KingdeeApiUnavailable
 
+#: 元数据验证端点(初始契约占位路径,真实环境可用后按部署 API 调整)
+METADATA_VERIFY_PATH = "/metadata/verify"
+
 
 @dataclass
 class SmokeResult:
@@ -21,7 +24,7 @@ class SmokeClient:
             return SmokeResult(ok=False, detail=f"DLL 不存在: {dll_path}")
         try:
             # 验证 form_id 可解析 + 插件映射存在(元数据层验证)
-            self.api._post("/metadata/verify", {"formid": form_id, "dll": dll_path.name})
+            self.api._post(METADATA_VERIFY_PATH, {"formid": form_id, "dll": dll_path.name})
             return SmokeResult(ok=True, detail="assembly 加载 + 映射验证通过")
         except KingdeeApiUnavailable as e:
             return SmokeResult(ok=False, detail=str(e))

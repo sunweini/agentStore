@@ -16,7 +16,8 @@ def load_seed_data(client: RagClient) -> int:
         existing = client.search("experience", sig, k=1, filter={"signature": sig})
         if existing and existing[0]["metadata"].get("signature") == sig:
             continue  # 幂等:签名已存在跳过
-        client.add_documents("experience", [item["message"] + " 修复:" + item["fix"]],
+        # 文本格式与 ExperienceStore.propose 统一(设计 §6.2:种子即 w7 格式样本)
+        client.add_documents("experience", [f"[{item['code']}] {item['message']} 修复:{item['fix']}"],
                              [{"signature": sig, "code": item["code"], "source": item.get("source", "seed")}])
         added += 1
     return added

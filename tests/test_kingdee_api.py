@@ -17,6 +17,18 @@ def test_client_parses_form_fields(monkeypatch):
     assert fields[0].field_name == "FQty"
     assert fields[0].data_type == "Decimal"
 
+def test_client_non_json_200_response_raises(monkeypatch):
+    """HTTP 200 但响应体非 JSON(如 HTML 错误页)→ KingdeeApiUnavailable,不抛裸 ValueError。"""
+    client = KingdeeApiClient("http://k3", "u", "p", "dc")
+    resp = type("R", (), {"status_code": 200})()
+    def bad_json():
+        raise ValueError("Expecting value")
+    resp.json = bad_json
+    monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
+    with pytest.raises(KingdeeApiUnavailable):
+        client.get_form_fields("SAL_PurchaseOrder")
+
+
 def test_client_429_retries_then_raises(monkeypatch):
     client = KingdeeApiClient("http://k3", "u", "p", "dc")
     calls = {"n": 0}
