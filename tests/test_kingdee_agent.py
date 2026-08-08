@@ -46,6 +46,15 @@ def test_task_state_aggregates():
     assert st.rework_budget_left == 3
 
 
+def test_subtask_contract_fields_default():
+    """下发模板字段(设计 §5.1)默认值:验收标准空 = 按需求确认摘要验收,
+    max_rework 0 = 全局默认 GLOBAL_REWORK_BUDGET,rework_count 从 0 起。"""
+    s = Subtask(id="A1", plugin_type="bill", title="x")
+    assert s.acceptance_criteria == ""
+    assert s.max_rework == 0
+    assert s.rework_count == 0
+
+
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 
 
@@ -172,6 +181,36 @@ def test_w1_split_subtasks_llm(tmp_path):
     todo = w.split_subtasks(st, {"requirement": "x"})
     assert [t.id for t in todo] == ["A1", "B1"]
     assert todo[0].deps == ["B1"]  # 依赖标注生效
+
+
+def test_w1_split_llm_acceptance_fields_pass_through(tmp_path):
+    """LLM 拆解 schema 新增验收标准/上限字段(设计 §5.1):真实传入 Subtask,
+    LLM 未给时确定性兜底(按需求确认摘要验收 / 0 = 全局默认)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import (
+        RequirementWorker, PlanOutput)
+    llm = ScriptedLLM(scripts={PlanOutput: [{"subtasks": [
+        {"id": "A1", "plugin_type": "bill", "title": "单据插件", "deps": [],
+         "acceptance_criteria": "库存数量>0 时审核通过",
+         "max_rework": 2},
+        {"id": "B1", "plugin_type": "service", "title": "服务插件", "deps": []}]}]})
+    w = RequirementWorker(llm=llm, store=ArtifactStore(root=tmp_path))
+    todo = w.split_subtasks(TaskState(requirement_spec={}, todo=[]), {"requirement": "x"})
+    assert todo[0].acceptance_criteria == "库存数量>0 时审核通过"
+    assert todo[0].max_rework == 2
+    # LLM 未给字段 → 确定性兜底值
+    assert todo[1].acceptance_criteria == "按需求确认摘要验收"
+    assert todo[1].max_rework == 0
+
+
+def test_w1_split_fallback_acceptance_fields(tmp_path):
+    """确定性拆解(llm=None)同样带下发模板默认字段。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import RequirementWorker
+    w = RequirementWorker(llm=None, store=ArtifactStore(root=tmp_path))
+    todo = w.split_subtasks(TaskState(requirement_spec={}, todo=[]),
+                            {"plugin_types": ["bill"], "requirement": "审核校验插件"})
+    assert todo[0].acceptance_criteria == "按需求确认摘要验收"
+    assert todo[0].max_rework == 0
+    assert todo[0].rework_count == 0
 
 
 def test_w1_extract_form_id_explicit_slot():
@@ -360,6 +399,68 @@ def test_review_verdict_logic_critical_to_needs_fixes(tmp_path):
     assert sub.report["path"].endswith("review.json")
     findings = json.loads((tmp_path / "A1" / "review.json").read_text(encoding="utf-8"))
     assert findings and findings[0]["severity"] == "Critical"
+
+
+def test_w4_review_context_includes_acceptance_criteria(tmp_path):
+    """审查对照验收标准(设计 §5.1):subtask.acceptance_criteria 非空时进 LLM
+    context(human 消息 JSON 键 + 对照提示),不是只看规范库。"""
+    import json as _j
+    from langchain_core.messages import HumanMessage
+
+    class _CaptureLLM:
+        def __init__(self):
+            self.seen = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            return ReviewOutput(findings=[])
+
+    w = ReviewWorker(llm=_CaptureLLM(), store=ArtifactStore(root=tmp_path), rag=None)
+    sub = Subtask("A1", "bill", "审核校验", [], "gen_done",
+                  acceptance_criteria="库存数量>0 时审核拦截")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
+    assert "STATUS: DONE" in msg
+    for m in w.llm.seen[0]:
+        if isinstance(m, HumanMessage):
+            assert "acceptance_criteria" in m.content
+            assert "库存数量>0 时审核拦截" in m.content
+            assert "验收标准" in m.content
+            break
+    else:
+        raise AssertionError("未找到 human 消息")
+    ctx = _j.loads(w.llm.seen[0][-1].content.split("代码与规范:", 1)[1].strip().split("\n\n")[0])
+    assert ctx["acceptance_criteria"] == "库存数量>0 时审核拦截"
+
+
+def test_w4_review_context_criteria_empty_default(tmp_path):
+    """验收标准为空时:context 键存在但为空串,不追加对照提示(不误导 LLM)。"""
+    import json as _j
+    from langchain_core.messages import HumanMessage
+
+    captured = {}
+
+    class _CaptureLLM:
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            captured["human"] = next((m.content for m in messages
+                                      if isinstance(m, HumanMessage)), "")
+            return ReviewOutput(findings=[])
+
+    w = ReviewWorker(llm=_CaptureLLM(), store=ArtifactStore(root=tmp_path), rag=None)
+    sub = Subtask("A1", "bill", "x", [], "gen_done")   # acceptance_criteria 默认空
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
+    ctx = _j.loads(captured["human"].split("代码与规范:", 1)[1].strip().split("\n\n")[0])
+    assert ctx["acceptance_criteria"] == ""
+    assert "验收标准" not in captured["human"].split("\n\n", 1)[-1]
 
 
 from agents.kingdee_plugin_agent.graph.workers.w5_compile import (
@@ -1004,6 +1105,36 @@ def test_graph_rework_loop_review_needs_fixes(tmp_path):
     assert r["action"] == "finish"
     assert _status_map(r["todo"]) == {"A1": "delivered"}
     assert r["rework_budget_left"] == 2          # 审查重工 1 轮扣 1
+
+
+def test_graph_subtask_max_rework_fails(tmp_path):
+    """子任务上限(设计 §5.1 上限字段):max_rework=1 → 第 2 次审查退回时
+    failed(不再 needs_rework);全局预算仍按实际返工轮次扣减(2 轮 → 剩 1)。"""
+    llm = ScriptedLLM(scripts={
+        QuestionsOutput: [{"questions": ["FormId?"]}],
+        PlanOutput: [{"subtasks": [{"id": "A1", "plugin_type": "bill", "title": "x",
+                                    "deps": [], "acceptance_criteria": "审核拦截生效",
+                                    "max_rework": 1}]}],
+        DesignOutput: [{"design_markdown": "# 设计"}],
+        CodeOutput: [{"code": "class A1 {}"}, {"code": "class A1 { /* 重写1 */ }"},
+                     {"code": "class A1 { /* 重写2 */ }"}],
+        ReviewOutput: [{"findings": [{"severity": "Critical", "issue": "缺校验"}]},
+                       {"findings": [{"severity": "Critical", "issue": "仍缺校验"}]}],
+    }, default={"action": "run"})
+    app = build_graph(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("maxrw")
+    r = app.invoke({"requirement_spec": {"requirement": "x"}, "todo": []}, cfg)
+    r = app.invoke(Command(resume="SAL_SaleOrder"), cfg)
+    r = app.invoke(Command(resume="确认"), cfg)
+    assert r["action"].startswith("fail")
+    assert _status_map(r["todo"]) == {"A1": "failed"}
+    assert r["rework_budget_left"] == 1          # 2 次返工轮次已消耗(全局预算照扣)
+    a1 = next(t for t in r["todo"] if t.id == "A1")
+    assert a1.rework_count == 2
+    assert a1.max_rework == 1
+    assert a1.acceptance_criteria == "审核拦截生效"
 
 
 def test_graph_midrun_ask_user_interrupt(tmp_path):
@@ -2179,6 +2310,45 @@ def test_worker_type_branches_read_from_skill_references():
         assert set(mapping) == {"bill", "service", "list"}
         for v in mapping.values():
             assert "/references/" in v and v.endswith(".md")
+
+
+@pytest.mark.parametrize("plugin_type", ["bill", "service", "list"])
+def test_w2_w3_w4_execute_all_three_types(tmp_path, plugin_type):
+    """三类型全覆盖(14→8 worker 配置表等价性):w2/w3/w4 对每个插件类型走
+    确定性路径(llm=None)都真实执行 —— 类型知识在骨架路径也完整传递:
+    w2 设计含对应类型分支要点文本;w3 代码用对应类型模板(基类按类型写死);
+    w4 审查照常产出裁决与审查报告。"""
+    from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignWorker
+    from agents.kingdee_plugin_agent.graph.workers.w3_generate import GenerateWorker
+    from agents.kingdee_plugin_agent.graph.workers.w4_review import ReviewWorker
+
+    store = ArtifactStore(root=tmp_path)
+    st = TaskState(requirement_spec={}, todo=[])
+
+    # w2:骨架设计含类型分支要点(bill/service/list 各自的 references 文件内容)
+    sub2 = Subtask("A1", plugin_type, "x", [], "pending")
+    sub2, msg2 = DesignWorker(llm=None, store=store).run(st, sub2)
+    assert sub2.design_path.endswith("design.md")
+    design = store.read(sub2.id, "design.md")
+    branch = (_Path(__file__).parent.parent / "agents" / "kingdee_plugin_agent" / "skills"
+              / "design-builder" / "references" / f"{plugin_type}.md").read_text(encoding="utf-8")
+    assert branch.splitlines()[0] in design   # 类型要点已进骨架
+
+    # w3:骨架渲染对应类型模板(基类按类型写死)
+    sub3 = Subtask("A1", plugin_type, "x", [], "design_done")
+    sub3, msg3 = GenerateWorker(llm=None, store=store).run(st, sub3)
+    assert sub3.code_path.endswith("Plugin.cs")
+    code = store.read(sub3.id, "Plugin.cs")
+    base = {"bill": "AbstractBillPlugIn", "service": "AbstractOperationServicePlugIn",
+            "list": "AbstractListPlugIn"}[plugin_type]
+    assert base in code
+    assert "{{" not in code                     # 全部占位符已渲染
+
+    # w4:干净代码 → Approved + review.json 落盘
+    sub4 = Subtask("A1", plugin_type, "x", [], "gen_done")
+    sub4, msg4 = ReviewWorker(llm=None, store=store).run(st, sub4)
+    assert sub4.review_verdict == "Approved"
+    assert sub4.review_path.endswith("review.json")
 
 
 from langchain_core.messages import AIMessage

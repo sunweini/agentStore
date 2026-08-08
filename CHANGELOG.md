@@ -5,6 +5,24 @@
 
 ---
 
+## v1.12.0 — 2026-08-09(kingdee-plugin-agent:下发模板补验收标准/上限字段 + 设计文档 14→8 worker 偏差同步)
+
+### 新增功能
+
+- **下发模板验收标准字段(设计 §5.1)**:`Subtask.acceptance_criteria` 新字段 —— w1 拆解时 LLM(`PlanItem` schema 新增可选槽)按确认规格填写,未给 → 确定性兜底「按需求确认摘要验收」(LLM 路径与 llm=None 兜底路径一致);**w4 审查对照验收标准**:非空时注入 LLM context(`acceptance_criteria` 键 + human 提示「需求符合性是最高优先级审查项,未满足项按 severity 列入 findings,缺需求行为视为 Critical」),审查不止看规范库;w4_review.md 同步补对照说明;确定性审查路径(占位符检测)不受影响。
+- **下发模板上限字段(设计 §5.1)**:`Subtask.max_rework`(0 = 全局默认 `GLOBAL_REWORK_BUDGET`)+ `Subtask.rework_count` —— 返工事件时 `agent.py::_advance_status` 先 rework_count+1,超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework(w4 重审/w5 编译超限/w5_5 冒烟失败三条路径统一);与全局预算的协同:子任务上限是环节级更早触发的闸门,返工轮次已实际发生仍照扣全局预算(≤3 轮是任务级最终防线),两者叠加不抵消。
+- **契约传递**:`_send_payload` 的 todo 全量快照自动携带新字段(`_as_state` 按 `_SUBTASK_FIELDS` 重建,旧 checkpointer 状态缺字段走默认值)。
+
+### 测试
+
+- 新增 9 项(全套 212 项):Subtask 新字段默认值 1、w1 LLM 拆解验收字段透传 + 兜底 2、w4 审查 context 含验收标准 + 空标准不误导 2、图级 max_rework 超限 → 子任务 failed(预算照扣)1、**三类型全覆盖** w2/w3/w4 确定性路径执行(bill/service/list 参数化 3 项,断言类型要点进设计骨架/类型基类进代码/占位符全渲染/审查 Approved);既有全局返工预算测试原样通过(默认 max_rework=0 走全局闸门)。
+
+### 文档
+
+- **设计文档 §3 偏差同步(实现偏差记录)**:14 worker(按类型拆 w2a/b/c、w3a/b/c、w4a/b/c)→ 实现为 8 worker + `TYPE_PROMPTS` 类型配置表(单源 `skills/<skill>/references/<type>.md`,等价 14 项职责全覆盖,类型知识 LLM 路径与骨架路径都完整传递);§2 编排行、§3.2 统一骨架、§4 数据流同步;§5.1 下发模板标注实现状态(验收标准/上限两项 ✅ 已落地,实际机制 = Subtask 字段 + `_send_payload` 快照)。
+- tech.md:§2.1 Subtask 表补 3 字段 + 下发模板落地机制说明;§10.2 并发与轮次上限补子任务退回上限行。
+- agents/kingdee_plugin_agent/CLAUDE.md:任务契约字段列表补验收标准/上限/rework_count;改任务契约操作说明(TaskState 级字段才需显式加 `_send_payload`);约束补子任务级上限与全局预算协同。
+
 ## v1.11.0 — 2026-08-09(kingdee-plugin-agent:死代码清理 + 冒烟链路 form_id/DLL 传递 + 反馈端点 + --env 记录)
 
 ### 新增功能

@@ -17,7 +17,7 @@ START → supervisor ──run:──→ dispatcher ──Send──→ w2/w3/w4
           └──ask_user──→ w1     └──finish|fail──→ END    └──→ supervisor(回环)
 ```
 
-w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约:主管拆解需求为 Subtask(id, plugin_type, title, deps, status, design_path, code_path, dll_path, compile_errors, review_verdict, review_path, report),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。冒烟链路:w1 确认时把目标单据 FormId 提取进 `state.environment["form_id"]`(PlanOutput.form_id 显式槽 + decisions 兜底,见 w1_requirement.extract_form_id),w5 编译成功时把后端产出 DLL 路径存 `subtask.dll_path`(mock 后端为空 → w5.5 跳过部署验证并显式标注,不拿源码冒充)。
+w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约(设计 §5.1 下发模板落地):主管拆解需求为 Subtask(id, plugin_type, title, deps, status, **acceptance_criteria**(该环节可验证的完成标准,w4 审查对照用), **max_rework**(本子任务退回上限,0 = 全局默认 GLOBAL_REWORK_BUDGET), **rework_count**(已发生返工轮次,主管统一维护), design_path, code_path, dll_path, compile_errors, review_verdict, review_path, report),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。冒烟链路:w1 确认时把目标单据 FormId 提取进 `state.environment["form_id"]`(PlanOutput.form_id 显式槽 + decisions 兜底,见 w1_requirement.extract_form_id),w5 编译成功时把后端产出 DLL 路径存 `subtask.dll_path`(mock 后端为空 → w5.5 跳过部署验证并显式标注,不拿源码冒充)。
 
 | 文件 | 职责 |
 |---|---|
@@ -39,7 +39,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 
 - **加 worker**:`graph/workers/` 新建 wN_xxx.py(继承 base.WorkerBase)→ `agent.py` 的 `workers` dict 注册 → `supervisor.py` 的 STATUS_TO_WORKER/状态机补状态迁移 → 按需加 prompt。
 - **改 prompt**:`prompts/<name>.md`,节点内按名字加载;注意 ChatPromptTemplate 是 f-string 语法(JSON 样例 `{}` 转义 `{{}}`,见 dev-standards §7.2)。
-- **改任务契约**:`graph/state.py` 的 Subtask/TaskState 字段 —— 加普通字段注意并行写冲突(用 reducer 或改由主管统一写);`Send` 分支入参是 payload 快照,新字段要在 `agent.py::_send_payload` 带上。
+- **改任务契约**:`graph/state.py` 的 Subtask/TaskState 字段 —— 加普通字段注意并行写冲突(用 reducer 或改由主管统一写);`Send` 分支入参是 payload 快照,新字段要在 `agent.py::_send_payload` 带上(`todo` 是全量快照,Subtask 新字段经 `_as_state` 的 `_SUBTASK_FIELDS` 自动随行,无需单独改 payload;TaskState 级新字段则要显式加进 `_send_payload` + `_as_state`)。
 - **接经验库**:`build_graph(experience=...)` 一次注入,w2(设计历史坑参考)/w5(修复检索)/w7(沉淀)共享;w2 按子任务标题 `search_related(title, title, k=3)` 检索(title 同时充当 code/message 双信号,设计阶段无错误码),命中注入设计上下文"历史踩坑参考"段(verified 优先、仅作规避参考非必须满足),检索故障降级空命中不阻塞设计。
 - **接真实金蝶环境**:`.env` 配 `KD_BASE_URL/KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 4 项(硬门槛:CLI 缺 KD_BASE_URL exit 1;API 4 项全校验,缺任一 503);编译服务配 `COMPILE_SERVICE_URL`(缺省 http://localhost:8000,起 `docker-compose up`);API 鉴权配 `KINGDEE_API_KEY`。
 - **改 skill**:`skills/<skill>/` 下 SKILL.md(方法论:目标/输入/流程/输出契约/踩坑)+ `references/`(类型要点;requirement-clarify 老形态模板直放 skill 目录,无 references/),`skills/loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要(渐进式披露);**方法论只写进 skill,不要写回 prompts** —— w2/w3/w4 的 worker TYPE_PROMPTS 与 load_skill 都从 `skills/<skill>/references/` 取同一份内容(单源)。改 LLM 侧工具提示:loader 的 `SKILL_HINT`(每步注入)+ `structured_with_skill`(绑定形态:官方 tools 参数,勿用 bind_tools 再 with_structured_output —— `__getattr__` 委派会丢 tools,已在 loader docstring 注明)。注意:prompts/ 与 skill references 被 worker 拼进系统提示后都经 ChatPromptTemplate f-string 解析,含 `{...}` 的样例(如 JSON 契约)必须转义 `{{...}}`(dev-standards §7.2);作为 load_skill JSON 交付时保持文本原样 —— 转义是模板安全,不是内容变更。
@@ -50,7 +50,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 ## 约束
 
 - **langchain MCP 铁律**:开发前必须查 docs-langchain / reference-langchain MCP 确认 API 用法,禁止凭记忆写 API(见根 CLAUDE.md)。
-- **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail,剩余子任务标记 failed;失败收尾(设计 §8)由 `w6_fail` 节点产出"未完成"包 `deliverable-failed-<ts>.zip`(部分产物 + compile_errors + 退回意见 + 原因,route 里 fail → w6_fail → END),CLI 输出 TodoList 摘要 + 该包路径;预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。
+- **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail,剩余子任务标记 failed;失败收尾(设计 §8)由 `w6_fail` 节点产出"未完成"包 `deliverable-failed-<ts>.zip`(部分产物 + compile_errors + 退回意见 + 原因,route 里 fail → w6_fail → END),CLI 输出 TodoList 摘要 + 该包路径;预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。**子任务级上限(设计 §5.1)**:`Subtask.max_rework`(0 = 全局默认)与 `rework_count` —— 返工事件时 `agent.py::_advance_status` 先 rework_count+1,超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework(环节级更早触发的闸门);返工轮次已实际发生仍照扣全局预算,两者叠加不抵消(全局 ≤3 轮是任务级最终防线)。
 - **并发上限**:`MAX_PARALLEL = 3`(send() 并行子任务 ≤3,防 DeepSeek 限流/超时风暴)。
 - **编译轮次**:w5 循环编译至多 `MAX_COMPILE_ROUNDS = 5` 轮;编译服务不可用 → 报 BLOCKED,不算轮次不扣预算。
 - **时间预算(设计 §8)**:单轮编译 ≤120s(CompileClient timeout)、单任务编译阶段 ≤15min(5 轮 × 120s 天然 ≤10min,由 w5 内部覆盖);全流程 ≤30min 图级总闸(`PIPELINE_TIME_BUDGET=1800.0`):`started_at` 距今超限且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`;`started_at` 由 CLI/API 建任务时写入初始 state(存于 state 而非 thread_id,挂起 resume 不重置);0.0 = 未设置(旧状态兼容不判定)。

@@ -82,7 +82,11 @@ class ReviewWorker(WorkerBase):
         return findings
 
     def _llm_review(self, state, subtask, code: str, rules: str, prompt: str):
-        """LLM 审查 → findings 列表(ReviewFinding);失败返回 None → 骨架。"""
+        """LLM 审查 → findings 列表(ReviewFinding);失败返回 None → 骨架。
+
+        验收标准对照(下发模板,设计 §5.1):subtask.acceptance_criteria 非空时注入
+        context,审查需同时对照验收标准(需求符合性)与规范库 —— 不是只看代码规范。
+        """
         if self.llm is None:
             return None
         try:
@@ -91,10 +95,18 @@ class ReviewWorker(WorkerBase):
                 "standards": rules,
                 "plugin_type": subtask.plugin_type,
                 "title": subtask.title,
+                # 验收标准:该子任务可验证的完成标准(w1 拆解时填写;空 = 无显式标准,
+                # LLM 按需求确认摘要审查)。审查对照它检查代码,不止对照规范库。
+                "acceptance_criteria": subtask.acceptance_criteria or "",
             }, ensure_ascii=False)
+            human = "代码与规范:\n{context}"
+            if subtask.acceptance_criteria:
+                human += ("\n\ncontext 中 acceptance_criteria 为本子任务验收标准:"
+                          "逐条对照检查代码是否满足(需求符合性是最高优先级审查项),"
+                          "未满足项按 severity 规则列入 findings(缺需求行为视为 Critical)。")
             prompt = ChatPromptTemplate.from_messages([
                 ("system", prompt + SKILL_HINT),
-                ("human", "代码与规范:\n{context}"),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
+                ("human", human),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
             ])
             out = structured_with_skill(self.llm, ReviewOutput,
                                         prompt.format_messages(context=context))

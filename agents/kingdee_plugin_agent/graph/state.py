@@ -52,6 +52,10 @@ class Subtask:
     title: str
     deps: list[str] = field(default_factory=list)
     status: str = "pending"
+    # ── 下发模板字段(设计 §5.1:验收标准 / 上限,w1 拆解时按确认规格填写)──
+    acceptance_criteria: str = ""   # 该环节可验证的完成标准(w4 审查对照用;空 = 按需求确认摘要验收)
+    max_rework: int = 0             # 本子任务退回上限,0 = 全局默认 GLOBAL_REWORK_BUDGET
+    rework_count: int = 0           # 本子任务已发生的返工轮次(主管统一维护,见 agent._advance_status)
     design_path: str = ""
     code_path: str = ""
     dll_path: str = ""            # 编译产物 DLL 路径(w5 成功时取自编译后端;mock 后端无产出为空)

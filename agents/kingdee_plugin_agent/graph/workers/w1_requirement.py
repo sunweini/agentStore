@@ -67,6 +67,9 @@ class PlanItem(BaseModel):
     plugin_type: str = "bill"        # bill | service | list
     title: str = ""
     deps: list[str] = Field(default_factory=list)
+    # 下发模板字段(设计 §5.1):LLM 从确认规格归纳,缺省走确定性兜底值
+    acceptance_criteria: str = ""    # 该环节可验证的完成标准(空 → 拆解处填默认值)
+    max_rework: int = 0              # 本子任务退回上限(0 = 全局默认 GLOBAL_REWORK_BUDGET)
 
 
 class PlanOutput(BaseModel):
@@ -144,7 +147,11 @@ class RequirementWorker(WorkerBase):
                     return [
                         Subtask(id=it.id or f"{chr(65 + i)}1",
                                 plugin_type=it.plugin_type, title=it.title or "插件子任务",
-                                deps=list(it.deps))
+                                deps=list(it.deps),
+                                # 下发模板字段:LLM 未给 → 确定性兜底(按需求确认摘要验收 / 全局上限)
+                                acceptance_criteria=it.acceptance_criteria.strip()
+                                or "按需求确认摘要验收",
+                                max_rework=max(int(it.max_rework or 0), 0))
                         for i, it in enumerate(out.subtasks)
                     ]
             except Exception:
@@ -176,10 +183,15 @@ class RequirementWorker(WorkerBase):
         return ""
 
     def _split_fallback(self, spec: dict) -> list[Subtask]:
-        """确定性兜底:按 spec.plugin_types(缺省 bill)拆单子任务。"""
+        """确定性兜底:按 spec.plugin_types(缺省 bill)拆单子任务。
+
+        下发模板字段走默认值:验收标准 = "按需求确认摘要验收"(确认摘要即验收基准,
+        设计 §7 artifact 验收点),max_rework = 0(全局默认 GLOBAL_REWORK_BUDGET)。
+        """
         types = spec.get("plugin_types") or ["bill"]
         title = spec.get("requirement", "插件")[:30]
-        return [Subtask(id=f"{chr(65 + i)}1", plugin_type=t, title=f"{title}({t})", deps=[])
+        return [Subtask(id=f"{chr(65 + i)}1", plugin_type=t, title=f"{title}({t})", deps=[],
+                        acceptance_criteria="按需求确认摘要验收", max_rework=0)
                 for i, t in enumerate(types)]
 
     def persist(self, spec: dict, todo: list[Subtask]) -> None:

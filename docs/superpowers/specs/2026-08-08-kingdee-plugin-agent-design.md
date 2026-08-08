@@ -17,7 +17,7 @@
 
 | 项 | 选择 |
 |---|---|
-| 编排 | LangGraph Supervisor 图,1 主管 + 14 worker(子图) |
+| 编排 | LangGraph Supervisor 图,1 主管 + 8 worker(实现;设计原 14 worker 按类型拆 → 收敛为 8 worker + TYPE_PROMPTS 类型配置表,见 §3 实现偏差记录) |
 | LLM | DeepSeek(common/llm.py 工厂,多供应商) |
 | 元数据 | 金蝶云星空 WebAPI 客户端(只读查询 FormId/字段/操作/服务定义) |
 | 知识 | RAG 四库:API 参考库/开发指南库/规范库/经验库(详见 §6) |
@@ -32,7 +32,9 @@
 | 部署 | docker-compose 编排(api + 编译容器 + RAG 存储) |
 | 契约 | 任务下发/上报/审查裁决模板(参照 superpowers subagent-driven-development) |
 
-## 3. 架构:1 主管 + 14 worker
+## 3. 架构:1 主管 + 8 worker(已实现;设计原 14 worker 按类型拆 → 实现收敛为 8 worker + 类型配置表)
+
+> **实现偏差记录(已落地)**:设计初稿 §3 为 14 worker —— w1 + w2/w3/w4 各按插件类型拆 3 个(w2a/b/c、w3a/b/c、w4a/b/c)+ w5/w5.5/w6/w7。实现(终审 C6 起)按 §3.2 的"类型差异走配置表"收敛为 **8 个 worker**:w2/w3/w4 各一个 worker,类型分支经 `TYPE_PROMPTS` 配置表路由到 `skills/<skill>/references/<type>.md`(bill/service/list 三套类型要点,方法论单源,worker 与 `load_skill` 读同一份文件);w3 另有类型专属模板 `templates/<type>/template.cs`。**14 项职责全覆盖**:w2a/b/c ↔ w2+bill/service/list 分支,w3a/b/c ↔ w3+类型模板,w4a/b/c ↔ w4+类型分支,其余 worker 一一对应。类型知识两条路径都完整传递:LLM 路径(branch 文本拼进系统提示)与确定性骨架路径(w2 骨架含类型要点文本;w3 骨架渲染类型模板,基类按类型写死;w4 骨架为占位符检测,类型无关)。三类型执行有测试覆盖(`test_w2_w3_w4_execute_all_three_types`)。
 
 ```
 用户输入(Web/CLI)
@@ -42,39 +44,41 @@
 │  SUPERVISOR 主管 agent         │ ← 编排、派发、跟踪 TodoList、升级
 └──────────────────────────────┘
    │
-   ├─▶ [w1] 需求分析 agent(通用,交互式)
+   ├─▶ [w1] 需求分析 worker(通用,交互式)
    │     需求澄清(问题模板,元数据驱动提问,用户确认门槛)
    │     产出:需求规格 spec + 任务计划 plan(子任务+依赖)
    │
-   ├─▶ [w2] 设计 agent ×3(按类型拆)
-   │     ├─ w2a 单据/表单设计   ├─ w2b 服务设计   ├─ w2c 列表设计
+   ├─▶ [w2] 设计 worker(类型分支:TYPE_PROMPTS → design-builder/references/{bill,service,list}.md)
+   │     LLM + RAG(guide 按插件类型过滤)+ 经验库历史坑 → 设计文档落盘
+   │     (等价设计初稿 w2a 单据/表单设计 / w2b 服务设计 / w2c 列表设计)
    │
-   ├─▶ [w3] 代码生成 agent ×3(按类型拆)
-   │     ├─ w3a 单据/表单生成   ├─ w3b 服务生成   ├─ w3c 列表生成
+   ├─▶ [w3] 代码生成 worker(类型分支:TYPE_PROMPTS → code-generator/references/* + 类型模板 templates/<type>/)
+   │     设计 + RAG + 模板 → C#(等价 w3a/b/c;模板优先,冲突以模板为准)
    │
-   ├─▶ [w4] 代码审查 agent ×3(按类型拆,独立审查)
-   │     ├─ w4a 单据审查   ├─ w4b 服务审查   ├─ w4c 列表审查
-   │     发现问题 → 退回对应 w3(上限 3 轮)
+   ├─▶ [w4] 代码审查 worker(类型分支:TYPE_PROMPTS → code-reviewer/references/*,独立审查)
+   │     规范库整库 + API 抽查 + 子任务验收标准对照 → 意见 + 确定性裁决
+   │     发现问题 → 退回 w3(子任务上限 max_rework,缺省全局返工预算 ≤3 轮)
+   │     (等价 w4a 单据审查 / w4b 服务审查 / w4c 列表审查)
    │
-   ├─▶ [w5] 编译修复 agent(通用)
+   ├─▶ [w5] 编译修复 worker(通用)
    │     提交容器编译 → 错误 → 检索经验库修复 → 重编译(上限 5 次)
    │     失败退回 w3/w4
    │
-   ├─▶ [w5.5] 部署冒烟 agent(通用)★
+   ├─▶ [w5.5] 部署冒烟 worker(通用)★
    │     部署 DLL 到测试金蝶环境,验证 assembly 加载 + FormId→plugin 映射
    │     验证失败退回 w5/w3(运行时验证,防"编译过跑不起来")
    │
-   ├─▶ [w6] 打包 agent(通用)
+   ├─▶ [w6] 打包 worker(通用)
    │     子任务产物合并 → 交付包(源码+DLL+部署说明+设计/审查记录)
    │
-   └─▶ [w7] 知识沉淀 agent(通用)
+   └─▶ [w7] 知识沉淀 worker(通用)
         提炼:踩坑/编译错误模式 → 经验库;规范偏差 → 规范库;API 用法 → RAG
         失败不阻塞交付,记待沉淀队列
 ```
 
 ### 3.2 Worker 统一骨架
 
-14 个 worker 共用同一基类:输入 State 契约 → 工具调用 → 上报输出(§5.2)。任务契约(下发/上报/状态机)在基类实现一次,worker 只写核心逻辑,类型差异走配置表(插件类型 → worker 实例 → 模板/知识过滤)。防止契约逻辑复制 14 遍。
+8 个 worker 共用同一基类(`graph/workers/base.py`):输入 State 契约 → 工具调用 → 上报输出(§5.2)。任务契约(下发/上报/状态机)在基类实现一次,worker 只写核心逻辑,类型差异走配置表(`TYPE_PROMPTS`:插件类型 → skill references 文件 → 模板/知识过滤,单源在 `skills/<skill>/references/<type>.md`,prompts/ 不重复维护类型分支)。防止契约逻辑复制 14 遍。
 
 ### 3.4 主管上下文与产物落盘
 
@@ -113,9 +117,9 @@
 ② w1 澄清循环:提问→答→下一问(元数据辅助,interrupt()/resume)
    → spec 草稿 + 确认摘要(决策+假设清单)→ 用户确认
    → 拆子任务 plan(依赖拓扑)→ 入 State
-③ 主管按依赖派发 w2x 设计:RAG(API+指南,类型过滤)→ 设计文档
-④ w3x 代码生成:设计 + RAG + 模板 → C#
-⑤ w4x 审查:规范库整库 + API 抽查 → 意见;Critical/Important 退回 w3x
+③ 主管按依赖派发 w2 设计(类型分支走 TYPE_PROMPTS):RAG(API+指南,类型过滤)→ 设计文档
+④ w3 代码生成(类型分支 + 类型模板):设计 + RAG + 模板 → C#
+⑤ w4 审查(类型分支):规范库整库 + API 抽查 + 验收标准对照 → 意见;Critical/Important 退回 w3
 ⑥ w5 编译:提交容器 → 错误列表 → 检索经验库修复 → 重编(上限 5)
 ⑥.5 w5.5 冒烟:部署测试环境 → assembly 加载 + FormId 映射验证 → 失败退回
 ⑦ w6 打包:子任务产物合并 → 交付包
@@ -127,14 +131,28 @@
 
 ### 5.1 任务下发模板(主管 → worker)
 
+> **实现状态**:模板字段除 `TASK_ID/TYPE/INPUT/RAG` 外,`验收标准` 与 `上限` 两项已落地(v1.12.0):
+> 实际机制 = `Subtask` dataclass 字段 + `_send_payload` 通道快照(agent.py 把 `todo`
+> 全量快照随 Send 分支下发,worker 按 `dispatch_id` 取自己的那份,见 tech.md §2)。
+> `TASK_ID` = 子任务 id(如 `A1`),`TYPE/INPUT/RAG` 由 worker 阶段(STATUS_TO_WORKER
+> 映射)与产物路径隐式携带,不做显式模板行。
+
 ```
-TASK_ID:      <子任务号>.<阶段号>         例: A2.design
-TYPE:         设计|生成|审查|编译|打包|沉淀
-PLUGIN_TYPE:  单据|服务|列表
-INPUT:        依赖产物引用(需求文档/设计/代码 — State key)
-RAG:          指定检索库 + 过滤条件
-验收标准:     该环节可验证的完成标准
-上限:         退回轮次 / 编译轮次
+TASK_ID:      <子任务号>.<阶段号>         例: A2.design   (实现:子任务 id,如 A1)
+TYPE:         设计|生成|审查|编译|打包|沉淀             (实现:worker 阶段映射,STATUS_TO_WORKER)
+PLUGIN_TYPE:  单据|服务|列表                            (实现:Subtask.plugin_type)
+INPUT:        依赖产物引用(需求文档/设计/代码 — State key)  (实现:subtask.design_path/code_path + store 读取)
+RAG:          指定检索库 + 过滤条件                      (实现:worker 内按阶段检索,guide 按 plugin_type 过滤)
+验收标准:     该环节可验证的完成标准     ✅ 已实现:Subtask.acceptance_criteria
+             (w1 拆解时由 LLM 按确认规格填写,未给 → 默认"按需求确认摘要验收";
+              w4 审查把该字段注入 LLM context 对照检查 —— 审查不止看规范库,
+              还对照验收标准;确定性路径不受影响)
+上限:         退回轮次 / 编译轮次        ✅ 已实现:Subtask.max_rework + rework_count
+             (子任务退回上限,0 = 全局默认 GLOBAL_REWORK_BUDGET;主管在返工事件时
+              rework_count+1,超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework;
+              与全局返工预算的关系:子任务上限是更早触发的环节级闸门,全局预算(≤3 轮)
+              是任务级最终防线,返工轮次已实际发生仍照扣全局预算 —— 两者叠加不抵消;
+              编译轮次上限(5)由 w5 MAX_COMPILE_ROUNDS 内部覆盖)
 ```
 
 ### 5.2 上报契约(worker → 主管)

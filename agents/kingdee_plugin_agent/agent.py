@@ -302,13 +302,26 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
                 "clarify_answers": [], "clarify_feedback": [],
                 "clarify_round": state.clarify_round + 1, "action": ""}
 
+    def _bump_rework(sub: Subtask) -> bool:
+        """子任务返工计数 +1,超本子任务上限(max_rework>0)返回 True。
+
+        返回 True 表示应 fail 而非 needs_rework(下发模板"上限"字段,设计 §5.1)。
+        与全局返工预算的协同:无论子任务是否因自身上限失败,本次返工轮次已实际
+        发生,仍上报返工事件扣全局预算 —— 子任务上限是更早触发的闸门(按环节粒度),
+        全局预算(≤3 轮)是任务级最终防线,两者叠加不互相抵消。
+        """
+        sub.rework_count += 1
+        return sub.max_rework > 0 and sub.rework_count > sub.max_rework
+
     def _advance_status(name: str, sub: Subtask, st: TaskState, budget_deducted: bool) -> bool:
         """worker 报告状态 → 子任务生命周期推进(与 supervisor.STATUS_TO_WORKER 对应)。
 
         ERROR(未知类型/产物缺失)→ failed;w4 Needs fixes / w5 编译超限 /
-        w5_5 冒烟失败 → needs_rework(退回 w3);未扣预算的 BLOCKED(基础设施缺失)
-        → failed(重工无意义,防无限重试循环)。返回本次是否产生返工事件
-        (w4 重审;w5/w5_5 由 worker 原地扣减经 budget_deducted 检测),由主管统一扣预算。
+        w5_5 冒烟失败 → needs_rework(退回 w3),若子任务 rework_count 超过自身
+        max_rework(>0 时)→ failed(本子任务上限耗尽,不再重工);未扣预算的
+        BLOCKED(基础设施缺失)→ failed(重工无意义,防无限重试循环)。返回本次
+        是否产生返工事件(w4 重审;w5/w5_5 由 worker 原地扣减经 budget_deducted
+        检测),由主管统一扣预算 —— 子任务上限耗尽而 fail 时同样返回 True(轮次已消耗)。
         """
         report_status = sub.report.get("status", "")
         if name == "w2":
@@ -319,16 +332,20 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
             if report_status == "ERROR":
                 sub.status = "failed"
             elif sub.review_verdict == "Needs fixes":
-                sub.status = "needs_rework"
+                sub.status = "failed" if _bump_rework(sub) else "needs_rework"
                 return True  # 返工事件:重新生成轮次,主管统一扣预算
             else:
                 sub.status = "review_done"
         elif name == "w5":
-            sub.status = "needs_rework" if (report_status == "BLOCKED" and budget_deducted) \
-                else ("failed" if report_status == "BLOCKED" else "compile_done")
+            if report_status == "BLOCKED" and budget_deducted:
+                sub.status = "failed" if _bump_rework(sub) else "needs_rework"
+            else:
+                sub.status = "failed" if report_status == "BLOCKED" else "compile_done"
         elif name == "w5_5":
-            sub.status = "needs_rework" if (report_status == "BLOCKED" and budget_deducted) \
-                else ("failed" if report_status == "BLOCKED" else "smoke_done")
+            if report_status == "BLOCKED" and budget_deducted:
+                sub.status = "failed" if _bump_rework(sub) else "needs_rework"
+            else:
+                sub.status = "failed" if report_status == "BLOCKED" else "smoke_done"
         elif name == "w6":
             sub.status = "packaged"
         elif name == "w7":

@@ -66,6 +66,12 @@ w1 ── 静态边 ──► supervisor
 
 ### 2.1 Subtask(子任务)
 
+> **下发模板(设计 §5.1)落地机制**:`TASK_ID/TYPE/PLUGIN_TYPE/INPUT/RAG` 由子任务
+> id + `STATUS_TO_WORKER` 阶段映射 + `plugin_type` + 产物路径(store 读取)隐式携带;
+> `验收标准` / `上限` 两项为显式字段(下表 `acceptance_criteria` / `max_rework`),
+> w1 拆解时填写,`_send_payload` 把 todo 全量快照随 Send 分支下发(w1 拆解即生效,
+> 无需逐字段拼模板行)。
+
 | 字段 | 说明 |
 |---|---|
 | `id` | 子任务 id(白名单 `^[A-Za-z0-9_-]+$`,防路径穿越) |
@@ -73,6 +79,9 @@ w1 ── 静态边 ──► supervisor
 | `title` | 标题(w2 经验检索双信号) |
 | `deps` | 依赖子任务 id 列表(依赖须 packaged/delivered 才派发;dep 不存在视为可选) |
 | `status` | 生命周期状态(见 2.3) |
+| `acceptance_criteria` | **验收标准(设计 §5.1)**:该环节可验证的完成标准;w1 拆解时 LLM 按确认规格填写,未给 → 默认「按需求确认摘要验收」;非空时 w4 审查把它注入 LLM context 对照检查(需求符合性,缺需求行为 = Critical),确定性审查路径不受影响 |
+| `max_rework` | **子任务退回上限(设计 §5.1)**:`0` = 全局默认 `GLOBAL_REWORK_BUDGET`;返工事件时 rework_count+1,超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework(`agent.py::_advance_status` 判定);与全局预算的关系见 §10.2 |
+| `rework_count` | 本子任务已发生返工轮次(主管统一维护,worker 不直写) |
 | `design_path` / `code_path` | 设计文档 / Plugin.cs 落盘路径(worker 经 artifact_key 写回) |
 | `compile_errors` | 编译错误列表 `[{code, message, experience?}]` |
 | `review_verdict` | `Approved` \| `Needs fixes`(w4 确定性裁决) |
@@ -342,6 +351,7 @@ default_recursion_limit(n) = 100 + 20 × n
 |---|---|---|
 | 并行子任务 | ≤3(`MAX_PARALLEL`) | 防 DeepSeek 限流/超时风暴 |
 | 全局返工预算 | ≤3(`GLOBAL_REWORK_BUDGET`) | 总重新生成轮数,超限硬失败 |
+| 子任务退回上限 | `Subtask.max_rework`(0 = 全局默认) | 设计 §5.1「上限」字段:rework_count 超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework(`_advance_status` 判定);与全局预算的协同:子任务上限是环节级更早触发的闸门,全局 ≤3 轮是任务级最终防线,返工轮次已实际发生仍照扣全局预算,两者叠加不抵消 |
 | 编译轮次 | ≤5(`MAX_COMPILE_ROUNDS`) | 服务不可用不计轮次 |
 | 澄清轮次 | ≤10(w1 `MAX_ROUNDS`) | 逐问上限;确认 ≤2 次尝试 |
 | 单轮编译 | ≤120s | httpx timeout + msbuild timeout |
