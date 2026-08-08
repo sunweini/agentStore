@@ -15,6 +15,22 @@ def test_read_missing_raises(tmp_path):
         store.read("A1", "nope.md")
 
 
+def test_artifact_store_rejects_path_traversal_id(tmp_path):
+    """终审 Important:w1 拆解由 LLM 生成子任务 id,`..`/`/` 携带 id → 拒绝,
+    不越出 artifacts 根目录写文件(原实现直接 Path 拼接)。"""
+    store = ArtifactStore(root=tmp_path)
+    for bad in ("A/../B", "../A", "A/B", "A\\B"):
+        with pytest.raises(ArtifactStoreError):
+            store.write(bad, "Plugin.cs", "class X {}")
+        with pytest.raises(ArtifactStoreError):
+            store.read(bad, "Plugin.cs")
+        with pytest.raises(ArtifactStoreError):
+            store.paths(bad)
+    # 白名单内 id 仍正常
+    assert store.write("A1", "Plugin.cs", "x").parent.name == "A1"
+    assert store.write("A_1-B2", "p.cs", "y").parent.name == "A_1-B2"
+
+
 from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState, TASK_STATUS
 
 
@@ -295,6 +311,29 @@ def test_compile_503_midway_is_blocked(tmp_path):
     _write_code(tmp_path, sub)
     sub, msg = w.run(st, sub)
     assert "BLOCKED" in msg and "503" in msg
+
+
+def test_compile_http_error_midway_is_blocked_no_budget(tmp_path):
+    """终审 Important:compile 期间超时/连接失败(httpx.HTTPError 家族)→ BLOCKED,
+    不计编译轮次、不扣返工预算(原实现异常向上传播 → 节点 raise → 图中断/API 任务死)。"""
+    import httpx
+
+    class Timeout:
+        def health(self):
+            return True
+
+        def compile(self, code, project_name):
+            raise httpx.TimeoutException("connect timeout")
+
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=Timeout())
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "BLOCKED" in msg and "不可用" in msg
+    assert st.rework_budget_left == 3   # 不扣预算
+    assert sub.compile_errors == []     # 未计入编译轮次
 
 
 def test_compile_exhausted_decrements_budget(tmp_path):
@@ -625,6 +664,28 @@ def test_supervisor_decide_terminal_logic():
     assert {t.id: t.status for t in st3.todo} == {"A1": "failed", "B1": "failed"}
 
 
+def test_supervisor_llm_finish_with_empty_todo_falls_back():
+    """终审 Minor:澄清期(todo 空)LLM 幻觉 finish → 不提前结束图,回落确定性兜底。
+
+    原实现 `a == "finish" → return "finish"`:零交付结束图(CLI 误报成功)。
+    """
+    from agents.kingdee_plugin_agent.graph.supervisor import DecideAction
+
+    class HallucinateFinish:
+        def with_structured_output(self, schema):
+            return self
+
+        def invoke(self, messages):
+            return DecideAction(action="finish")
+
+    s = Supervisor(llm=HallucinateFinish(), workers={})
+    st = TaskState(requirement_spec={}, todo=[])           # 澄清期:无子任务
+    assert s.decide(st) == "ask_user"                      # 回落兜底,非 finish
+    # 全部 delivered 时 LLM finish 依旧放行(第 2 步确定性已拦截,双保险)
+    st2 = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "delivered")])
+    assert s.decide(st2) == "finish"
+
+
 def test_worker_for_subtask_mapping():
     """状态生命周期 → 阶段 worker 映射(终审 C4 契约)。"""
     assert worker_for_subtask(Subtask("A1", "bill", "x", [], "pending")) == "w2"
@@ -778,8 +839,12 @@ def test_w1_interrupt_message_and_record_answer(tmp_path):
 
 def test_agent_name_and_recursion_formula():
     assert AGENT_NAME == "kingdee_plugin_agent"
-    assert default_recursion_limit(0) == 50
-    assert default_recursion_limit(3) == 80
+    assert default_recursion_limit(0) == 100
+    assert default_recursion_limit(3) == 160
+    # 终审 Important:调用点(CLI/API)澄清期固定按 n=10 给足,须 ≥250 防
+    # 复合任务(8 阶段 × ceil(n/3) 并行 × 返工重跑)溢出 → GraphRecursionError
+    assert default_recursion_limit(10) == 300
+    assert default_recursion_limit(10) >= 250
 
 
 # ── C10 复审修复(Important 1/2)─────────────────────────────────────────

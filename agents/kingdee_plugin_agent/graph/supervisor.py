@@ -196,7 +196,8 @@ class Supervisor:
         动作校验(防幻觉):
           run:<sid>  sid 必须是当前可派发集合成员,否则回退派批首
           ask_user   → ask_user[:<问题>]
-          finish     → 仅当全部 delivered 才有意义(第 2 步已拦截,此处直接放行也无害)
+          finish     → 门控 _all_delivered:澄清期(todo 空)LLM 幻觉 finish 会以
+                       零交付结束图(CLI 误报成功),回落确定性兜底而非放行
           fail       → 主管裁量(需求不可实现等),放行
         """
         try:
@@ -215,7 +216,7 @@ class Supervisor:
         a = out.action
         if a == "ask_user":
             return f"ask_user:{out.question}" if out.question else "ask_user"
-        if a == "finish":
+        if a == "finish" and self._all_delivered(state):
             return "finish"
         if a == "fail":
             return "fail:主管判定需求不可完成"

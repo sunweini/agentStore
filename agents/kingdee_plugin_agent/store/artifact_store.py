@@ -1,5 +1,9 @@
 """产物落盘:State 只存引用+摘要,细节走文件路径(主管上下文保护)。"""
+import re
 from pathlib import Path
+
+#: 子任务 id 白名单(w1 拆解由 LLM 生成,防路径穿越:`..`/`/` 等一律拒绝)
+_SUBTASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ArtifactStoreError(RuntimeError):
@@ -11,6 +15,9 @@ class ArtifactStore:
         self.root = Path(root)
 
     def _sub_dir(self, subtask_id: str) -> Path:
+        if not _SUBTASK_ID_RE.match(subtask_id):
+            raise ArtifactStoreError(
+                f"非法子任务 id: {subtask_id!r}(仅允许字母/数字/下划线/连字符)")
         d = self.root / subtask_id
         d.mkdir(parents=True, exist_ok=True)
         return d

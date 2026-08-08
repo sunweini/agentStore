@@ -12,6 +12,7 @@
 """
 import json
 
+import httpx
 from langchain_core.prompts import ChatPromptTemplate
 from compile_service.models import CompileUnavailableError
 
@@ -81,6 +82,12 @@ class CompileWorker(WorkerBase):
             except CompileUnavailableError:
                 return {"status": "BLOCKED", "artifact_key": "", "evidence": "",
                         "concerns": "编译服务 503"}
+            except httpx.HTTPError:
+                # 超时/连接失败(httpx.TimeoutException/ConnectError 均系
+                # HTTPError 子类,实测类层级):服务不可用 → BLOCKED,不计轮次
+                # 不扣预算(原实现异常向上传播 → 节点 raise → 图中断/API 任务死)
+                return {"status": "BLOCKED", "artifact_key": "", "evidence": "",
+                        "concerns": "编译服务不可用(超时/连接失败),不计编译轮次"}
             if result.success:
                 subtask.compile_errors = []
                 return {"status": "DONE", "artifact_key": "code_path",

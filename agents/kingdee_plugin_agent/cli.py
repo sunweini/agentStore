@@ -44,8 +44,8 @@ def run_cli(argv: list[str] | None = None) -> int:
     # 测试路径 monkeypatch 本模块 build_graph 注入确定性模式(llm=None)。
     app = build_graph()
     # thread_id 每次运行唯一(隔离 checkpointer 会话)。recursion_limit 按子任务数
-    # 预算(设计 §6.2:50 + 10×n);CLI 澄清期还不知道子任务数(拆解发生在一次
-    # invoke 内),按上限 10 给足 —— 150 超步覆盖澄清 + 全流水线 + 返工重跑
+    # 预算(设计 §6.2:100 + 20×n);CLI 澄清期还不知道子任务数(拆解发生在一次
+    # invoke 内),按上限 10 给足 —— 300 超步覆盖澄清 + 全流水线 + 返工重跑
     cfg = {"configurable": {"thread_id": f"kingdee-cli-{uuid.uuid4().hex}"},
            "recursion_limit": default_recursion_limit(10)}
     state = {"requirement_spec": {"requirement": args.requirement,

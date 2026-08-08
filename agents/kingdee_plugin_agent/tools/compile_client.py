@@ -5,7 +5,8 @@ from compile_service.models import CompileError, CompileResult, CompileUnavailab
 
 
 class CompileClient:
-    def __init__(self, base_url: str, timeout: float = 10.0):
+    #: 单轮编译 ≤2min(设计 §6.6),timeout 按上限定;10s 会让真实编译超时误判
+    def __init__(self, base_url: str, timeout: float = 120.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = httpx.Client(timeout=timeout)

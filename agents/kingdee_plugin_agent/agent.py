@@ -52,12 +52,16 @@ _UNSET = object()
 
 
 def default_recursion_limit(todo_count: int) -> int:
-    """按子任务数预算 recursion_limit(设计 §6.2):50 + 10 × 子任务数。
+    """按子任务数预算 recursion_limit(设计 §6.2):100 + 20 × 子任务数。
 
     recursion_limit 是运行时 config 参数(graph.invoke(..., config=...)),
     不是 compile 参数 —— 调用方按任务规模显式传入,默认给足并设上限。
+    预算依据(终审复核):8 阶段流水线 × 每阶段往返 + 返工重跑,复合任务
+    (7 子任务)实测需 ~120 超步;旧 50+10×n 在 n=10 时 150 < 实际 ~160 →
+    GraphRecursionError,返工即溢出;100+20×n 留舒适余量(n=10 → 300,
+    CLI/API 调用点澄清期按上限 10 给足)。
     """
-    return 50 + 10 * todo_count
+    return 100 + 20 * todo_count
 
 
 def _as_state(payload) -> TaskState:

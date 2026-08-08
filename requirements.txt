@@ -18,6 +18,7 @@ pytest
 # agent1(舆情方案生成 Agent)
 fastapi
 uvicorn
+sse-starlette>=3.4.8    # kingdee-plugin-agent api.py SSE 实时流(EventSourceResponse)
 langchain-mcp-adapters
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
