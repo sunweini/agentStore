@@ -1,5 +1,7 @@
 # tests/test_kingdee_api.py
 # 金蝶 WebAPI 元数据客户端测试(mock 响应,不连真实环境)。
+import zipfile
+
 import pytest
 from agents.kingdee_plugin_agent.tools.kingdee_api import KingdeeApiClient, KingdeeApiUnavailable
 
@@ -42,7 +44,31 @@ def test_smoke_verify(monkeypatch, tmp_path):
     r = client.deploy_and_verify(dll, "SAL_PurchaseOrder")
     assert r.ok is True
 
+def test_smoke_missing_dll_fails(tmp_path):
+    client = SmokeClient(KingdeeApiClient("http://k3", "u", "p", "dc"))
+    missing = tmp_path / "nope.dll"
+    r = client.deploy_and_verify(missing, "SAL_PurchaseOrder")
+    assert r.ok is False
+    assert str(missing) in r.detail  # detail 指明缺失路径
+
+def test_smoke_api_unavailable_fails(monkeypatch, tmp_path):
+    client = SmokeClient(KingdeeApiClient("http://k3", "u", "p", "dc"))
+    dll = tmp_path / "p.dll"
+    dll.write_bytes(b"mock-dll")
+    def boom(*a, **k):
+        raise KingdeeApiUnavailable("金蝶 API 错误:HTTP 500")
+    monkeypatch.setattr(client.api, "_post", boom)
+    r = client.deploy_and_verify(dll, "SAL_PurchaseOrder")
+    assert r.ok is False
+    assert "HTTP 500" in r.detail
+
 def test_package_build(tmp_path):
     builder = PackageBuilder(output_dir=tmp_path)
-    p = builder.build({"code": "x", "dll_path": tmp_path, "design": {}, "review": {}})
+    dll = tmp_path / "Plugin.dll"
+    dll.write_bytes(b"PE")
+    p = builder.build({"code": "x", "dll_path": dll, "design": {}, "review": {}})
     assert p.suffix == ".zip" and p.exists()
+    # 锁定 5 条目契约:源码 + DLL + 部署说明 + 设计/审查记录
+    with zipfile.ZipFile(p) as z:
+        assert set(z.namelist()) == {"source/Plugin.cs", "bin/Plugin.dll", "deploy.md",
+                                     "records/design.json", "records/review.json"}
