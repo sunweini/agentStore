@@ -15,6 +15,7 @@ agents.kingdee_plugin_agent.cli.build_graph 注入确定性模式(build_graph(ll
 """
 import argparse
 import os
+import time
 import uuid
 
 from langgraph.types import Command
@@ -48,9 +49,12 @@ def run_cli(argv: list[str] | None = None) -> int:
     # invoke 内),按上限 10 给足 —— 300 超步覆盖澄清 + 全流水线 + 返工重跑
     cfg = {"configurable": {"thread_id": f"kingdee-cli-{uuid.uuid4().hex}"},
            "recursion_limit": default_recursion_limit(10)}
+    # started_at: 任务创建时间戳,驱动全流程时间预算总闸(设计 §8)。
+    # 存于 state 而非 thread_id:interrupt 挂起 resume 后 checkpointer 恢复同一份值,不重置。
     state = {"requirement_spec": {"requirement": args.requirement,
                                   "environment": args.env},
-             "todo": []}
+             "todo": [],
+             "started_at": time.time()}
 
     # ── 交互澄清循环:interrupt 挂起 → 打印问题/摘要 → stdin 答复 → resume ──
     while True:

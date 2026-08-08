@@ -40,8 +40,9 @@ w1 ── 静态边 ──► supervisor
   2. 全部 delivered → `finish`
   3. 存在 failed → `fail:存在失败子任务`
   4. 返工预算耗尽且有未交付工作 → 剩余标记 failed → `fail:返工预算耗尽`
-  5. 有就绪批 → `run:<sid>`(LLM 存在时选优,确定性兜底派批首)
-  6. 无可派发 → LLM 决策(ask_user/finish/fail)或确定性 `ask_user`
+  5. 全流程时间预算超限(`started_at` 距今 >1800s,仍有未交付工作)→ 剩余标记 failed → `fail:时间预算耗尽`
+  6. 有就绪批 → `run:<sid>`(LLM 存在时选优,确定性兜底派批首)
+  7. 无可派发 → LLM 决策(ask_user/finish/fail)或确定性 `ask_user`
 - **LLM 动作校验(防幻觉)**:run 的 sid 必须 ∈ 当前就绪集合,否则回退派批首;澄清期(todo 空)LLM 幻觉 finish 会被 `_all_delivered` 门控拦下回退确定性兜底;fail 放行(主管裁量)。
 
 ### 1.2 依赖注入(build_graph)
@@ -89,6 +90,8 @@ w1 ── 静态边 ──► supervisor
 | `final_deliverable` | last-wins | 最近一个交付包(兼容既有契约) |
 | `final_deliverables` | 追加去重 | 多子任务交付包合并(v1 逐包) |
 | `environment` | — | 环境配置(冒烟 form_id 等) |
+| `started_at` | — | 建任务时间戳 `time.time()`(CLI/API 初始 state 写入);0.0 = 未设置(旧状态兼容,不判定);存于 state 而非 thread_id → 挂起 resume 后 checkpointer 恢复同一份值不重置;全流程时间预算总闸驱动(§10.2) |
+| `spec_version` | — | 需求版本号,spec 确认时置 1;确认后冻结不可变(§6 #26),w6 打包盖进交付包 `records/spec.json` |
 | `action` | — | 主管动作 `run:<sid>` \| `ask_user[:<问题>]` \| `finish` \| `fail[:<原因>]` |
 | `dispatch_id` | — | Send 分支输入通道(分支不写回) |
 | `user_feedback` | — | 用户反馈/补充 |
@@ -269,10 +272,11 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 19 | 验收拒绝原因沉淀失败 | 不阻塞验收(记录 warning 日志) |
 | 20 | 路径穿越 | ArtifactStore 子任务 id 白名单 `^[A-Za-z0-9_-]+$`,非法抛 ArtifactStoreError |
 | 21 | 并行写同一通道冲突 | todo/rework_events/final_deliverables 走 reducer;预算主管唯一写者;dispatch_id 分支不写回 |
-| 22 | 时间预算 | 编译单轮 ≤120s(httpx timeout);msbuild 后端 120s 超时;answers 端点等图挂起 ≤30s 否则 409 |
-| 23 | 澄清无限循环 | 逐问 ≤10 轮;确认最多 1 次补充,仍不确认带假设强制收口 |
-| 24 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 中断后内存任务存储重启即丢(v1 债务),重建任务重跑 |
-| 25 | 非法 skill 名 | load_skill 返回 error JSON + 可用列表 |
+| 22 | 时间预算 | 编译单轮 ≤120s(httpx timeout);msbuild 后端 120s 超时;answers 端点等图挂起 ≤30s 否则 409;单任务编译阶段 ≤15min 天然满足(5 轮 × 120s ≤10min);**全流程 ≤30min 图级总闸**:`started_at` 距今 >1800s 且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`(LLM 决策上下文摘要表含"已用/总闸"时长,可自行选择 fail) |
+| 23 | 需求版本冻结 | spec 确认(`spec_confirmed`)即冻结:`spec_version=1` 盖章,requirement_spec 此后无任何写路径(w1 只在未确认时改 spec);API answers 确认后仅接受 ask_user 类型恢复(409 拒绝 question/confirm 残留输入,防回归);修改需求须开新任务;w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json` |
+| 24 | 澄清无限循环 | 逐问 ≤10 轮;确认最多 1 次补充,仍不确认带假设强制收口 |
+| 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 中断后内存任务存储重启即丢(v1 债务),重建任务重跑 |
+| 26 | 非法 skill 名 | load_skill 返回 error JSON + 可用列表 |
 
 ## 7. 安全
 
@@ -340,6 +344,8 @@ default_recursion_limit(n) = 100 + 20 × n
 | 编译轮次 | ≤5(`MAX_COMPILE_ROUNDS`) | 服务不可用不计轮次 |
 | 澄清轮次 | ≤10(w1 `MAX_ROUNDS`) | 逐问上限;确认 ≤2 次尝试 |
 | 单轮编译 | ≤120s | httpx timeout + msbuild timeout |
+| 单任务编译阶段 | ≤15min(天然 ≤10min) | 5 轮 × 120s,w5 内部覆盖 |
+| 全流程时间预算 | ≤30min(`PIPELINE_TIME_BUDGET=1800.0`) | 图级总闸:decide 确定性 fail(§6 #22);`started_at` 由 CLI/API 建任务时写入 |
 | answers 等待 | ≤30s | 超时 409 让客户端重试 |
 | recursion_limit | 100+20n(调用点按 10 → 300) | 运行时 config |
 

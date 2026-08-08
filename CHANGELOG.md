@@ -5,6 +5,25 @@
 
 ---
 
+## v1.9.0 — 2026-08-08(kingdee-plugin-agent:时间预算 + 需求版本冻结,设计 §8 两项落地)
+
+### 新增功能
+
+- **全流程时间预算(30min 图级总闸)**:`graph/state.py` 新增 `PIPELINE_TIME_BUDGET=1800.0` 常量 + `TaskState.started_at`(缺省 0.0 = 未设置,旧状态兼容不判定);CLI/API 建任务时把 `started_at=time.time()` 写入初始 state(**存于 state 而非 thread_id,interrupt 挂起 resume 后 checkpointer 恢复同一份值不重置**);`Supervisor.decide` 新增第 5 步确定性检查:超限且有未交付工作 → 剩余子任务标记 failed → `fail:时间预算耗尽`(与返工预算同语义);LLM 决策上下文摘要表新增"时间预算: 已用 Xs / 总闸 1800s"行,LLM 可自行选择 fail。单轮编译 ≤120s 与单任务编译阶段 ≤15min(5 轮 × 120s 天然 ≤10min)已由 CompileClient timeout 覆盖,本项只补图级总闸。
+- **需求版本冻结**:`TaskState.spec_version`(缺省 1);spec 确认(`_confirm_and_split`)时显式盖章 `spec_version=1`,此后 requirement_spec 无任何写路径(w1 只在未确认时构建/修改 spec;确认后 ask_user 回答只记 user_feedback);API `deliver_answer` 加冻结锁 —— 确认后 answers 仅接受 ask_user 类型 interrupt 的恢复,其余 409「需求已确认并冻结,不能修改需求」(防未来回归松动冻结);w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json`(交付物可审计对应哪版需求),交付包契约 5 条目 → 6 条目。
+
+### 测试
+
+- tests/test_kingdee_agent.py 新增 8 项:TaskState 默认值(started_at=0.0 / spec_version=1)、decide 超预算(started_at 距今 2000s → fail:时间预算耗尽 + 剩余标记 failed)、started_at=0 正常派发不触发判定、LLM 上下文摘要含时间预算行、全流程确认后 `spec_version==1` 盖章、确认后中途 ask_user 回答不改 requirement_spec(快照前后一致)、API 建任务即写 started_at、API 确认后非 ask_user 恢复 409 / ask_user 恢复放行;test_kingdee_api.py 交付包契约更新为 6 条目并断言 `records/spec.json` 内容。全套 172 项全过(164 既有 + 8 新增)。
+
+### 文档
+
+- `agents/kingdee_plugin_agent/CLAUDE.md` 约束新增:时间预算(三级预算 + 总闸语义 + started_at 生命周期)与需求版本冻结(确认即冻结 + answers 锁 + 开新任务)两条。
+- `docs/kingdee-plugin-agent/tech.md`:decide 顺序补第 5 步时间预算;TaskState 表补 `started_at`/`spec_version` 行;错误处理表 #22 时间预算更新为三级预算 + 图级总闸,#23 新增需求版本冻结(原 23-25 顺延为 24-26);§10.2 预算表补单任务编译阶段与全流程时间预算两行。
+- `docs/kingdee-plugin-agent/manual.md`:answers 端点表补冻结 409 语义;常见问题新增 Q8(确认后改需求 → 开新任务)/ Q9(任务超时 → 30min 总闸);交付物解读补 `records/spec.json`。
+
+---
+
 ## v1.8.1 — 2026-08-08(kingdee-plugin-agent 三份文档:项目/技术/使用手册)
 
 ### 文档

@@ -98,6 +98,7 @@ def _send_payload(state: TaskState, subtask: Subtask) -> dict:
         "rework_budget_left": state.rework_budget_left,
         "environment": state.environment,
         "requirement_spec": state.requirement_spec,
+        "spec_version": state.spec_version,   # w6 打包把冻结版本盖进交付记录
         "final_deliverable": state.final_deliverable,
         "final_deliverables": state.final_deliverables,
     }
@@ -222,10 +223,15 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
         return {"confirm_attempts": attempts, "action": ""}
 
     def _confirm_and_split(state: TaskState, spec: dict) -> dict:
-        """确认通过:拆子任务(LLM plan)→ spec.json/plan.json 落盘 → 交回主管派发。"""
+        """确认通过:拆子任务(LLM plan)→ spec.json/plan.json 落盘 → 交回主管派发。
+
+        需求版本冻结(设计 §8):确认即冻结 —— 此处给 spec_version 盖章,此后
+        requirement_spec 不再被任何节点修改;要改需求须开新任务。
+        """
         todo = workers["w1"].split_subtasks(state, spec)
         workers["w1"].persist(spec, todo)
         return {"requirement_spec": spec, "todo": todo, "spec_confirmed": True,
+                "spec_version": 1,
                 "clarify_answers": [], "clarify_feedback": [],
                 "clarify_round": state.clarify_round + 1, "action": ""}
 

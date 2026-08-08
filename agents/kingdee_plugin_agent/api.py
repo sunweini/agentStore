@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 import uuid
 from datetime import datetime
 
@@ -171,12 +172,25 @@ class TaskHandle:
             }
 
     def deliver_answer(self, answer: str) -> None:
-        """投递澄清答复:仅在图挂起时生效;图仍在执行则等待,超时/已结束抛 409。"""
+        """投递澄清答复:仅在图挂起时生效;图仍在执行则等待,超时/已结束抛 409。
+
+        需求版本冻结(设计 §8):spec 确认后 requirement_spec 不可变,answers 只接受
+        执行中 ask_user 问题的恢复(图对 ask_user 的 resume 只记 user_feedback,
+        绝不写 requirement_spec);question/confirm 类型 interrupt 只出现在确认前
+        (未确认可继续改 spec)。确认后若收到非 ask_user 类型的恢复输入,说明
+        客户端试图把输入解释成 spec 修改路径 → 409 拒绝(防未来回归松动冻结)。
+        """
         with self._cond:
             if self.done or self.error:
                 raise HTTPException(409, "任务已结束,无需回答")
             if not self._cond.wait_for(lambda: self.waiting, timeout=_ANSWER_WAIT_S):
                 raise HTTPException(409, "任务当前未等待输入(可能仍在执行中),稍后重试")
+            confirmed = bool((self.state or {}).get("spec_confirmed")) \
+                if isinstance(self.state, dict) else False
+            itype = (self.interrupt or {}).get("type", "") \
+                if isinstance(self.interrupt, dict) else ""
+            if confirmed and itype != "ask_user":
+                raise HTTPException(409, "需求已确认并冻结,不能修改需求;如要修改请开新任务")
             self._resume = str(answer)
             self._cond.notify_all()
 
@@ -296,9 +310,12 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         # 数预算(与 CLI 同:澄清期未知子任务数,按上限 10 给足)
         cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
                "recursion_limit": default_recursion_limit(10)}
+        # started_at: 任务创建时间戳,驱动全流程时间预算总闸(设计 §8)。
+        # 存于 state 而非 thread_id:挂起 resume 后 checkpointer 恢复同一份值,不重置。
         state = {"requirement_spec": {"requirement": requirement,
                                       "environment": env_name},
-                 "todo": []}
+                 "todo": [],
+                 "started_at": time.time()}
         handle = TaskHandle(task_id, graph, cfg, state, experience=experience)
         app.state.tasks[task_id] = handle
         threading.Thread(target=_run_loop, args=(handle,), daemon=True).start()

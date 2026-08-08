@@ -53,6 +53,8 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail,剩余子任务标记 failed,CLI 输出 TodoList 摘要(部分产物/退回意见收集为设计意向,未实现);预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。
 - **并发上限**:`MAX_PARALLEL = 3`(send() 并行子任务 ≤3,防 DeepSeek 限流/超时风暴)。
 - **编译轮次**:w5 循环编译至多 `MAX_COMPILE_ROUNDS = 5` 轮;编译服务不可用 → 报 BLOCKED,不算轮次不扣预算。
+- **时间预算(设计 §8)**:单轮编译 ≤120s(CompileClient timeout)、单任务编译阶段 ≤15min(5 轮 × 120s 天然 ≤10min,由 w5 内部覆盖);全流程 ≤30min 图级总闸(`PIPELINE_TIME_BUDGET=1800.0`):`started_at` 距今超限且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`;`started_at` 由 CLI/API 建任务时写入初始 state(存于 state 而非 thread_id,挂起 resume 不重置);0.0 = 未设置(旧状态兼容不判定)。
+- **需求版本冻结(设计 §8)**:spec 确认(`spec_confirmed`)即冻结,`spec_version=1` 盖章,requirement_spec 此后无任何写路径 —— w1 只在未确认时构建/修改 spec,确认后中途问题(ask_user)的回答只记 user_feedback;API answers 确认后仅接受 ask_user 类型 interrupt 的恢复(其余 409「需求已确认并冻结」,防回归);修改需求须开新任务;w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json`(可审计)。
 - **环境硬门槛**:无金蝶环境不进图 —— CLI 未配 KD_BASE_URL 直接退出;API 4 项缺失 503 并点明缺项;冒烟客户端未配置 → BLOCKED → failed(防无限重试循环)。
 - **知识沉淀两态**:w7 写入经验库走 proposed/verified 两态 + "code|file_pattern" 签名去重(防幻觉污染);验收拒绝原因同通道(proposed 态,sha256 摘要入签名,失败不阻塞验收)。
 - **interrupt 语义**:挂起节点 resume 时整体重跑,payload 必须由 state 确定性得出(不依赖 LLM 重算);恢复用 `Command(resume=answer)`。

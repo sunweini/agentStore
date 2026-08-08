@@ -540,6 +540,24 @@ def test_package_worker_sets_deliverable(tmp_path):
     assert st.final_deliverable.endswith(".zip")
 
 
+def test_package_worker_stamps_spec_version(tmp_path):
+    """w6 打包把冻结版本 + spec 快照盖进交付包 records/spec.json(需求版本冻结可审计)。"""
+    import zipfile
+    w = PackageWorker(llm=None, store=ArtifactStore(root=tmp_path), builder=None,
+                      output_dir=tmp_path)
+    st = TaskState(requirement_spec={"requirement": "审核校验", "decisions": []},
+                   todo=[Subtask("A1", "bill", "x", [], "packaged")], spec_version=1)
+    st.todo[0].code_path = str(tmp_path / "A1" / "Plugin.cs")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub = Subtask("A1", "bill", "x", [], "packaged")
+    sub, msg = w.run(st, sub)
+    with zipfile.ZipFile(st.final_deliverable) as z:
+        record = _json.loads(z.read("records/spec.json"))
+    assert record["spec_version"] == 1
+    assert record["requirement_spec"]["requirement"] == "审核校验"
+
+
 def test_distill_proposes_but_never_blocks(tmp_path):
     from common.rag import RagClient, ExperienceStore
     client = RagClient(data_dir=tmp_path / "rag")
@@ -690,6 +708,7 @@ def test_graph_full_flow_to_finish(tmp_path):
     assert r["rework_budget_left"] == 3          # 无返工不扣预算
     assert r["final_deliverables"]               # 交付包已记录
     assert r["final_deliverable"].endswith(".zip")
+    assert r["spec_version"] == 1                # 需求确认即冻结,版本盖章
     # spec 落盘为 JSON(终审 C5:非 repr)
     spec = _json.loads((tmp_path / "requirement" / "spec.json").read_text(encoding="utf-8"))
     assert spec["decisions"][0]["a"] == "SAL_SaleOrder"
@@ -735,8 +754,11 @@ def test_graph_midrun_ask_user_interrupt(tmp_path):
     r = app.invoke(initial, cfg)
     assert r["__interrupt__"][0].value["type"] == "ask_user"
     assert r["__interrupt__"][0].value["question"] == "校验规则确认?"
+    spec_before = r["requirement_spec"]
     r = app.invoke(Command(resume="按 0 校验"), cfg)
     assert r["user_feedback"] == ["按 0 校验"]
+    # 需求版本冻结:确认后中途回答只记反馈,不改 requirement_spec(快照前后一致)
+    assert r["requirement_spec"] == spec_before
     assert r["action"] == "finish"
     assert _status_map(r["todo"]) == {"A1": "delivered"}
 
@@ -785,6 +807,42 @@ def test_supervisor_decide_terminal_logic():
         Subtask("A1", "bill", "x", ["B1"], "pending")])
     assert s.decide(st3).startswith("fail")
     assert {t.id: t.status for t in st3.todo} == {"A1": "failed", "B1": "failed"}
+
+
+# ── 时间预算(设计 §8 全流程 30min 总闸)──────────────────────────────
+
+def test_task_state_time_and_version_defaults():
+    """started_at 缺省 0.0(未设置,不触发预算判定);spec_version 缺省 1。"""
+    st = TaskState(requirement_spec={}, todo=[])
+    assert st.started_at == 0.0
+    assert st.spec_version == 1
+
+
+def test_supervisor_decide_time_budget_exceeded():
+    """全流程时间预算总闸:started_at 距今 >1800s 且有未交付工作 → fail:时间预算耗尽,
+    剩余子任务标记 failed(与返工预算同语义)。"""
+    import time as _t
+    s = Supervisor(llm=None, workers={})
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "pending")],
+                   started_at=_t.time() - 2000)
+    assert s.decide(st) == "fail:时间预算耗尽"
+    assert st.todo[0].status == "failed"
+
+
+def test_supervisor_decide_zero_started_at_normal():
+    """started_at=0.0(未设置/旧状态兼容)不触发时间预算判定,正常派发。"""
+    s = Supervisor(llm=None, workers={})
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "pending")])
+    assert s.decide(st) == "run:A1"
+
+
+def test_supervisor_llm_context_includes_time_budget():
+    """LLM 决策上下文含时间预算:摘要表带已用/总闸时长,LLM 可选择 fail。"""
+    import time as _t
+    s = Supervisor(llm=None, workers={})
+    st = TaskState(requirement_spec={}, todo=[], started_at=_t.time() - 100)
+    table = s._summary_table(st)
+    assert "时间预算" in table and "总闸 1800s" in table
 
 
 def test_supervisor_llm_finish_with_empty_todo_falls_back():
@@ -1044,6 +1102,7 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
 # ═══════════════════════════ C12 Web API(apikey + SSE + 澄清/验收)═══════════════════════════
 import time as _time
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from agents.kingdee_plugin_agent.api import create_app
@@ -1215,6 +1274,45 @@ def test_api_answers_conflict_when_task_done(tmp_path, monkeypatch):
     r = client.post(f"/tasks/{tid}/answers", json={"answer": "多余回答"},
                     headers=_HEADERS)
     assert r.status_code == 409
+
+
+def test_api_task_creation_sets_started_at(tmp_path, monkeypatch):
+    """建任务即打时间戳:started_at 入初始 state,驱动全流程时间预算总闸(设计 §8)。"""
+    _set_kd_env(monkeypatch)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    tid = _create_task(client, tmp_path)
+    handle = client.app.state.tasks[tid]
+    assert handle.state["started_at"] > 0
+
+
+def test_api_answers_frozen_after_confirmation_non_ask_user():
+    """需求版本冻结:确认后 answers 拒绝非 ask_user 类型的恢复输入(409)——
+    防止任何可被解释为 spec 修改的路径(question/confirm 只出现在确认前)。"""
+    from agents.kingdee_plugin_agent.api import TaskHandle
+    handle = TaskHandle("t1", graph=object(), cfg={},
+                        initial_state={"spec_confirmed": True,
+                                       "requirement_spec": {"requirement": "x"},
+                                       "todo": []})
+    handle.waiting = True
+    handle.interrupt = {"type": "question", "round": 0, "text": "x"}
+    with pytest.raises(HTTPException) as ei:
+        handle.deliver_answer("改成 Y")
+    assert ei.value.status_code == 409
+    assert "冻结" in ei.value.detail
+
+
+def test_api_answers_ask_user_ok_after_confirmation():
+    """确认后 ask_user(执行中问题)恢复仍可用:只记反馈,不改 spec。"""
+    from agents.kingdee_plugin_agent.api import TaskHandle
+    handle = TaskHandle("t1", graph=object(), cfg={},
+                        initial_state={"spec_confirmed": True,
+                                       "requirement_spec": {"requirement": "x"},
+                                       "todo": []})
+    handle.waiting = True
+    handle.interrupt = {"type": "ask_user", "question": "补充什么?"}
+    handle.deliver_answer("按 0 校验")
+    assert handle._resume == "按 0 校验"
 
 
 def test_api_sse_streams_progress(tmp_path, monkeypatch):

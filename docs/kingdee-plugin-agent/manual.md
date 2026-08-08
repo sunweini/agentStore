@@ -138,7 +138,7 @@ uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload
 | POST | `/tasks` | `{"requirement": "…", "env": "test"}` | `{"task_id": "…", "status": "created"}`(200);400 requirement 必填;503 KD_* 4 项缺失(点明缺项);401 apikey 无效 |
 | GET | `/tasks/{id}/events` | — | SSE 流,事件:`todo`(子任务快照)/ `interrupt`(澄清问题/确认摘要)/ `acceptance`(验收结论)/ `done`(含全量快照)/ `error`;断线重连自动重放,结束发 sentinel 关流 |
 | GET | `/tasks/{id}/state` | — | 全量快照:`{task_id, status(running/waiting/done/error), done, error, interrupt, todo, final_deliverables, acceptance}`;404 任务不存在 |
-| POST | `/tasks/{id}/answers` | `{"answer": "…"}`(或 `text`) | `{"ok": true, "task_id": "…"}`;400 answer 必填;409 任务未在等待输入(30s 等待超时/已结束) |
+| POST | `/tasks/{id}/answers` | `{"answer": "…"}`(或 `text`) | `{"ok": true, "task_id": "…"}`;400 answer 必填;409 任务未在等待输入(30s 等待超时/已结束);**需求确认冻结后仅接受执行中问题(ask_user)的恢复,其余 409** |
 | POST | `/tasks/{id}/acceptance` | `{"accepted": true\|false, "reason": "…"}` | `{"ok": true, "task_id": "…", "acceptance": {accepted, reason, at}}`;拒绝 + 原因 → 经验库 propose("ARTIFACT", sha256(reason)[:12], …) |
 
 `POST /tasks` 建任务后由后台线程执行图;`interrupt` 事件挂起时,客户端把用户答复 POST 到 `/answers` 恢复图(`Command(resume=...)`),与 CLI stdin 同语义。
@@ -168,7 +168,13 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 → `X-API-Key` 头值须与 `KINGDEE_API_KEY`(或 `API_KEYS_JSON` 首个 key)一致;未配置任何 key 时默认拒绝全部请求。
 
 **Q7: 交付包能直接用吗?**
-→ 交付包含源码 + 部署说明 + records 占位文件(设计/审查记录未接线,当前为空 `{}`);DLL 当前不入包(w6 未接编译输出,待真实编译后端产出后入包)。**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁。
+→ 交付包含源码 + 部署说明 + records(设计/审查记录未接线,当前为空 `{}`;`spec.json` 已接线:记录需求版本号与冻结的需求快照);DLL 当前不入包(w6 未接编译输出,待真实编译后端产出后入包)。**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁。
+
+**Q8: 需求确认后想改需求怎么办?**
+→ 需求在确认时冻结(`spec_version=1`),确认后任何输入都不会再改动需求规格 —— 中途问题(ask_user)的回答只作为反馈记录;确认后 answers 端点只接受执行中问题的恢复(其余 409"需求已确认并冻结")。要改需求请**开一个新任务**重跑(设计 §8 需求版本冻结)。
+
+**Q9: 任务跑了很久没结束?**
+→ 全流程时间预算 30min 图级总闸:超时且仍有未交付子任务 → 自动收尾失败(`fail:时间预算耗尽`),剩余子任务标记 failed。单轮编译 ≤120s、单任务编译阶段 ≤15min(5 轮 × 120s 天然满足)由编译环节内部覆盖。真超时通常是编译服务不可用/LLM 故障,先查 §5 Q2。
 
 ## 6. 交付物解读(zip 内容)
 
@@ -178,6 +184,7 @@ deliverable-<子任务id>-<时间戳>.zip
 ├── bin/Plugin.dll          # 编译产物(当前为空:打包器未接编译输出,DLL 待真实编译后端产出后入包)
 ├── deploy.md               # 部署说明(上传 DLL 到金蝶 BOS 插件目录,刷新注册)
 └── records/
+    ├── spec.json           # 需求版本冻结记录:{"spec_version": 1, "requirement_spec": 冻结的需求快照}
     ├── design.json         # 当前为空占位 {} (设计记录未接线)
     └── review.json         # 当前为空占位 {} (审查记录未接线)
 ```

@@ -22,13 +22,19 @@
 路由函数只做机械映射;依赖失败传递在派发前做,防止把失败依赖的依赖者派发出去。
 """
 import json
+import time
 from pathlib import Path
 from typing import Literal
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
-from agents.kingdee_plugin_agent.graph.state import TaskState, Subtask, MAX_PARALLEL
+from agents.kingdee_plugin_agent.graph.state import (
+    PIPELINE_TIME_BUDGET,
+    TaskState,
+    Subtask,
+    MAX_PARALLEL,
+)
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 
 #: 子任务状态 → 下一阶段 worker。生命周期见 state.py 模块 docstring。
@@ -85,6 +91,10 @@ class Supervisor:
 
     def _summary_table(self, state: TaskState) -> str:
         lines = [f"返工预算剩余: {state.rework_budget_left}"]
+        if state.started_at:
+            # 时间预算写进 LLM 决策上下文:LLM 可感知全流程 30min 总闸并选择 fail
+            lines.append(f"时间预算: 已用 {int(time.time() - state.started_at)}s / "
+                         f"总闸 {int(PIPELINE_TIME_BUDGET)}s")
         for fb in state.user_feedback[-3:]:
             lines.append(f"  用户反馈: {fb}")
         for s in state.todo:
@@ -168,8 +178,13 @@ class Supervisor:
           2. 全部 delivered → finish
           3. 存在 failed → fail(依赖传递后)
           4. 返工预算耗尽且仍有未交付工作 → fail(剩余标记 failed)
-          5. 有可派发 → run:<sid>(LLM 存在时让其选优;确定性兜底派批首)
-          6. 无可派发 → LLM 决策(ask_user/finish/fail)或确定性 ask_user
+          5. 全流程时间预算超限(>1800s)且仍有未交付工作 → fail(剩余标记 failed)
+          6. 有可派发 → run:<sid>(LLM 存在时让其选优;确定性兜底派批首)
+          7. 无可派发 → LLM 决策(ask_user/finish/fail)或确定性 ask_user
+
+        时间预算(设计 §8):单轮编译 ≤120s(CompileClient timeout)与单任务编译阶段
+        ≤15min(5 轮 × 120s 天然 ≤10min)由 w5 内部覆盖;此处为全流程 30min 图级总闸。
+        started_at=0.0 视为未设置(旧状态/单测兼容),不做判定。
         """
         self._cascade_failed(state)
         if self._all_delivered(state):
@@ -181,6 +196,11 @@ class Supervisor:
             for s in remaining:
                 s.status = "failed"
             return "fail:返工预算耗尽"
+        if (state.started_at
+                and time.time() - state.started_at > PIPELINE_TIME_BUDGET and remaining):
+            for s in remaining:
+                s.status = "failed"
+            return "fail:时间预算耗尽"
         ready = self._ready_batch(state)
         if ready:
             if self.llm is not None:

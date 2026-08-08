@@ -19,6 +19,7 @@ TASK_STATUS = ("pending", "in_progress", "design_done", "gen_done", "review_done
 
 GLOBAL_REWORK_BUDGET = 3   # 全局返工预算:总重新生成 ≤3 轮
 MAX_PARALLEL = 3           # send() 并行子任务上限
+PIPELINE_TIME_BUDGET = 1800.0  # 全流程时间预算(秒):图级总闸(设计 §8 时间预算超限)
 
 
 @dataclass
@@ -83,6 +84,12 @@ class TaskState:
     final_deliverable: Annotated[str, _last_wins] = ""   # 最近一个交付包(兼容 C9 既有契约)
     final_deliverables: Annotated[list[str], _merge_deliverables] = field(default_factory=list)
     environment: dict = field(default_factory=dict)
+    # ── 时间预算(设计 §8)──
+    # started_at: 建任务时间戳(time.time());0.0 = 未设置(旧状态兼容,不做预算判定)。
+    # 存于 state 而非 thread_id:挂起 resume 后 checkpointer 恢复同一份值,不重置。
+    # spec_version: 需求版本号,spec 确认时置 1;确认后冻结不可变,修改需求须开新任务。
+    started_at: float = 0.0
+    spec_version: int = 1
     # ── 主管循环(agent.py)──
     action: str = ""                     # run:<sid> | ask_user[:<问题>] | finish | fail[:<原因>]
     dispatch_id: str = ""                # Send 分支输入通道(分支不写回,并行写会冲突)

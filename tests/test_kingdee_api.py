@@ -1,5 +1,6 @@
 # tests/test_kingdee_api.py
 # 金蝶 WebAPI 元数据客户端测试(mock 响应,不连真实环境)。
+import json
 import zipfile
 
 import pytest
@@ -78,9 +79,14 @@ def test_package_build(tmp_path):
     builder = PackageBuilder(output_dir=tmp_path)
     dll = tmp_path / "Plugin.dll"
     dll.write_bytes(b"PE")
-    p = builder.build({"code": "x", "dll_path": dll, "design": {}, "review": {}})
+    p = builder.build({"code": "x", "dll_path": dll, "design": {}, "review": {},
+                       "spec_version": 1, "requirement_spec": {"requirement": "审核校验"}})
     assert p.suffix == ".zip" and p.exists()
-    # 锁定 5 条目契约:源码 + DLL + 部署说明 + 设计/审查记录
+    # 锁定 6 条目契约:源码 + DLL + 部署说明 + 设计/审查记录 + 需求版本冻结记录
     with zipfile.ZipFile(p) as z:
         assert set(z.namelist()) == {"source/Plugin.cs", "bin/Plugin.dll", "deploy.md",
-                                     "records/design.json", "records/review.json"}
+                                     "records/design.json", "records/review.json",
+                                     "records/spec.json"}
+        spec = json.loads(z.read("records/spec.json"))
+        assert spec["spec_version"] == 1                      # 冻结版本盖章
+        assert spec["requirement_spec"]["requirement"] == "审核校验"

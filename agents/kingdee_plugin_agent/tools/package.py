@@ -23,4 +23,10 @@ class PackageBuilder:
             z.writestr("deploy.md", "部署说明:上传 bin/Plugin.dll 到金蝶 BOS 插件目录,刷新注册\n")
             z.writestr("records/design.json", json.dumps(deliverable.get("design", {}), ensure_ascii=False, indent=2))
             z.writestr("records/review.json", json.dumps(deliverable.get("review", {}), ensure_ascii=False, indent=2))
+            # 需求版本冻结记录:spec_version + 冻结的需求 spec 快照(设计 §8)。
+            # 交付物可审计"这份包对应哪版需求";无 spec_version 时给 1(兼容直连调用)。
+            z.writestr("records/spec.json", json.dumps({
+                "spec_version": deliverable.get("spec_version", 1),
+                "requirement_spec": deliverable.get("requirement_spec", {}),
+            }, ensure_ascii=False, indent=2))
         return out

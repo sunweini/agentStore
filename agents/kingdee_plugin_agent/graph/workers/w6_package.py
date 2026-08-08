@@ -20,8 +20,12 @@ class PackageWorker(WorkerBase):
     def _execute(self, state, subtask) -> dict:
         from agents.kingdee_plugin_agent.tools.package import PackageBuilder
         builder = self.builder or PackageBuilder(output_dir=self.output_dir)
+        # 需求版本冻结(设计 §8):spec_version + 冻结 spec 快照盖进交付记录
+        # (records/spec.json),交付物可审计"这份包对应哪个版本的需求"。
         deliverable = {"code": self.store.read(subtask.id, "Plugin.cs"), "dll_path": "",
-                       "subtask_id": subtask.id}  # 文件名带子任务 id,并行打包互不覆盖
+                       "subtask_id": subtask.id,  # 文件名带子任务 id,并行打包互不覆盖
+                       "spec_version": state.spec_version,
+                       "requirement_spec": state.requirement_spec}
         path = builder.build(deliverable)
         state.final_deliverable = str(path)
         return {"status": "DONE", "artifact_key": "final_deliverable", "path": str(path),
