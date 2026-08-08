@@ -197,3 +197,149 @@ def test_review_verdict_logic_critical_to_needs_fixes(tmp_path):
     assert sub.report["path"].endswith("review.json")
     findings = json.loads((tmp_path / "A1" / "review.json").read_text(encoding="utf-8"))
     assert findings and findings[0]["severity"] == "Critical"
+
+
+from agents.kingdee_plugin_agent.graph.workers.w5_compile import (
+    CompileWorker,
+    MAX_COMPILE_ROUNDS,
+)
+from agents.kingdee_plugin_agent.graph.workers.w5_5_smoke import SmokeWorker
+from compile_service.models import CompileError, CompileResult, CompileUnavailableError
+from agents.kingdee_plugin_agent.tools.smoke_client import SmokeResult
+
+
+class FakeCompileClient:
+    """fail_first 轮失败、其后通过;health 恒可用。"""
+
+    def __init__(self, fail_first=0):
+        self.calls = 0
+        self.fail_first = fail_first
+
+    def health(self):
+        return True
+
+    def compile(self, code, project_name):
+        self.calls += 1
+        if self.calls <= self.fail_first:
+            return CompileResult(success=False, raw_output="", duration_ms=0,
+                                 errors=[CompileError("P.cs", 1, "CS0103", "xxx()", True)])
+        return CompileResult(success=True, raw_output="", duration_ms=0, errors=[])
+
+
+def _write_code(tmp_path, sub):
+    sub.code_path = str(tmp_path / "A1" / "Plugin.cs")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+
+
+def test_compile_fix_loop(tmp_path):
+    """修复循环真实生效:第 1 轮失败 → 重编 → 第 2 轮通过(2 轮)。"""
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=1))
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert w.client.calls == 2        # 失败 1 轮 + 重编通过 1 轮
+    assert sub.compile_errors == []   # 通过后清空错误
+    assert "STATUS: DONE" in msg and "第 2 轮" in msg
+
+
+def test_compile_service_down_is_blocked(tmp_path):
+    """健康探测前置:服务不可用 → BLOCKED,不算编译轮次(不触达 compile)。"""
+
+    class Down:
+        def health(self):
+            return False
+
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path), compile_client=Down())
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    sub, msg = w.run(st, sub)
+    assert "BLOCKED" in msg  # 服务不可用不算编译轮次
+    assert sub.compile_errors == []
+
+
+def test_compile_503_midway_is_blocked(tmp_path):
+    """compile 期间 503(容器中途挂)→ BLOCKED,不算轮次。"""
+
+    class Unavailable:
+        def health(self):
+            return True
+
+        def compile(self, code, project_name):
+            raise CompileUnavailableError("compiler unavailable")
+
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=Unavailable())
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "BLOCKED" in msg and "503" in msg
+
+
+def test_compile_exhausted_decrements_budget(tmp_path):
+    """5 轮全失败 → BLOCKED 并扣全局返工预算 1。"""
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=99))
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert w.client.calls == MAX_COMPILE_ROUNDS  # 重编上限 5 轮
+    assert "BLOCKED" in msg
+    assert st.rework_budget_left == 2            # 编译超限扣 1 预算
+    assert sub.compile_errors                    # 最后一轮错误留存
+
+
+def test_compile_error_retrieves_experience(tmp_path):
+    """失败轮次检索经验库:命中附到 compile_errors,供 C10 LLM 修复。"""
+
+    class FakeExperience:
+        def __init__(self):
+            self.searched = []
+
+        def search_related(self, error_code, message, k=3):
+            self.searched.append(error_code)
+            return [{"text": f"[{error_code}] 缺引用 Kingdee.BOS.Core 修复:加 using",
+                     "score": 0.9, "metadata": {}}]
+
+    exp = FakeExperience()
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=99), experience=exp)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert exp.searched == ["CS0103"] * MAX_COMPILE_ROUNDS  # 每失败轮次按错误码检索
+    assert sub.compile_errors[0]["experience"][0].startswith("[CS0103]")
+
+
+def test_smoke_ok_no_budget_change(tmp_path):
+    class FakeSmoke:
+        def deploy_and_verify(self, dll_path, form_id):
+            assert form_id == "SAL_SaleOrder"  # 环境里取 form_id
+            return SmokeResult(ok=True, detail="assembly 加载 + 映射验证通过")
+
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    st.environment = {"form_id": "SAL_SaleOrder"}
+    w = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path), smoke_client=FakeSmoke())
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "STATUS: DONE" in msg
+    assert st.rework_budget_left == 3  # 冒烟成功不扣预算
+
+
+def test_smoke_fail_decrements_budget(tmp_path):
+    class FakeSmoke:
+        def deploy_and_verify(self, dll_path, form_id):
+            return SmokeResult(ok=False, detail="FormId 映射缺失")
+
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    w = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path), smoke_client=FakeSmoke())
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    sub, msg = w.run(st, sub)
+    assert "STATUS: BLOCKED" in msg
+    assert st.rework_budget_left == 2  # 冒烟失败扣 1 预算
