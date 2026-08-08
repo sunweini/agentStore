@@ -852,3 +852,222 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
     assert "需求确认摘要" in out                       # 确认摘要已展示给用户
     assert "TodoList 摘要" in out                     # TodoList 摘要已打印
     assert ".zip" in out                              # 交付包路径已打印
+
+# ═══════════════════════════ C12 Web API(apikey + SSE + 澄清/验收)═══════════════════════════
+import time as _time
+
+from fastapi.testclient import TestClient
+
+from agents.kingdee_plugin_agent.api import create_app
+
+_KD_ENV = {"KD_BASE_URL": "http://kd-test:8080", "KD_USERNAME": "u",
+           "KD_PASSWORD": "p", "KD_DATA_CENTER": "dc"}
+_HEADERS = {"X-API-Key": "k"}
+
+
+def _set_kd_env(monkeypatch):
+    """KD_* 4 项环境齐备(环境硬门槛需全量校验,C11 复审 carry-over)。"""
+    for name, value in _KD_ENV.items():
+        monkeypatch.setenv(name, value)
+
+
+def _det_graph_factory(tmp_path):
+    """确定性图工厂:llm=None + fake 编译/冒烟/打包(与 C11 CLI 同一注入思路)。"""
+    return build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                       compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                       output_dir=tmp_path)
+
+
+def _create_task(client, tmp_path, requirement="给采购单审核加库存校验"):
+    """建任务(环境齐备 + 确定性图)→ 返回 task_id。"""
+    r = client.post("/tasks", json={"requirement": requirement, "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    return r.json()["task_id"]
+
+
+def _wait_state(client, task_id, pred, timeout=15):
+    """轮询 /state 直到 pred(快照)成立;超时抛错。"""
+    deadline = _time.time() + timeout
+    last = None
+    while _time.time() < deadline:
+        last = client.get(f"/tasks/{task_id}/state", headers=_HEADERS).json()
+        if pred(last):
+            return last
+        _time.sleep(0.05)
+    raise AssertionError(f"state 超时未满足({timeout}s): {last}")
+
+
+def _run_to_done(client, task_id, timeout=30):
+    """答澄清问题 + 确认 → 确定性全流程跑完 → 终态快照(done)。"""
+    for ans in ("SAL_SaleOrder", "确认"):
+        r = client.post(f"/tasks/{task_id}/answers", json={"answer": ans},
+                        headers=_HEADERS)
+        assert r.status_code == 200, r.text
+    return _wait_state(client, task_id, lambda s: s["done"], timeout=timeout)
+
+
+def _sse_all(client, task_id, timeout=15):
+    """连接 SSE 读到流结束(任务完成 → 服务端自动关闭);返回全部事件。
+
+    注:本仓库 starlette 1.4.1 的 TestClient 传输为缓冲式(handle_request 等 app
+    完成后才返回响应),故只在任务结束后连 SSE 读全量回放 —— 与断线重连语义一致;
+    实时推送路径由 test_task_handle_live_push_and_close 单元覆盖。
+    """
+    out = []
+    with client.stream("GET", f"/tasks/{task_id}/events", headers=_HEADERS) as resp:
+        assert resp.status_code == 200
+        buf, deadline = "", _time.time() + timeout
+        it = resp.iter_text()
+        while _time.time() < deadline:
+            try:
+                buf += next(it)
+            except StopIteration:
+                break
+        buf = buf.replace("\r\n", "\n")     # SSE 行分隔是 CRLF,先归一化
+        while "\n\n" in buf:
+            raw, buf = buf.split("\n\n", 1)
+            evt = {}
+            for line in raw.split("\n"):
+                line = line.strip()
+                if line.startswith("event:"):
+                    evt["event"] = line[6:].strip()
+                elif line.startswith("data:"):
+                    evt["data"] = line[5:].strip()
+            if evt:
+                evt["data"] = _json.loads(evt["data"])
+                out.append(evt)
+    assert out, "SSE 无事件"
+    return out
+
+
+def test_api_requires_apikey():
+    """无 apikey(且未配置)→ 401:默认拒绝。"""
+    client = TestClient(create_app())
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"})
+    assert r.status_code == 401
+
+
+def test_api_auth_then_task(monkeypatch):
+    """正确 apikey 通过鉴权;环境未配置 → 503(非 500/401)。"""
+    client = TestClient(create_app(api_key="k"))
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code in (200, 503)
+
+
+def test_acceptance_feed(monkeypatch):
+    """未知任务验收 → 404(只有 POST 创建的任务存在)。"""
+    client = TestClient(create_app(api_key="k"))
+    r = client.post("/tasks/1/acceptance", json={"accepted": False, "reason": "逻辑不符"},
+                    headers=_HEADERS)
+    assert r.status_code == 404
+
+
+def test_api_env_gate_lists_all_missing_vars(monkeypatch):
+    """环境硬门槛:缺 KD_USERNAME/PASSWORD/DATA_CENTER 也要 503 并点明(C11 复审 carry-over)。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")   # 只给 1 项
+    client = TestClient(create_app(api_key="k"))
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    for missing in ("KD_USERNAME", "KD_PASSWORD", "KD_DATA_CENTER"):
+        assert missing in detail
+
+
+def test_api_create_state_and_answers(tmp_path, monkeypatch):
+    """建任务 → /state 可见澄清 interrupt → answers 恢复 → 全流程 done(确定性图)。"""
+    _set_kd_env(monkeypatch)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    tid = _create_task(client, tmp_path)
+    st = _wait_state(client, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    assert st["status"] == "waiting"
+    st = _run_to_done(client, tid)
+    assert st["final_deliverables"]
+    assert st["todo"][0]["status"] == "delivered"
+
+
+def test_api_state_rejects_unknown_task():
+    """未知任务:state/events/answers 全部明确 404(只有 POST 创建的任务存在)。"""
+    client = TestClient(create_app(api_key="k"))
+    assert client.get("/tasks/nope/state", headers=_HEADERS).status_code == 404
+    assert client.get("/tasks/nope/events", headers=_HEADERS).status_code == 404
+    assert client.post("/tasks/nope/answers", json={"answer": "x"},
+                       headers=_HEADERS).status_code == 404
+
+
+def test_api_answers_conflict_when_task_done(tmp_path, monkeypatch):
+    """任务已结束再答题 → 409(不阻塞、不静默丢答案)。"""
+    _set_kd_env(monkeypatch)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    tid = _create_task(client, tmp_path)
+    _run_to_done(client, tid)
+    r = client.post(f"/tasks/{tid}/answers", json={"answer": "多余回答"},
+                    headers=_HEADERS)
+    assert r.status_code == 409
+
+
+def test_api_sse_streams_progress(tmp_path, monkeypatch):
+    """SSE:todo/interrupt/done 事件流 + 重放;任务结束后流自动关闭(可读到 EOF)。"""
+    _set_kd_env(monkeypatch)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    tid = _create_task(client, tmp_path)
+    _run_to_done(client, tid)
+    events = _sse_all(client, tid)
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "todo"                                     # 事件从 todo 开始
+    assert "interrupt" in kinds
+    assert events[kinds.index("interrupt")]["data"]["type"] == "question"
+    assert kinds[-1] == "done"                                    # 流以 done 结束
+    assert events[-1]["data"]["done"] is True
+    assert events[-1]["data"]["todo"]                             # done 带全量快照
+
+
+def test_task_handle_live_push_and_close():
+    """SSE 实时推送路径(单元级):订阅回调即时收到图线程事件;done 后 sentinel 关闭。"""
+    from agents.kingdee_plugin_agent.api import TaskHandle
+    handle = TaskHandle("t", graph=None, cfg={}, initial_state={})
+    got = []
+    with handle._cond:
+        handle._subscribers.append(got.append)
+    handle._emit("todo", [])
+    handle._set_interrupt({"type": "question", "text": "?"})
+    assert [e["event"] for e in got] == ["todo", "interrupt"]
+    handle._set_done()
+    assert [e["event"] for e in got[:-1]] == ["todo", "interrupt", "done"]
+    assert got[-1] is None   # sentinel:结束 SSE 流
+    assert handle.snapshot()["status"] == "done"
+
+
+def test_api_acceptance_reject_feeds_w7(tmp_path, monkeypatch):
+    """拒绝 + 原因 → 喂 w7 经验库(注入 recorder);接受不喂;验收结论可查。"""
+    _set_kd_env(monkeypatch)
+
+    class _RecordingExp:
+        def __init__(self):
+            self.proposed = []
+
+        def propose(self, code, file_pattern, message, fix):
+            self.proposed.append((code, message))
+            return f"{code}|{file_pattern}"
+
+    exp = _RecordingExp()
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path),
+                                   experience=exp))
+    tid = _create_task(client, tmp_path)
+    _run_to_done(client, tid)
+    r = client.post(f"/tasks/{tid}/acceptance",
+                    json={"accepted": False, "reason": "逻辑不符"}, headers=_HEADERS)
+    assert r.status_code == 200
+    assert exp.proposed and exp.proposed[-1][1] == "逻辑不符"
+    r = client.post(f"/tasks/{tid}/acceptance", json={"accepted": True}, headers=_HEADERS)
+    assert r.status_code == 200
+    assert len(exp.proposed) == 1  # 接受不新增沉淀
+    st = client.get(f"/tasks/{tid}/state", headers=_HEADERS).json()
+    assert st["acceptance"]["accepted"] is True   # 最后结论(覆盖语义)
