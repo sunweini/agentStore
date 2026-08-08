@@ -134,3 +134,20 @@ def test_spec_split_subtasks():
             "subtasks": [{"id": "A", "plugin_type": "bill", "deps": ["B"]},
                           {"id": "B", "plugin_type": "service", "deps": []}]}
     assert spec["subtasks"][0]["deps"] == ["B"]
+
+
+from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignWorker, TYPE_PROMPTS
+
+
+def test_design_type_prompt_mapping():
+    assert TYPE_PROMPTS["bill"].endswith("bill.md")
+    assert set(TYPE_PROMPTS) == {"bill", "service", "list"}
+
+
+def test_design_worker_executes(tmp_path):
+    w = DesignWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "in_progress")
+    sub, msg = w.run(st, sub)
+    assert sub.design_path.endswith("design.md")
+    assert "STATUS: DONE" in msg
