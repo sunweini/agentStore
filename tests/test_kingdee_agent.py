@@ -151,3 +151,49 @@ def test_design_worker_executes(tmp_path):
     sub, msg = w.run(st, sub)
     assert sub.design_path.endswith("design.md")
     assert "STATUS: DONE" in msg
+
+
+from agents.kingdee_plugin_agent.graph.workers.w3_generate import GenerateWorker
+from agents.kingdee_plugin_agent.graph.workers.w4_review import ReviewWorker, VERDICTS
+
+
+def test_generate_produces_code(tmp_path):
+    w = GenerateWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "gen_done")
+    sub.design_path = str(tmp_path / "A1" / "design.md")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "design.md").write_text("# 设计", encoding="utf-8")
+    sub, msg = w.run(st, sub)
+    assert sub.code_path.endswith("Plugin.cs")
+
+
+def test_review_verdicts():
+    assert set(VERDICTS) == {"Approved", "Needs fixes"}
+
+
+def test_review_findings_structure(tmp_path):
+    w = ReviewWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "review_done")
+    sub.code_path = str(tmp_path / "A1" / "Plugin.cs")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub, msg = w.run(st, sub)
+    assert sub.review_verdict in VERDICTS
+
+
+def test_review_verdict_logic_critical_to_needs_fixes(tmp_path):
+    """裁决逻辑真实:代码残留未渲染模板占位符 → Critical → Needs fixes。"""
+    import json
+    w = ReviewWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None)
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "review_done")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text(
+        "public class X { /* {{BUSINESS_LOGIC}} */ }", encoding="utf-8")
+    sub, msg = w.run(st, sub)
+    assert sub.review_verdict == "Needs fixes"
+    assert sub.report["path"].endswith("review.json")
+    findings = json.loads((tmp_path / "A1" / "review.json").read_text(encoding="utf-8"))
+    assert findings and findings[0]["severity"] == "Critical"
