@@ -124,7 +124,12 @@ class Supervisor:
         status_by_id = {t.id: t.status for t in state.todo}
         ready: list[Subtask] = []
         for s in state.todo:
-            if worker_for_subtask(s) is None:  # 终态/不可派发状态
+            worker = worker_for_subtask(s)
+            if worker is None or worker == "w1":
+                # 终态不可派发;blocked(worker 映射为 w1)也不进批 —— w1 是交互
+                # 节点,不走 Send 分支;blocked 子任务由主管走 ask_user 问用户,
+                # 若进批会导致 supervisor↔dispatcher 空派发忙循环(burn 完
+                # recursion_limit,终审 C10 review 实测 GraphRecursionError)
                 continue
             if s.status == "pending" and not all(
                     status_by_id.get(d) in (None, "packaged", "delivered") for d in s.deps):

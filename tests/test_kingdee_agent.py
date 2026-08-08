@@ -780,3 +780,35 @@ def test_agent_name_and_recursion_formula():
     assert AGENT_NAME == "kingdee_plugin_agent"
     assert default_recursion_limit(0) == 50
     assert default_recursion_limit(3) == 80
+
+
+# ── C10 复审修复(Important 1/2)─────────────────────────────────────────
+
+def test_supervisor_blocked_subtask_not_in_ready_batch():
+    """复审 Important 1:blocked 子任务不进就绪批 → decide 走 ask_user,不陷入 run:<id> 忙循环。"""
+    s = Supervisor(llm=None, workers={})
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "blocked")])
+    assert s._ready_batch(st) == []
+    assert s.decide(st) == "ask_user"   # 确定性兜底 → 问用户,不再发 run:<A1>
+
+
+def test_graph_blocked_subtask_no_busy_loop(tmp_path):
+    """复审 Important 1:blocked 子任务 invoke 挂起在 w1 interrupt,不触 GraphRecursionError。"""
+    from langgraph.errors import GraphRecursionError
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path), output_dir=tmp_path)
+    cfg = {"configurable": {"thread_id": "blk"}, "recursion_limit": 40}
+    try:
+        r = app.invoke({"requirement_spec": {},
+                        "todo": [Subtask("A1", "bill", "x", [], "blocked")],
+                        "spec_confirmed": True}, cfg)
+    except GraphRecursionError:
+        raise AssertionError("blocked 子任务触发 supervisor↔dispatcher 忙循环(GraphRecursionError)")
+    assert r["__interrupt__"]                                   # 挂起在 ask_user,非忙循环
+    assert r["__interrupt__"][0].value["type"] == "ask_user"
+
+
+def test_langgraph_json_includes_compile_service():
+    """复审 Important 2:agent.py 引 compile_service.models,langgraph.json 依赖需登记。"""
+    d = _json.loads(_Path("langgraph.json").read_text(encoding="utf-8"))
+    assert "./compile_service" in d["dependencies"]
+    assert d["graphs"]["kingdee_plugin_agent"] == "./agents/kingdee_plugin_agent/agent.py:build_graph"
