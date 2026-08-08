@@ -170,7 +170,9 @@ def test_w1_split_subtasks_llm(tmp_path):
     assert todo[0].deps == ["B1"]  # 依赖标注生效
 
 
-from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignWorker, TYPE_PROMPTS
+from agents.kingdee_plugin_agent.graph.workers.w2_design import (
+    DesignOutput, DesignWorker, TYPE_PROMPTS,
+)
 
 
 def test_design_type_prompt_mapping():
@@ -191,8 +193,6 @@ def test_w2_experience_hits_reach_design_context(tmp_path):
     """经验库命中注入设计 LLM 上下文:human 消息含"历史踩坑参考"标记与命中文本,
     标题作双信号检索(k=3),verified 条目排在 proposed 之前(历史坑 → 设计规避)。"""
     from pathlib import Path
-
-    from agents.kingdee_plugin_agent.graph.workers.w2_design import DesignOutput
 
     class FakeExperience:
         def __init__(self):
@@ -235,17 +235,41 @@ def test_w2_experience_hits_reach_design_context(tmp_path):
 
 
 def test_w2_experience_failure_degrades_to_done(tmp_path):
-    """经验库故障 → 设计仍 DONE(检索降级为空命中,不阻塞;与 RAG 检索同一纪律)。"""
+    """经验库故障 → 设计仍 DONE:检索异常被降级为空命中,LLM 照常走设计路径。
+
+    (评审修复:原实现 llm=None 在 _llm_design 的 llm 守卫处提前返回,search_related
+    从未被调用,降级逻辑未测;现走真实 LLM 路径 —— seen 非空证明检索异常未阻塞
+    LLM 调用,design.md 为 LLM 产出证明非骨架路径。)
+    """
+    from pathlib import Path
 
     class BrokenExperience:
         def search_related(self, error_code, message, k=3):
             raise RuntimeError("chroma 不可用")
 
-    w = DesignWorker(llm=None, store=ArtifactStore(root=tmp_path), rag=None,
+    class _DesignLLM:
+        """捕获消息的 fake:with_structured_output 返回自身,invoke 返回契约对象。"""
+
+        def __init__(self):
+            self.seen = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            return DesignOutput(design_markdown="# 设计文档(LLM 正常产出)")
+
+    llm = _DesignLLM()
+    w = DesignWorker(llm=llm, store=ArtifactStore(root=tmp_path), rag=None,
                      experience=BrokenExperience())
     sub = Subtask("A1", "bill", "x", [], "pending")
     sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
     assert "STATUS: DONE" in msg
+    assert llm.seen  # 检索异常被降级为空命中,LLM 仍被调用(未阻塞设计)
+    human = next(m.content for m in llm.seen[0] if getattr(m, "type", "") == "human")
+    assert "历史踩坑参考" not in human  # 降级为空命中,无踩坑段注入
+    assert "LLM 正常产出" in Path(sub.design_path).read_text(encoding="utf-8")  # 走 LLM 路径,非确定性骨架
     assert sub.design_path.endswith("design.md")
 
 

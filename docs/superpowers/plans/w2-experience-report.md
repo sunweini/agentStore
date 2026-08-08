@@ -74,3 +74,16 @@
 - **verified 优先是相对排序非过滤**:proposed 条目仍会注入(标 confidence/status),由 LLM 自核 —— 与知识库"proposed 不沉淀决策"的纪律靠提示词约束,LLM 不遵循时无代码强制。
 - **确定性骨架路径不注入经验**:llm=None 的测试/降级路径看不到历史坑;可接受(骨架非真实设计),如需可后续扩展。
 - 未改 loader 的 knowledge-steward skill 摘要(摘要只提路由表,无需变更)。
+
+## 评审修复(2026-08-08,提交 `test(w2): 经验故障降级测试走真实 LLM 路径`)
+
+### Important — 降级测试原为空转(vacuous),已修复
+
+- **问题**:`test_w2_experience_failure_degrades_to_done` 原用 `DesignWorker(llm=None, experience=BrokenExperience())` —— `_llm_design` 在 `if self.llm is None` 守卫处提前返回,`search_related` 从未被调用(评审实证 0 次调用),核心降级逻辑(检索异常 → 空命中 → 不阻塞设计)未被测试覆盖。
+- **修复**:复用捕获消息的 fake LLM 模式(与 hits 测试相同的 `_DesignLLM`,带 `seen` 列表)+ `BrokenExperience()`,断言:
+  - `llm.seen` 非空 —— 检索异常被降级为空命中、LLM 仍被调用,证明未阻塞设计;
+  - human 消息**不含**"历史踩坑参考"标记 —— 证明降级为空命中而非有命中;
+  - design.md 内容为 LLM 产出("# 设计文档(LLM 正常产出)")—— 证明走 LLM 路径而非确定性骨架;
+  - `sub.design_path` 正常设置、STATUS DONE。
+- **Minor**:hits 测试函数内局部 `DesignOutput` import 提升到模块级(与 DesignWorker/TYPE_PROMPTS 同处一行)。
+- 回归:`tests/test_kingdee_agent.py -v` 86 项全过;全量 `tests/ -q` **164 passed**(162 基线 + 2 新增,测试计数不变,降级测试为原 2 项内强化)。
