@@ -31,6 +31,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 | [prompts/](prompts/) | 节点 prompt 与代码分离:`supervisor.md` + 每 worker 一个;w2/w3/w4 按插件类型拆 bill/list/service |
 | [tools/](tools/) | 外部能力:compile_client(编译服务)/ kingdee_api(金蝶元数据)/ smoke_client(冒烟)/ package(打包) |
 | [store/artifact_store.py](store/artifact_store.py) | 产物落盘(JSON 文件库:spec/plan/代码/审查/编译/交付) |
+| [skills/loader.py](skills/loader.py) | load_skill 工具(渐进式披露:摘要启动加载,w1-w5 经 `structured_with_skill` 绑定,LLM 主动调方法论,2 回合上限)+ `skill_summary()` + `SKILL_HINT` |
 | [seed/](seed/) | 经验库种子数据(compile_errors.json)+ 灌入脚本 seed_load |
 | [templates/](templates/) | 三类型插件模板(bill/list/service),w3 生成参照 |
 
@@ -40,6 +41,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **改 prompt**:`prompts/<name>.md`,节点内按名字加载;注意 ChatPromptTemplate 是 f-string 语法(JSON 样例 `{}` 转义 `{{}}`,见 dev-standards §7.2)。
 - **改任务契约**:`graph/state.py` 的 Subtask/TaskState 字段 —— 加普通字段注意并行写冲突(用 reducer 或改由主管统一写);`Send` 分支入参是 payload 快照,新字段要在 `agent.py::_send_payload` 带上。
 - **接真实金蝶环境**:`.env` 配 `KD_BASE_URL/KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 4 项(硬门槛:CLI 缺 KD_BASE_URL exit 1;API 4 项全校验,缺任一 503);编译服务配 `COMPILE_SERVICE_URL`(缺省 http://localhost:8000,起 `docker-compose up`);API 鉴权配 `KINGDEE_API_KEY`。
+- **改 skill**:`skills/requirement-clarify/` 下 SKILL.md + 类型模板(bill/service/list.md),`skills/loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要;改 LLM 侧工具提示:loader 的 `SKILL_HINT`(每步注入)+ `structured_with_skill`(绑定形态:官方 tools 参数,勿用 bind_tools 再 with_structured_output —— `__getattr__` 委派会丢 tools,已在 loader docstring 注明)。
 - **跑测试**:`pytest tests/test_kingdee_agent.py -v`(图全链路 + CLI + API,确定性注入 llm=None + fake 编译/冒烟)+ `pytest tests/test_kingdee_api.py`;全量 `pytest tests/ -q`。
 - **启动 CLI**:`python -m agents.kingdee_plugin_agent.cli "给采购单审核加库存校验" --env test`。
 - **启动 API**:`uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload`(演示页 web/kingdee-demo.html)。

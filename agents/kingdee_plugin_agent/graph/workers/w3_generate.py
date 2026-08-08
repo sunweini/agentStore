@@ -15,6 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
+from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 from agents.kingdee_plugin_agent.templates import load_template, render_template
 
 TYPE_PROMPTS = {"bill": "w3_generate_bill.md", "service": "w3_generate_service.md", "list": "w3_generate_list.md"}
@@ -53,11 +54,11 @@ class GenerateWorker(WorkerBase):
                 "guide": [g["text"] for g in guide],
             }, ensure_ascii=False)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", prompt),
+                ("system", prompt + SKILL_HINT),
                 ("human", "设计文档与模板:\n{context}"),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
             ])
-            out = self.llm.with_structured_output(CodeOutput).invoke(
-                prompt.format_messages(context=context))
+            out = structured_with_skill(self.llm, CodeOutput,
+                                        prompt.format_messages(context=context))
             return out.code if out else None
         except Exception:
             return None  # LLM 故障 → 骨架

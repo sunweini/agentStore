@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
+from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 
 TYPE_PROMPTS = {"bill": "w2_design_bill.md", "service": "w2_design_service.md", "list": "w2_design_list.md"}
 VALID_TYPES = tuple(TYPE_PROMPTS)
@@ -53,11 +54,11 @@ class DesignWorker(WorkerBase):
                 "api_ref": [a["text"] for a in api_ref],
             }, ensure_ascii=False)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", prompt),
+                ("system", prompt + SKILL_HINT),
                 ("human", "需求与检索上下文:\n{context}"),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
             ])
-            out = self.llm.with_structured_output(DesignOutput).invoke(
-                prompt.format_messages(context=context))
+            out = structured_with_skill(self.llm, DesignOutput,
+                                        prompt.format_messages(context=context))
             return out.design_markdown if out else None
         except Exception:
             return None  # LLM 故障 → 骨架,不阻塞

@@ -20,6 +20,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
+from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 
 VERDICTS = ("Approved", "Needs fixes")
 TYPE_PROMPTS = {"bill": "w4_review_bill.md", "service": "w4_review_service.md", "list": "w4_review_list.md"}
@@ -88,11 +89,11 @@ class ReviewWorker(WorkerBase):
                 "title": subtask.title,
             }, ensure_ascii=False)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", prompt),
+                ("system", prompt + SKILL_HINT),
                 ("human", "代码与规范:\n{context}"),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
             ])
-            out = self.llm.with_structured_output(ReviewOutput).invoke(
-                prompt.format_messages(context=context))
+            out = structured_with_skill(self.llm, ReviewOutput,
+                                        prompt.format_messages(context=context))
             return out.findings if out else None
         except Exception:
             return None  # LLM 故障 → 骨架

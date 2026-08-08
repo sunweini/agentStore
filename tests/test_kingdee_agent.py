@@ -1195,3 +1195,80 @@ def test_api_acceptance_reject_distinct_reasons_accumulate(tmp_path, monkeypatch
                           filter={"signature": _acceptance_sig(reason)})
         assert len(hits) == 1, (reason, hits)
     assert len(_artifacts(rag)) == 2    # 累计 2 条不同原因;重复原因已去重
+
+
+# ── load_skill 机制(skill 渐进式披露,对照 sentiment 模式)────────────────
+
+def test_load_skill_returns_requirement_clarify():
+    """load_skill("requirement-clarify") 返回 SKILL.md 全文 + 三套类型模板;
+    未知 skill → error JSON 并列出可用项。"""
+    import json
+    from agents.kingdee_plugin_agent.skills.loader import load_skill
+
+    payload = json.loads(load_skill.invoke({"skill_name": "requirement-clarify"}))
+    assert payload["skill"] == "requirement-clarify"
+    assert "金蝶插件需求澄清方法论" in payload["summary"]
+    assert "一次一问" in payload["summary"]
+    assert payload["references"] == ["bill.md", "list.md", "service.md"]  # 无 references/ 子目录,模板直放
+    assert "金蝶插件需求澄清方法论" in payload["content"]                   # SKILL.md 全文
+    assert payload["scripts"] == []
+
+    err = json.loads(load_skill.invoke({"skill_name": "nope"}))
+    assert "error" in err
+    assert "requirement-clarify" in err["available"]
+
+
+def test_skill_summary():
+    """skill_summary() 注入系统提示的摘要层:含 requirement-clarify。"""
+    import json
+    from agents.kingdee_plugin_agent.skills.loader import skill_summary
+
+    summary = json.loads(skill_summary())
+    assert set(summary) == {"requirement-clarify"}
+    assert "多选优先" in summary["requirement-clarify"]
+
+
+def test_structured_with_skill_binds_tool_and_feeds_result_back():
+    """真实模型路径(模拟):load_skill 绑定 → 回合 1 模型调工具 → 执行喂回
+    ToolMessage → 回合 2 出 schema;fake LLM(无 bind_tools)走普通路径。"""
+    from langchain_core.messages import AIMessage, ToolMessage
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import QuestionsOutput
+    from agents.kingdee_plugin_agent.skills.loader import load_skill, structured_with_skill
+
+    class RoundTripLLM:
+        """模拟真实模型:with_structured_output 支持 tools + include_raw。"""
+
+        def __init__(self):
+            self.seen, self.bound_tools, self.so_kwargs = [], [], {}
+
+        def bind_tools(self, tools, **kwargs):
+            self.bound_tools = list(tools)
+            return self
+
+        def with_structured_output(self, schema, **kwargs):
+            self.so_kwargs = kwargs
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            if len(self.seen) == 1:
+                return {"raw": AIMessage(content="", tool_calls=[
+                    {"id": "call_1", "name": "load_skill", "type": "function",
+                     "args": {"skill_name": "requirement-clarify"}}]),
+                    "parsed": None}
+            return {"raw": AIMessage(content='{"questions": ["目标单据?"]}'),
+                    "parsed": QuestionsOutput(questions=["目标单据?"])}
+
+    llm = RoundTripLLM()
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["目标单据?"]
+    # 绑定发生在 with_structured_output 内部(官方 tools 参数),bind_tools
+    # 只作能力探测 —— 断言 tools 参数真实下发
+    assert llm.so_kwargs["tools"] == [load_skill]
+    assert llm.so_kwargs["include_raw"] is True
+    assert len(llm.seen) == 2                         # 恰好 2 回合(1 工具 + 1 schema)
+    second = llm.seen[1]
+    assert any(isinstance(m, ToolMessage) for m in second)
+    assert any("金蝶插件需求澄清方法论" in getattr(m, "content", "")
+               for m in second)                       # 工具结果真实喂回

@@ -5,6 +5,21 @@
 
 ---
 
+## v1.5.0 — 2026-08-08(load_skill 机制:requirement-clarify 渐进式披露,对照 sentiment 模式)
+
+### 新增功能
+
+- **skill 渐进式披露(skills/loader.py)**:`load_skill(skill_name)` 工具(摘要启动加载,按需取 SKILL.md + 三套类型模板;requirement-clarify 无 references/ 子目录,模板直放 skill 目录)+ `skill_summary()` 摘要注入 + `SKILL_HINT` 提示常量;未知 skill → error JSON 并列出可用项
+- **worker 绑定**:w1-w5 五个 LLM 调用点改经 `structured_with_skill` 绑定 load_skill —— 官方 `tools` 参数(json_schema + include_raw,经安装包 introspection 核实:bind_tools 后再 with_structured_output 会经 `__getattr__` 委派丢失 tools,必须用 tools= 形态),最多 2 回合(回合 1 调工具 → 喂回 ToolMessage → 回合 2 出 schema);脚本/fake LLM(无 bind_tools)自动跳过绑定,既有测试契约不变
+- **w1 澄清 prompt 注入 skill 摘要**:摘要 JSON 走模板变量占位(dev-standards §7.2 f-string 花括号陷阱)
+- **技能文档**:`skills/requirement-clarify/SKILL.md`(一次一问/多选优先/元数据驱动/10 轮上限/决策+假设记录,引用 bill/service/list 模板)
+
+### 测试
+
+- tests/test_kingdee_agent.py 新增 3 项(load_skill 返回 SKILL.md+三模板 / 未知 skill 报错 / skill_summary / 工具回合→schema 回合);全套 149 项全过
+
+---
+
 ## v1.4.0 — 2026-08-08(kingdee-plugin-agent 全流程交付首版:CLI + Web + 文档)
 
 ### 新增功能

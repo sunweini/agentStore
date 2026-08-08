@@ -18,6 +18,7 @@ from compile_service.models import CompileUnavailableError
 
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 from agents.kingdee_plugin_agent.graph.workers.w3_generate import CodeOutput
+from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 
 MAX_COMPILE_ROUNDS = 5
 
@@ -58,11 +59,11 @@ class CompileWorker(WorkerBase):
             context = json.dumps({"code": code, "compile_errors": subtask.compile_errors},
                                  ensure_ascii=False)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", prompt),
+                ("system", prompt + SKILL_HINT),
                 ("human", "当前代码与错误列表:\n{context}"),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
             ])
-            out = self.llm.with_structured_output(CodeOutput).invoke(
-                prompt.format_messages(context=context))
+            out = structured_with_skill(self.llm, CodeOutput,
+                                        prompt.format_messages(context=context))
             new = out.code.strip() if out else ""
             return new if new and new != code else None  # 防原样重提交
         except Exception:

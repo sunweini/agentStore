@@ -20,6 +20,11 @@ from pydantic import BaseModel, Field
 
 from agents.kingdee_plugin_agent.graph.state import Subtask
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
+from agents.kingdee_plugin_agent.skills.loader import (
+    SKILL_HINT,
+    skill_summary,
+    structured_with_skill,
+)
 
 DEFAULT_QUESTION = "请描述该插件的核心业务场景与目标单据(FormId),以及期望的关键行为。"
 
@@ -76,13 +81,18 @@ class RequirementWorker(WorkerBase):
         if self.llm is None:
             return [DEFAULT_QUESTION]
         try:
+            # 注入 skill 摘要 + load_skill 提示:LLM 可主动调工具拿问题模板。
+            # 摘要 JSON 含花括号,必须走模板变量占位(dev-standards §7.2 f-string 陷阱)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", self._load_prompt("w1_requirement.md")),
+                ("system", self._load_prompt("w1_requirement.md") + SKILL_HINT
+                 + "可用 skill 摘要:\n{skill_summary}"),
                 ("human", "需求:\n{req}\n\n请输出最多 {n} 个澄清问题,一次一问。"),
             ])
             req = json.dumps(state.requirement_spec, ensure_ascii=False)[:1500]
-            out = self.llm.with_structured_output(QuestionsOutput).invoke(
-                prompt.format_messages(req=req, n=self.MAX_ROUNDS))
+            out = structured_with_skill(
+                self.llm, QuestionsOutput,
+                prompt.format_messages(req=req, n=self.MAX_ROUNDS,
+                                       skill_summary=skill_summary()))
             if out and out.questions:
                 return list(out.questions)[:self.MAX_ROUNDS]
         except Exception:
@@ -119,11 +129,11 @@ class RequirementWorker(WorkerBase):
         if self.llm is not None:
             try:
                 prompt = ChatPromptTemplate.from_messages([
-                    ("system", self._load_prompt("w1_requirement.md")),
+                    ("system", self._load_prompt("w1_requirement.md") + SKILL_HINT),
                     ("human", "需求规格:\n{spec}\n\n请拆解为子任务清单(plugin_type 限 bill/service/list)。"),
                 ])
-                out = self.llm.with_structured_output(PlanOutput).invoke(
-                    prompt.format_messages(spec=json.dumps(spec, ensure_ascii=False)))
+                out = structured_with_skill(self.llm, PlanOutput,
+                                            prompt.format_messages(spec=json.dumps(spec, ensure_ascii=False)))
                 if out and out.subtasks:
                     return [
                         Subtask(id=it.id or f"{chr(65 + i)}1",
