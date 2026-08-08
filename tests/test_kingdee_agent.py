@@ -28,3 +28,31 @@ def test_task_state_aggregates():
     st.todo.append(Subtask("A1", "bill", "审核校验", [], "in_progress"))
     assert st.todo[0].status == "in_progress"
     assert st.rework_budget_left == 3
+
+
+from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
+
+
+class DummyWorker(WorkerBase):
+    name = "dummy"
+
+    def _execute(self, state, subtask):
+        return {"status": "DONE", "artifact_key": "code_path", "evidence": "ok"}
+
+
+def test_worker_report_format(tmp_path):
+    w = DummyWorker(llm=None, store=ArtifactStore(root=tmp_path))
+    msg = w._report("DONE", "code_path", "编译通过", "无")
+    assert msg.startswith("STATUS: DONE")
+    assert "产物: code_path" in msg
+
+
+def test_worker_run_dispatch(tmp_path):
+    w = DummyWorker(llm=None, store=ArtifactStore(root=tmp_path))
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "in_progress")
+    new_sub, msg = w.run(st, sub)
+    # run() 派发 _execute,结果写入 report(含 worker 名)并格式化上报
+    assert new_sub.report["status"] == "DONE"
+    assert new_sub.report["worker"] == "dummy"
+    assert msg.startswith("STATUS: DONE")
