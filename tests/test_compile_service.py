@@ -12,3 +12,39 @@ def test_compile_result_aggregation():
     result.errors.append(CompileError("A.cs", 1, "CS1", "m", False))
     assert result.success is False
     assert len(result.errors) == 1
+
+def test_compile_result_default_errors():
+    # 不传 errors 参数时走 default_factory,不应共享可变默认值
+    result = CompileResult(success=True, raw_output="ok", duration_ms=5)
+    assert result.errors == []
+    assert isinstance(result.errors, list)
+
+from compile_service.error_parser import parse_compile_output
+from pathlib import Path
+
+FIX = Path("compile_service/tests/fixtures/msbuild_errors")
+
+def test_parse_basic_error():
+    raw = (FIX / "basic_cs0103.txt").read_text()
+    result = parse_compile_output(raw)
+    assert result.success is False
+    assert result.errors[0].code == "CS0103"
+    assert result.errors[0].line == 12
+
+def test_parse_cascade_dedup():
+    raw = (FIX / "cascade_flood.txt").read_text()  # 同一引用缺失导致 50 行同类错误
+    result = parse_compile_output(raw)
+    assert len(result.errors) <= 10  # 聚合上限
+
+def test_parse_success_output():
+    result = parse_compile_output("Build succeeded.\n0 Warning(s)\n0 Error(s)")
+    assert result.success is True
+    assert result.errors == []
+
+def test_parse_localized_mixed():
+    raw = (FIX / "localized_mixed.txt").read_text()  # 中文"错误" + 英文 error 混合
+    result = parse_compile_output(raw)
+    assert result.success is False
+    assert len(result.errors) == 2
+    assert result.errors[0].code == "CS0103"
+    assert result.errors[1].code == "CS0234"

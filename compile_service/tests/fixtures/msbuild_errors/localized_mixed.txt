@@ -1,0 +1,2 @@
+Plugin.cs(12,5): 错误 CS0103: 名称"xxx"在当前上下文中不存在
+Helper.cs(3,7): error CS0234: The type or namespace name 'X' does not exist in the namespace 'Y'
