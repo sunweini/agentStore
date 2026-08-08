@@ -5,6 +5,10 @@ langgraph>=0.2
 langgraph-checkpoint-sqlite   # AsyncSqliteSaver(checkpointer,需单独安装)
 langchain-openai        # DeepSeek 经 ChatOpenAI 接入(OpenAI 兼容 API)
 langchain-anthropic     # 预留:后续接 Claude
+langchain-chroma        # RAG 知识库向量存储(api_ref/guide/experience 三库)
+langchain-huggingface   # BGE 中文嵌入(bge-small-zh-v1.5)
+langchain-text-splitters
+sentence-transformers   # BGE 模型推理后端
 python-dotenv           # .env 加载
 httpx                   # agent 侧编译服务客户端(compile_client)
 
