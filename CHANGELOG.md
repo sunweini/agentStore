@@ -50,7 +50,7 @@
 
 - tests/test_kingdee_agent.py 追加 20 项:图全链路可达性(fake LLM 脚本化)、interrupt/resume、并行派发(2 独立子任务同步 in_progress + 并发上限)、终态(finish/fail/失败依赖级联)、返工循环、中途 ask_user、各 carry-over 修复点单测;`pytest tests/test_kingdee_agent.py` 50 项全过,全套 122 项全过。
 
- — 2026-08-07(轨 key 语义化 + 移除风险等级)
+## v1.2.0 — 2026-08-07(轨 key 语义化 + 移除风险等级)
 
 ### 变更
 

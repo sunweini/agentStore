@@ -17,7 +17,7 @@ START → supervisor ──run:──→ dispatcher ──Send──→ w2/w3/w4
           └──ask_user──→ w1     └──finish|fail──→ END    └──→ supervisor(回环)
 ```
 
-w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约:主管拆解需求为 Subtask(id/title/plugin_type/depends_on/status/priority),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。
+w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约:主管拆解需求为 Subtask(id, plugin_type, title, deps, status, design_path, code_path, compile_errors, review_verdict, review_path, report),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。
 
 | 文件 | 职责 |
 |---|---|
@@ -47,7 +47,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 ## 约束
 
 - **langchain MCP 铁律**:开发前必须查 docs-langchain / reference-langchain MCP 确认 API 用法,禁止凭记忆写 API(见根 CLAUDE.md)。
-- **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail(交付"未完成"包:部分产物 + 全部退回意见);预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。
+- **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail,剩余子任务标记 failed,CLI 输出 TodoList 摘要(部分产物/退回意见收集为设计意向,未实现);预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。
 - **并发上限**:`MAX_PARALLEL = 3`(send() 并行子任务 ≤3,防 DeepSeek 限流/超时风暴)。
 - **编译轮次**:w5 循环编译至多 `MAX_COMPILE_ROUNDS = 5` 轮;编译服务不可用 → 报 BLOCKED,不算轮次不扣预算。
 - **环境硬门槛**:无金蝶环境不进图 —— CLI 未配 KD_BASE_URL 直接退出;API 4 项缺失 503 并点明缺项;冒烟客户端未配置 → BLOCKED → failed(防无限重试循环)。
