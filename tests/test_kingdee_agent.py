@@ -83,3 +83,32 @@ def test_budget_exhausted():
     st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
     s = Supervisor(llm=None, workers={})
     assert s._check_budget(st) is False
+
+
+def test_next_ready_blocks_on_pending_dep():
+    st = TaskState(requirement_spec={}, todo=[
+        Subtask("A1", "bill", "x", ["B1"], "pending"),          # 依赖 B1,先列出
+        Subtask("B1", "service", "y", [], "pending"),           # 无依赖
+    ])
+    s = Supervisor(llm=None, workers={})
+    nxt = s._next_ready(st)
+    assert nxt is not None and nxt.id == "B1"  # A1 依赖未满足,不可派发
+
+
+def test_next_ready_blocks_on_failed_dep():
+    st = TaskState(requirement_spec={}, todo=[
+        Subtask("A1", "bill", "x", ["B1"], "pending"),          # 依赖 B1
+        Subtask("B1", "service", "y", [], "failed"),            # 依赖已失败
+    ])
+    s = Supervisor(llm=None, workers={})
+    assert s._next_ready(st) is None  # failed 依赖永久阻塞(终态处理在 C10)
+
+
+def test_next_ready_no_shadow_by_blocked_dep():
+    st = TaskState(requirement_spec={}, todo=[
+        Subtask("A1", "bill", "x", ["B1"], "pending"),          # 被依赖阻塞,但排在前面
+        Subtask("B1", "service", "y", [], "pending"),           # 就绪但排在后面
+    ])
+    s = Supervisor(llm=None, workers={})
+    nxt = s._next_ready(st)
+    assert nxt is not None and nxt.id == "B1"  # 阻塞项不遮蔽后面的就绪项
