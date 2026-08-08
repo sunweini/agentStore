@@ -53,3 +53,17 @@ def test_parse_localized_mixed():
     assert len(result.errors) == 2
     assert result.errors[0].code == "CS0103"
     assert result.errors[1].code == "CS0234"
+
+from compile_service.backends.mock import MockCompiler
+
+def test_mock_compiler_hits_rule():
+    mc = MockCompiler(rule_file=None)
+    code = "public class P { public void M() { xxx(); } }"  # 命中 CS0103 规则
+    result = mc.compile(code=code, project_name="Test")
+    assert result.success is False
+    assert result.errors[0].code == "CS0103"
+
+def test_mock_compiler_clean_code_passes():
+    mc = MockCompiler(rule_file=None)
+    result = mc.compile(code="// 无规则命中", project_name="Test")
+    assert result.success is True
