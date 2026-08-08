@@ -1,7 +1,8 @@
 """w3 代码生成:模板骨架 + 类型分支 + RAG 指南参数化,LLM 渲染全部 {{TOKEN}}。
 
 LLM 契约:CodeOutput(code),输入 = 设计文档 + 类型模板(load_template)+
-w3_generate.md + 类型分支 prompt + guide 检索。模板优先,冲突以模板为准。
+w3_generate.md + 类型分支要点(TYPE_PROMPTS 指向 code-generator skill 的
+references)+ guide 检索。模板优先,冲突以模板为准。
 
 确定性骨架(llm=None/失败):渲染 BUSINESS_LOGIC/CLASS_NAME/NAMESPACE 三个
 占位符(模板唯一 token 集),防 w4 把未渲染占位符判 Critical。
@@ -18,7 +19,11 @@ from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 from agents.kingdee_plugin_agent.templates import load_template, render_template
 
-TYPE_PROMPTS = {"bill": "w3_generate_bill.md", "service": "w3_generate_service.md", "list": "w3_generate_list.md"}
+# 类型分支方法论单源在 skill references(code-generator),worker 直接读 skill 文件,
+# 与 load_skill 交付同一来源(prompts/ 下不再有类型分支文件)
+TYPE_PROMPTS = {"bill": "code-generator/references/bill.md",
+                "service": "code-generator/references/service.md",
+                "list": "code-generator/references/list.md"}
 
 
 class CodeOutput(BaseModel):

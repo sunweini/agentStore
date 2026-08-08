@@ -14,7 +14,12 @@ class WorkerBase:
         self._prompt_dir = Path(__file__).parent.parent.parent / "prompts"
 
     def _load_prompt(self, name: str) -> str:
-        p = self._prompt_dir / name
+        # 带 "/" 的名字按 skill 路径解析(如 design-builder/references/bill.md,
+        # 相对 skills/ 根 —— 类型分支方法论单源在 skill references,见 skills/loader.py)
+        if "/" in name:
+            p = self._prompt_dir.parent / "skills" / name
+        else:
+            p = self._prompt_dir / name
         if not p.exists():
             raise FileNotFoundError(f"prompt 缺失: {p}")
         return p.read_text(encoding="utf-8")

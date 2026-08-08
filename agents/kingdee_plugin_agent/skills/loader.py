@@ -5,10 +5,11 @@
 - agent 启动只加载 skill 摘要(_AVAILABLE_SKILLS,注入系统提示)。
 - worker 需要时调 load_skill 取完整内容(SKILL.md + 类型模板)。
 - 查找顺序:agents/kingdee_plugin_agent/skills/ → common/skills/。
-- 与 sentiment 版差异:requirement-clarify 无 references/ 子目录,
-  类型模板(bill.md/service.md/list.md)直接放在 skill 目录,load_skill
-  返回的 references 字段是 name→content 映射(模板正文全量交付 —— agent 的
-  LLM 没有文件工具,只给文件名等于没给);scripts 恒为空列表(无分步脚本)。
+- references 形态两种兼容:老形态(requirement-clarify)类型模板直接放
+  skill 目录;新形态(design-builder 等 4 个方法论 skill)放 references/ 子目录,
+  load_skill 两种都收,返回的 references 字段是 name→content 映射
+  (模板正文全量交付 —— agent 的 LLM 没有文件工具,只给文件名等于没给);
+  scripts 恒为空列表(无分步脚本)。
 - structured_with_skill:结构化输出 + load_skill 绑定(官方 tools 参数,
   langchain-openai 1.4.1 源码实测核对 —— bind_tools 后再 with_structured_output
   会经 __getattr__ 委派丢失 tools,必须用 with_structured_output(schema,
@@ -36,13 +37,35 @@ _AVAILABLE_SKILLS = {
         "服务-入口/事务边界/异常回滚;列表-字段/按钮/过滤),"
         "一次一问、多选优先、10 轮上限,spec 决策+假设清单"
     ),
+    "design-builder": (
+        "金蝶插件设计方法论(w2):基于需求确认摘要产出 design.md —— 事件绑定决策"
+        "(操作+时机)、控件与字段映射(元数据真实字段/读写方向)、拦截方式"
+        "(硬/软拦截+文案)、联动单据、异常骨架,类型检查清单逐项落实,"
+        "输出固定骨架 + 验收自检(w1 决策逐条对照)"
+    ),
+    "code-generator": (
+        "金蝶插件 C# 代码生成方法论(w3):模板优先(templates/<type>/template.cs"
+        "骨架不变,业务只填 {{BUSINESS_LOGIC}})、指南参数化(字段/操作/API 签名"
+        "必须真实)、冲突以模板为准(注释标注)、占位符清零,输出可编译 Plugin.cs"
+    ),
+    "code-reviewer": (
+        "金蝶插件代码审查方法论(w4):规范库整库逐条对照 + API 抽查(事件签名/"
+        "using 引用)+ 模板基线比对,findings 契约 severity/line/issue/依据/修法,"
+        "裁决规则:Critical 或 Important → Needs fixes,仅 Minor → Approved"
+    ),
+    "compile-fixer": (
+        "金蝶编译修复方法论(w5):错误分类(缺引用/签名不匹配/拼写/命名空间/"
+        "占位符残留)→ 经验库检索(命中修复后自核)→ 修复优先级(先阻断性)"
+        "→ 重编纪律 5 轮 + 防重复提交,附常见编译错误模式与修法"
+    ),
 }
 
 #: 每步注入的 load_skill 提示(告诉 LLM 可调工具拿方法论,对照 sentiment 方案 2a)
 SKILL_HINT = (
-    "\n\n可用工具: load_skill(skill_name)。金蝶插件方法论(需求澄清问题模板、"
-    "设计/生成/审查要点)需要时调用 load_skill 获取专业指导,"
-    "工具返回内容仅供参考,不改变输出格式。"
+    "\n\n可用工具: load_skill(skill_name)。金蝶插件方法论按阶段加载:"
+    "需求澄清(requirement-clarify)/设计(design-builder)/生成(code-generator)/"
+    "审查(code-reviewer)/编译修复(compile-fixer),需要时调用 load_skill "
+    "获取专业指导,工具返回内容仅供参考,不改变输出格式。"
 )
 
 
@@ -76,13 +99,18 @@ def load_skill(skill_name: str) -> str:
 
     skill_md = skill_dir / "SKILL.md"
     content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else "(SKILL.md 缺失)"
-    # requirement-clarify 无 references/ 子目录:类型模板 .md 直接放 skill 目录,
-    # 交付 name→content 映射(模板正文是模型拿到的实质内容)
+    # references 两种形态:老形态类型模板 .md 直接放 skill 目录;
+    # 新形态(design-builder 等)放 references/ 子目录 —— 都收进 name→content
+    # 映射(模板正文是模型拿到的实质内容)
     refs = {
         p.name: p.read_text(encoding="utf-8")
         for p in sorted(skill_dir.glob("*.md"))
         if p.name != "SKILL.md"
     }
+    refs.update({
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted((skill_dir / "references").glob("*.md"))
+    })
     scripts = sorted(p.name for p in (skill_dir / "scripts").glob("*.py"))
     return json.dumps(
         {"skill": skill_name, "summary": _AVAILABLE_SKILLS[skill_name],

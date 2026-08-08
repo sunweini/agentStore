@@ -5,6 +5,28 @@
 
 ---
 
+## v1.6.0 — 2026-08-08(每 worker 方法论 skill:design/codegen/review/compile-fix + prompt 变薄)
+
+### 新增功能
+
+- **4 个方法论 skill**(skills/ 下,与 requirement-clarify 并列,共 5 个):
+  - `design-builder`(w2):设计方法论(事件绑定决策/控件与字段映射/拦截方式/联动单据/异常骨架)+ references/{bill,service,list}.md 三套完整检查清单(每项含"必须给出结论"与检查自问)
+  - `code-generator`(w3):生成方法论(模板优先/指南参数化/冲突以模板为准/占位符清零)+ references/{bill,service,list}.md 生成要点与自检清单
+  - `code-reviewer`(w4):审查方法论(规范库整库对照/API 抽查/模板基线比对/裁决规则 Critical-Important-Minor)+ references/{bill,service,list}.md 审查重点
+  - `compile-fixer`(w5):编译修复方法论(错误分类/经验库检索策略/修复优先级/5 轮重编纪律/防重复提交)+ references/errors.md 常见编译错误模式库(基于 seed compile_errors.json 5 条扩展:CS0246/CS0103/CS0234/CS1061/CS0506 分类表 + 修法)
+- **loader.py 支持 references/ 子目录**:load_skill 的 references glob 兼容两种形态(老形态模板直放 skill 目录 + 新形态 references/ 子目录),name→content 映射交付不变
+- **worker prompt 变薄,方法论单源化**:w2_design/w3_generate/w4_review/w5_compile 四个 base prompt 去掉方法论段落,保留 角色一句话 + 输入输出契约 + `load_skill('<skill>')` 提示;9 个类型分支文件(w2/w3/w4 × bill/service/list)删除,内容并入对应 skill references,worker TYPE_PROMPTS 改为指向 `skills/<skill>/references/<type>.md`(base._load_prompt 支持 "/" 路径解析)—— prompts 与 load_skill 从同一份文件取类型要点,不再双份维护
+
+### 修复(评审)
+
+- 新 w4_review.md 的 JSON 契约样例单花括号经 ChatPromptTemplate f-string 解析失败 → 回退确定性骨架(裁决失真),恢复 `{{...}}` 转义(dev-standards §7.2 陷阱重踩实录)
+
+### 测试
+
+- tests/test_kingdee_agent.py 新增 4 项(5 skill 全可加载 / design-builder references 内容断言 / codegen+review+fixer references 内容断言 / TYPE_PROMPTS 指向 skill references);test_skill_summary 更新为 5 项断言;全套 156 项全过(152 既有 + 4 新增)
+
+---
+
 ## v1.5.0 — 2026-08-08(load_skill 机制:requirement-clarify 渐进式披露,对照 sentiment 模式)
 
 ### 新增功能

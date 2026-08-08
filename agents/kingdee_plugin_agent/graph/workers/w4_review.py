@@ -23,7 +23,11 @@ from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 
 VERDICTS = ("Approved", "Needs fixes")
-TYPE_PROMPTS = {"bill": "w4_review_bill.md", "service": "w4_review_service.md", "list": "w4_review_list.md"}
+# 类型分支方法论单源在 skill references(code-reviewer),worker 直接读 skill 文件,
+# 与 load_skill 交付同一来源(prompts/ 下不再有类型分支文件)
+TYPE_PROMPTS = {"bill": "code-reviewer/references/bill.md",
+                "service": "code-reviewer/references/service.md",
+                "list": "code-reviewer/references/list.md"}
 VALID_TYPES = tuple(TYPE_PROMPTS)
 
 # 裁决规则(设计 §5.4):存在 Critical(必改)/Important(应改)→ Needs fixes(退回 w3);仅 Minor 或无误 → Approved

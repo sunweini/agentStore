@@ -1224,13 +1224,89 @@ def test_load_skill_returns_requirement_clarify():
 
 
 def test_skill_summary():
-    """skill_summary() 注入系统提示的摘要层:含 requirement-clarify。"""
+    """skill_summary() 注入系统提示的摘要层:5 个 skill(w1 澄清 + 4 方法论)全在。"""
     import json
     from agents.kingdee_plugin_agent.skills.loader import skill_summary
 
     summary = json.loads(skill_summary())
-    assert set(summary) == {"requirement-clarify"}
+    assert set(summary) == {"requirement-clarify", "design-builder",
+                            "code-generator", "code-reviewer", "compile-fixer"}
     assert "多选优先" in summary["requirement-clarify"]
+    assert "design.md" in summary["design-builder"]
+    assert "template.cs" in summary["code-generator"]
+    assert "Needs fixes" in summary["code-reviewer"]
+    assert "MAX_COMPILE_ROUNDS" in summary["compile-fixer"] or "5 轮" in summary["compile-fixer"]
+
+
+def test_load_skill_all_five_skills():
+    """5 个 skill 全可加载:content = SKILL.md 全文,references = name→content 映射。"""
+    import json
+    from agents.kingdee_plugin_agent.skills.loader import load_skill
+
+    for name in ("requirement-clarify", "design-builder", "code-generator",
+                 "code-reviewer", "compile-fixer"):
+        payload = json.loads(load_skill.invoke({"skill_name": name}))
+        assert payload["skill"] == name
+        assert "方法论" in payload["content"]          # SKILL.md 全文交付
+        assert payload["references"], f"{name} references 不应为空"
+        assert payload["scripts"] == []
+
+
+def test_load_skill_design_builder_references():
+    """design-builder references 含三类型完整检查清单(设计方法论关键内容)。"""
+    import json
+    from agents.kingdee_plugin_agent.skills.loader import load_skill
+
+    payload = json.loads(load_skill.invoke({"skill_name": "design-builder"}))
+    assert set(payload["references"]) == {"bill.md", "service.md", "list.md"}
+    assert "事件绑定决策" in payload["content"]
+    assert "验收自检" in payload["content"]
+    assert "触发操作" in payload["references"]["bill.md"]
+    assert "拦截方式" in payload["references"]["bill.md"]
+    assert "事务边界" in payload["references"]["service.md"]
+    assert "操作按钮" in payload["references"]["list.md"]
+    assert "逐行" in payload["references"]["list.md"]     # 批量逐行处理语义
+
+
+def test_load_skill_codegen_review_fixer_references():
+    """code-generator/code-reviewer/compile-fixer references 关键方法论词断言。"""
+    import json
+    from agents.kingdee_plugin_agent.skills.loader import load_skill
+
+    gen = json.loads(load_skill.invoke({"skill_name": "code-generator"}))
+    assert "模板优先" in gen["content"]
+    assert "AbstractBillPlugIn" in gen["references"]["bill.md"]
+    assert "AbstractOperationServicePlugIn" in gen["references"]["service.md"]
+    assert "AbstractListPlugIn" in gen["references"]["list.md"]
+    assert "占位符" in gen["content"]
+
+    rev = json.loads(load_skill.invoke({"skill_name": "code-reviewer"}))
+    assert "Critical" in rev["content"]                    # 裁决规则
+    assert "Needs fixes" in rev["content"]
+    assert "AfterDoOperation" in rev["references"]["bill.md"]
+    assert "回滚补偿" in rev["references"]["service.md"]
+
+    fix = json.loads(load_skill.invoke({"skill_name": "compile-fixer"}))
+    assert "5 轮" in fix["content"]
+    assert "CS0246" in fix["references"]["errors.md"]
+    assert "CS1061" in fix["references"]["errors.md"]
+    assert "CS0506" in fix["references"]["errors.md"]      # 签名不匹配模式
+
+
+def test_worker_type_branches_read_from_skill_references():
+    """类型分支方法论单源化:worker TYPE_PROMPTS 指向 skills/<skill>/references/,
+    prompts/ 下不再有类型分支文件(方法论移走,不重复维护)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w2_design import TYPE_PROMPTS as W2
+    from agents.kingdee_plugin_agent.graph.workers.w3_generate import TYPE_PROMPTS as W3
+    from agents.kingdee_plugin_agent.graph.workers.w4_review import TYPE_PROMPTS as W4
+
+    assert W2["bill"] == "design-builder/references/bill.md"
+    assert W3["bill"] == "code-generator/references/bill.md"
+    assert W4["bill"] == "code-reviewer/references/bill.md"
+    for mapping in (W2, W3, W4):
+        assert set(mapping) == {"bill", "service", "list"}
+        for v in mapping.values():
+            assert "/references/" in v and v.endswith(".md")
 
 
 from langchain_core.messages import AIMessage

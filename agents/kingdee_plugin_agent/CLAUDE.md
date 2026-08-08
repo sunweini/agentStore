@@ -28,10 +28,10 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 | [graph/supervisor.py](graph/supervisor.py) | 主管节点:依赖拓扑/就绪批派发/返工预算唯一写者/终态判定(finish/fail) |
 | [graph/workers/base.py](graph/workers/base.py) | worker 统一基类:`run(state, subtask)` 契约,产物经 store 落盘,report 上报 |
 | [graph/workers/w1..w7](graph/workers/) | 8 worker:w1 需求澄清(interrupt 逐问 + 确认摘要)/ w2 设计 / w3 生成 / w4 审查 / w5 编译修复 / w5.5 冒烟 / w6 打包 / w7 知识沉淀 |
-| [prompts/](prompts/) | 节点 prompt 与代码分离:`supervisor.md` + 每 worker 一个;w2/w3/w4 按插件类型拆 bill/list/service |
+| [prompts/](prompts/) | 节点 prompt 与代码分离:`supervisor.md` + 每 worker 一个;w2/w3/w4 的类型分支要点不在 prompts,单源在 `skills/<skill>/references/`(worker TYPE_PROMPTS 直接读 skill 文件) |
 | [tools/](tools/) | 外部能力:compile_client(编译服务)/ kingdee_api(金蝶元数据)/ smoke_client(冒烟)/ package(打包) |
 | [store/artifact_store.py](store/artifact_store.py) | 产物落盘(JSON 文件库:spec/plan/代码/审查/编译/交付) |
-| [skills/loader.py](skills/loader.py) | load_skill 工具(渐进式披露:摘要启动加载,w1-w5 经 `structured_with_skill` 绑定,LLM 主动调方法论,2 回合上限)+ `skill_summary()` + `SKILL_HINT` |
+| [skills/](skills/) | 方法论 skill 目录(5 个):`requirement-clarify`(w1 澄清,老形态模板直放 skill 目录)+ `design-builder`/`code-generator`/`code-reviewer`/`compile-fixer`(w2-w5 方法论,SKILL.md + `references/` 子目录类型要点);`loader.py` 的 load_skill 工具(渐进式披露:摘要启动加载,w1-w5 经 `structured_with_skill` 绑定,LLM 主动调方法论,2 回合上限)+ `skill_summary()` + `SKILL_HINT` |
 | [seed/](seed/) | 经验库种子数据(compile_errors.json)+ 灌入脚本 seed_load |
 | [templates/](templates/) | 三类型插件模板(bill/list/service),w3 生成参照 |
 
@@ -41,7 +41,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **改 prompt**:`prompts/<name>.md`,节点内按名字加载;注意 ChatPromptTemplate 是 f-string 语法(JSON 样例 `{}` 转义 `{{}}`,见 dev-standards §7.2)。
 - **改任务契约**:`graph/state.py` 的 Subtask/TaskState 字段 —— 加普通字段注意并行写冲突(用 reducer 或改由主管统一写);`Send` 分支入参是 payload 快照,新字段要在 `agent.py::_send_payload` 带上。
 - **接真实金蝶环境**:`.env` 配 `KD_BASE_URL/KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 4 项(硬门槛:CLI 缺 KD_BASE_URL exit 1;API 4 项全校验,缺任一 503);编译服务配 `COMPILE_SERVICE_URL`(缺省 http://localhost:8000,起 `docker-compose up`);API 鉴权配 `KINGDEE_API_KEY`。
-- **改 skill**:`skills/requirement-clarify/` 下 SKILL.md + 类型模板(bill/service/list.md),`skills/loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要;改 LLM 侧工具提示:loader 的 `SKILL_HINT`(每步注入)+ `structured_with_skill`(绑定形态:官方 tools 参数,勿用 bind_tools 再 with_structured_output —— `__getattr__` 委派会丢 tools,已在 loader docstring 注明)。
+- **改 skill**:`skills/<skill>/` 下 SKILL.md(方法论:目标/输入/流程/输出契约/踩坑)+ `references/`(类型要点;requirement-clarify 老形态模板直放 skill 目录,无 references/),`skills/loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要(渐进式披露);**方法论只写进 skill,不要写回 prompts** —— w2/w3/w4 的 worker TYPE_PROMPTS 与 load_skill 都从 `skills/<skill>/references/` 取同一份内容(单源)。改 LLM 侧工具提示:loader 的 `SKILL_HINT`(每步注入)+ `structured_with_skill`(绑定形态:官方 tools 参数,勿用 bind_tools 再 with_structured_output —— `__getattr__` 委派会丢 tools,已在 loader docstring 注明)。注意:prompts/ 与 skill references 被 worker 拼进系统提示后都经 ChatPromptTemplate f-string 解析,含 `{...}` 的样例(如 JSON 契约)必须转义 `{{...}}`(dev-standards §7.2);作为 load_skill JSON 交付时保持文本原样 —— 转义是模板安全,不是内容变更。
 - **跑测试**:`pytest tests/test_kingdee_agent.py -v`(图全链路 + CLI + API,确定性注入 llm=None + fake 编译/冒烟)+ `pytest tests/test_kingdee_api.py`;全量 `pytest tests/ -q`。
 - **启动 CLI**:`python -m agents.kingdee_plugin_agent.cli "给采购单审核加库存校验" --env test`。
 - **启动 API**:`uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload`(演示页 web/kingdee-demo.html)。

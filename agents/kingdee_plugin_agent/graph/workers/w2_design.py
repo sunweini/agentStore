@@ -1,7 +1,8 @@
 """w2 设计:类型分支配置表驱动,LLM + RAG 生成设计文档落盘。
 
-LLM 契约:DesignOutput(design_markdown),输入 = w2_design.md + 类型分支 prompt
-+ 需求 spec + RAG 检索(guide 按插件类型过滤 + api_ref,终审 Plan B 确认 hybrid_search
+LLM 契约:DesignOutput(design_markdown),输入 = w2_design.md + 类型分支要点
+(TYPE_PROMPTS 指向 design-builder skill 的 references,方法论单源在 skills/)+
+需求 spec + RAG 检索(guide 按插件类型过滤 + api_ref,终审 Plan B 确认 hybrid_search
 支持相等过滤)。llm=None 或 LLM 失败 → 确定性骨架(不阻塞流程)。
 
 未知插件类型(终审 C6):返回 ERROR 上报而非裸 KeyError,由图包装器标记子任务 failed。
@@ -14,7 +15,11 @@ from pydantic import BaseModel
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
 
-TYPE_PROMPTS = {"bill": "w2_design_bill.md", "service": "w2_design_service.md", "list": "w2_design_list.md"}
+# 类型分支方法论单源在 skill references(design-builder),worker 直接读 skill 文件,
+# 与 load_skill 交付同一来源(prompts/ 下不再有类型分支文件)
+TYPE_PROMPTS = {"bill": "design-builder/references/bill.md",
+                "service": "design-builder/references/service.md",
+                "list": "design-builder/references/list.md"}
 VALID_TYPES = tuple(TYPE_PROMPTS)
 
 
