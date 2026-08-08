@@ -21,6 +21,11 @@ API 依据(铁律:以官方文档为准,不凭记忆):
     本环境 langchain 1.3.14 已移除 langchain.retrievers,且 langchain_community
     未安装(requirements.txt 无此依赖),故按上述官方语义内建等效实现:
     纯 Python Okapi BM25(k1=1.5, b=0.75)+ 加权 RRF 融合,不引入新依赖。
+  - 元数据更新:langchain_chroma.Chroma 的 update_documents 会重嵌入新文本
+    (源码确认);chromadb Collection.update(ids=, metadatas=) 支持仅元数据
+    更新、文档与向量保持不变(实证 chromadb 1.5.9),故 verify 状态翻转走
+    该路径。Collection.get(where=...) 返回 {"ids","documents","metadatas",...},
+    空命中返回空列表(公开 API,实测)。
 """
 import re
 from collections import defaultdict
@@ -204,3 +209,62 @@ class StandardsLoader:
     def search(self, query: str, k: int = 3) -> list[str]:
         """超限降级:复用 RagClient.guide 检索,返回命中文本列表。"""
         return [h["text"] for h in RagClient().search("guide", query, k=k)]
+
+
+class ExperienceStore:
+    """经验库:proposed/verified 两态 + 错误签名去重。防 w7 幻觉污染。
+
+    状态机:proposed ──verify()──▶ verified。签名 = "错误码|文件模式"。
+      - propose():写 proposed 条目,同签名已存在则直接返回签名,不重复入库
+        (按 B2 结论用 filter={"signature": sig} 精确查重,不用裸向量检索)。
+      - verify():按签名定位条目,仅更新元数据 status → verified(文档与向量
+        不动;机制见模块 docstring"元数据更新"条目,实测 chromadb 1.5.9)。
+      - search_related():仅返回 proposed / verified 条目;proposed 标注
+        confidence="unverified",其余标注 confidence="verified"。
+        B2 种子条目无 status 元数据,视为人工策展、等同已核验。
+    """
+
+    def __init__(self, client: RagClient):
+        self.client = client
+
+    def propose(self, code: str, file_pattern: str, message: str, fix: str) -> str:
+        sig = f"{code}|{file_pattern}"
+        existing = self.client.search("experience", sig, k=1, filter={"signature": sig})
+        if existing and existing[0]["metadata"].get("signature") == sig:
+            return sig
+        self.client.add_documents("experience", [f"[{code}] {message} 修复:{fix}"], [{
+            "signature": sig, "code": code, "status": "proposed", "source": "w7",
+        }])
+        return sig
+
+    def verify(self, signature: str) -> None:
+        """proposed → verified:按签名定位条目,元数据 status 置为 verified。"""
+        store = self.client._store("experience")
+        found = store.get(where={"signature": signature})
+        ids = found.get("ids") or []
+        if not ids:
+            raise RagError(f"经验不存在: {signature}")
+        metas = found.get("metadatas") or []
+        new_meta = dict(metas[0])
+        new_meta["status"] = "verified"
+        store._collection.update(ids=[ids[0]], metadatas=[new_meta])
+
+    def search_related(self, error_code: str, message: str, k: int = 3) -> list[dict]:
+        """经验检索:仅返回 proposed/verified(种子无 status 视为已核验)。
+
+        返回 [{text, score, metadata}];proposed 的 metadata 带
+        confidence="unverified",verified/种子带 confidence="verified"。
+        """
+        hits = self.client.search("experience", f"{error_code} {message}", k=k)
+        related = []
+        for hit in hits:
+            meta = dict(hit["metadata"])
+            status = meta.get("status")
+            if status == "proposed":
+                meta["confidence"] = "unverified"
+            elif status in (None, "verified"):
+                meta["confidence"] = "verified"
+            else:
+                continue  # 其他状态(如未来 archived/rejected)不出现在经验检索
+            related.append({"text": hit["text"], "score": hit["score"], "metadata": meta})
+        return related

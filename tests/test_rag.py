@@ -143,3 +143,44 @@ def test_hybrid_search_bm25_weight_out_of_range_raises(tmp_path):
     client = RagClient(data_dir=tmp_path)
     with pytest.raises(ValueError):
         client.hybrid_search("api_ref", "任何", bm25_weight=1.5)
+
+
+from common.rag import ExperienceStore
+
+
+def test_experience_dedup_by_signature(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    store = ExperienceStore(client)
+    sig1 = store.propose("CS0103", "", "名称不存在", "核对字段名")
+    sig2 = store.propose("CS0103", "", "名称不存在", "核对字段名")
+    assert sig1 == sig2  # 同签名去重
+    # 库内仅一条(二次 propose 不重复插入)
+    assert len(client.search("experience", "CS0103", k=10)) == 1
+
+
+def test_experience_verify_flow(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    store = ExperienceStore(client)
+    sig = store.propose("CS0246", "Plugin.cs", "类型找不到", "加引用")
+    assert store.search_related("CS0246", "类型找不到")[0]["metadata"]["status"] == "proposed"
+    store.verify(sig)
+    assert store.search_related("CS0246", "类型找不到")[0]["metadata"]["status"] == "verified"
+
+
+def test_experience_verify_unknown_signature_raises(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    store = ExperienceStore(client)
+    with pytest.raises(RagError):
+        store.verify("CS9999|None.cs")
+
+
+def test_experience_confidence_marking(tmp_path):
+    """接口契约:proposed 标记 confidence=unverified;verified 标记 confidence=verified。"""
+    client = RagClient(data_dir=tmp_path)
+    store = ExperienceStore(client)
+    sig = store.propose("CS0019", "Form1.cs", "运算符不适用于操作数", "加类型转换")
+    assert store.search_related("CS0019", "运算符")[0]["metadata"]["confidence"] == "unverified"
+    store.verify(sig)
+    hit = store.search_related("CS0019", "运算符")[0]
+    assert hit["metadata"]["status"] == "verified"
+    assert hit["metadata"]["confidence"] == "verified"
