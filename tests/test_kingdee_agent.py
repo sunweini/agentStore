@@ -1044,19 +1044,24 @@ def test_task_handle_live_push_and_close():
     assert handle.snapshot()["status"] == "done"
 
 
+def _acceptance_sig(reason: str) -> str:
+    """验收拒绝条目签名(与 api.py record_acceptance 同规则:code|sha256(reason)[:12])。"""
+    import hashlib as _hashlib
+    return f"ARTIFACT|{_hashlib.sha256(reason.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _artifacts(rag) -> list[dict]:
+    """经验库中全部验收拒绝条目(code=ARTIFACT)。"""
+    return [h for h in rag.search("experience", "拒绝原因", k=50)
+            if h["metadata"].get("code") == "ARTIFACT"]
+
+
 def test_api_acceptance_reject_feeds_w7(tmp_path, monkeypatch):
-    """拒绝 + 原因 → 喂 w7 经验库(注入 recorder);接受不喂;验收结论可查。"""
+    """拒绝 + 原因 → 真实 w7 经验库入库(proposed 态);接受不新增;验收结论可查。"""
     _set_kd_env(monkeypatch)
-
-    class _RecordingExp:
-        def __init__(self):
-            self.proposed = []
-
-        def propose(self, code, file_pattern, message, fix):
-            self.proposed.append((code, message))
-            return f"{code}|{file_pattern}"
-
-    exp = _RecordingExp()
+    from common.rag import ExperienceStore, RagClient
+    rag = RagClient(data_dir=tmp_path / "rag")
+    exp = ExperienceStore(rag)
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path),
                                    experience=exp))
@@ -1065,9 +1070,45 @@ def test_api_acceptance_reject_feeds_w7(tmp_path, monkeypatch):
     r = client.post(f"/tasks/{tid}/acceptance",
                     json={"accepted": False, "reason": "逻辑不符"}, headers=_HEADERS)
     assert r.status_code == 200
-    assert exp.proposed and exp.proposed[-1][1] == "逻辑不符"
+    hits = rag.search("experience", "逻辑不符", k=10,
+                      filter={"signature": _acceptance_sig("逻辑不符")})
+    assert len(hits) == 1
+    assert hits[0]["metadata"]["status"] == "proposed"
+    assert hits[0]["metadata"]["code"] == "ARTIFACT"
     r = client.post(f"/tasks/{tid}/acceptance", json={"accepted": True}, headers=_HEADERS)
     assert r.status_code == 200
-    assert len(exp.proposed) == 1  # 接受不新增沉淀
+    assert len(_artifacts(rag)) == 1            # 接受不新增沉淀
     st = client.get(f"/tasks/{tid}/state", headers=_HEADERS).json()
-    assert st["acceptance"]["accepted"] is True   # 最后结论(覆盖语义)
+    assert st["acceptance"]["accepted"] is True # 最后结论(覆盖语义)
+
+
+def test_api_acceptance_reject_distinct_reasons_accumulate(tmp_path, monkeypatch):
+    """不同拒绝原因各自入库(签名 reason 感知),相同原因去重(复审 Important 修复)。
+
+    旧实现签名恒为 "ARTIFACT|"(file_pattern 空),ExperienceStore 按签名去重会
+    吞掉不同拒绝原因 —— 本测试用真实 ExperienceStore 验证累计与去重。
+    """
+    _set_kd_env(monkeypatch)
+    from common.rag import ExperienceStore, RagClient
+    rag = RagClient(data_dir=tmp_path / "rag")
+    exp = ExperienceStore(rag)
+
+    def _reject(reason: str) -> None:
+        client = TestClient(create_app(api_key="k",
+                                       graph_factory=lambda: _det_graph_factory(tmp_path),
+                                       experience=exp))
+        tid = _create_task(client, tmp_path)
+        _run_to_done(client, tid)
+        r = client.post(f"/tasks/{tid}/acceptance",
+                        json={"accepted": False, "reason": reason}, headers=_HEADERS)
+        assert r.status_code == 200
+
+    _reject("逻辑不符")
+    _reject("表单字段缺失")            # 不同原因 → 不同签名 → 各自入库
+    _reject("逻辑不符")                # 相同原因 → 签名去重 → 不重复入库
+
+    for reason in ("逻辑不符", "表单字段缺失"):
+        hits = rag.search("experience", reason, k=10,
+                          filter={"signature": _acceptance_sig(reason)})
+        assert len(hits) == 1, (reason, hits)
+    assert len(_artifacts(rag)) == 2    # 累计 2 条不同原因;重复原因已去重

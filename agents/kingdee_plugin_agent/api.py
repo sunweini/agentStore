@@ -22,6 +22,7 @@ API_KEYS_JSON 首个 key(与 sentiment auth.py 同源);未配置有效 key 时�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
@@ -186,8 +187,13 @@ class TaskHandle:
             self.acceptance = verdict
         if not accepted and reason and self.experience is not None:
             try:
-                # 拒绝原因 = 需求符合性闸门失败样本,w7 同一沉淀通道(签名去重)
-                self.experience.propose("ARTIFACT", "", reason,
+                # 拒绝原因 = 需求符合性闸门失败样本,w7 同一沉淀通道。签名必须
+                # reason 感知(sha256 摘要入 file_pattern):ExperienceStore 按
+                # "code|file_pattern" 去重,恒空 file_pattern 会让所有拒绝共享
+                # 同一签名 "ARTIFACT|",不同拒绝原因被去重吞掉(复审 Important);
+                # 同原因重复拒绝仍去重,不同原因各自累计。
+                sig_part = hashlib.sha256(reason.encode("utf-8")).hexdigest()[:12]
+                self.experience.propose("ARTIFACT", sig_part, reason,
                                         "artifact 验收拒绝原因,待人工核验(w7)")
             except Exception as exc:  # 沉淀失败不阻塞验收(与 w7 不阻塞交付同语义)
                 logger.warning("service=kingdee-plugin-agent event=acceptance_distill_failed "
