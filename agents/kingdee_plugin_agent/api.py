@@ -30,6 +30,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from langgraph.types import Command
 from sse_starlette.sse import EventSourceResponse
 
@@ -250,6 +251,13 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         experience: w7 经验库(验收拒绝原因喂入;None = 跳过沉淀,验收仍记录)。
     """
     app = FastAPI(title="kingdee-plugin-agent")
+    # CORS:允许前端演示页(web/kingdee-demo.html)跨域访问(与 sentiment api.py 同款)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # 演示环境放开;生产按需收紧
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.tasks = {}  # task_id → TaskHandle(内存任务存储,v1)
 
     effective_key = api_key if api_key is not None else (

@@ -310,6 +310,8 @@ function resetUI() {
   $("#acceptBox").classList.remove("hide");
   $("#acceptMsg").textContent = "";
   $("#rejectReason").value = "";
+  $("#answerInput").value = "";
+  $("#reviseInput").value = "";
   $("#matrix").innerHTML = "";
   answering = false; lastInterruptKey = "";
 }
@@ -359,12 +361,15 @@ async function connectSSE() {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;                       // 服务端关闭(任务结束或连接断开)
-    buf += dec.decode(value, { stream: true }).replace(/\r\n/g, "\n");  // 兼容 \r\n 帧分隔
+    // 整缓冲归一化(不能按 chunk 单独 replace:\r\n 可能跨 chunk 边界被拆开,
+    // 残留 \r 会让帧合并,JSON.parse 失败导致事件静默丢失)
+    buf = (buf + dec.decode(value, { stream: true })).replace(/\r\n/g, "\n");
     let i;
     while ((i = buf.indexOf("\n\n")) >= 0) {
       const block = buf.slice(0, i);
       buf = buf.slice(i + 2);
       handleBlock(block);
+      attempts = 0;                        // 收到真实帧即视为链路存活,退避计数复位
     }
   }
 }
@@ -446,6 +451,7 @@ function renderInterrupt(p) {
   const key = type + "|" + (type === "confirm" ? (p.summary || "") : (p.text || p.question || ""));
   if (!key || key === lastInterruptKey) return;   // 去重:重连重放 / /state 兜底
   lastInterruptKey = key;
+  answering = false;                       // 新提示到来即解锁交互(防 submit 状态残留)
   $("#clarifyCard").classList.remove("hide");
   if (type === "confirm") {
     $("#stageSub").textContent = "请确认需求摘要(不认可可补充修正意见)";
@@ -494,6 +500,7 @@ async function submitAnswer(text) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || ("HTTP " + r.status));
+    answering = false;                     // 成功后必须复位,否则后续交互全部静默失效
     $("#stageSub").textContent = "已提交,AI 继续处理…";
   } catch (e) {
     answering = false;

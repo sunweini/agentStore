@@ -948,6 +948,24 @@ def test_api_requires_apikey():
     assert r.status_code == 401
 
 
+def test_api_cors_preflight():
+    """CORS:跨域 OPTIONS 预检返回 CORS 头(演示页 web/kingdee-demo.html 可跨域的前提)。
+
+    演示页从 :8080 静态服务 / file:// 访问 :8000 API,带 X-API-Key 头的请求触发
+    preflight;CORSMiddleware 短路返回 200 + allow-origin/methods/headers。
+    """
+    client = TestClient(create_app(api_key="k"))
+    r = client.options("/tasks", headers={
+        "Origin": "http://127.0.0.1:8080",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "x-api-key,content-type",
+    })
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "*"
+    assert "POST" in r.headers.get("access-control-allow-methods", "")
+    assert "x-api-key" in r.headers.get("access-control-allow-headers", "").lower()
+
+
 def test_api_auth_then_task(monkeypatch):
     """正确 apikey 通过鉴权;环境未配置 → 503(非 500/401)。"""
     client = TestClient(create_app(api_key="k"))
