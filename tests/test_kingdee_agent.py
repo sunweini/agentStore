@@ -812,3 +812,43 @@ def test_langgraph_json_includes_compile_service():
     d = _json.loads(_Path("langgraph.json").read_text(encoding="utf-8"))
     assert "./compile_service" in d["dependencies"]
     assert d["graphs"]["kingdee_plugin_agent"] == "./agents/kingdee_plugin_agent/agent.py:build_graph"
+
+
+# ═══════════════════════════ C11 CLI 入口 ═══════════════════════════
+import agents.kingdee_plugin_agent.cli as _cli
+
+from agents.kingdee_plugin_agent.cli import run_cli
+
+
+def test_cli_requires_env(monkeypatch, capsys):
+    """无 KD_BASE_URL = 环境硬门槛:报错退出(1),不进入图执行。"""
+    monkeypatch.delenv("KD_BASE_URL", raising=False)
+    code = run_cli(["给采购单审核加库存校验", "--env", "test"])
+    assert code == 1  # 无环境 = 硬门槛退出
+    out = capsys.readouterr().out
+    assert "环境" in out
+
+
+def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
+    """有环境(KD_BASE_URL)→ 交互澄清循环 → 确定性流水线跑完 → TodoList + 交付包,返回 0。
+
+    确定性门:monkeypatch cli.build_graph → build_graph(llm=None + fake 编译/冒烟),
+    与 C10 图测试同一注入思路(只注入 LLM/外部服务,不 mock LangGraph 本身)。
+    stdin 逐次喂澄清答案(1 个问题 + 1 次确认),capsys 校验各阶段输出。
+    """
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")
+    answers = iter(["SAL_SaleOrder", "确认"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(
+        _cli, "build_graph",
+        lambda: build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                            compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                            output_dir=tmp_path))
+    code = run_cli(["给采购单审核加库存校验", "--env", "test"])
+    out = capsys.readouterr().out
+    assert code == 0                                  # 全流程跑完返回 0
+    assert "需求: 给采购单审核加库存校验" in out
+    assert "[澄清 1]" in out                          # 交互澄清循环真实执行
+    assert "需求确认摘要" in out                       # 确认摘要已展示给用户
+    assert "TodoList 摘要" in out                     # TodoList 摘要已打印
+    assert ".zip" in out                              # 交付包路径已打印
