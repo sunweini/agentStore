@@ -1,8 +1,7 @@
 """编译服务 HTTP 客户端(真实/mock 无感切换:同一 base_url 契约)。"""
 import os
 import httpx
-from compile_service.models import CompileError, CompileResult
-from compile_service.server import CompileUnavailableError
+from compile_service.models import CompileError, CompileResult, CompileUnavailableError
 
 
 class CompileClient:

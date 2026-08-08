@@ -9,8 +9,7 @@ import tempfile
 from pathlib import Path
 from compile_service.backends.protocol import CompilerBackend
 from compile_service.error_parser import parse_compile_output
-from compile_service.models import CompileResult
-from compile_service.server import CompileUnavailableError
+from compile_service.models import CompileResult, CompileUnavailableError
 
 
 class MsbuildCompiler(CompilerBackend):
@@ -34,5 +33,7 @@ class MsbuildCompiler(CompilerBackend):
                 capture_output=True, text=True, timeout=120)
             raw = (proc.stdout or "") + (proc.stderr or "")
         result = parse_compile_output(raw)
+        # 进程非零退出(msbuild 崩溃/引用缺失/工具链异常)即使无错误行也判失败,不能只信输出文本
+        result.success = result.success and proc.returncode == 0
         result.duration_ms = 0
         return result

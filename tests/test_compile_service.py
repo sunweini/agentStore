@@ -1,5 +1,5 @@
 # tests/test_compile_service.py
-from compile_service.models import CompileError, CompileResult
+from compile_service.models import CompileError, CompileResult, CompileUnavailableError
 
 def test_compile_error_fields():
     err = CompileError(file="Plugin.cs", line=12, code="CS0103", message="x not found", is_fatal=True)
@@ -69,7 +69,7 @@ def test_mock_compiler_clean_code_passes():
     assert result.success is True
 
 from fastapi.testclient import TestClient
-from compile_service.server import create_app, CompileUnavailableError
+from compile_service.server import create_app
 
 def test_health_ok():
     client = TestClient(create_app(backend=MockCompiler()))
@@ -94,7 +94,6 @@ def test_compile_unavailable_returns_503():
 
 import pytest
 from compile_service.backends.msbuild import MsbuildCompiler
-from compile_service.server import CompileUnavailableError
 
 def test_msbuild_requires_dlls():
     with pytest.raises(CompileUnavailableError):
@@ -120,12 +119,94 @@ def test_client_compile_parses_json(monkeypatch):
     assert result.errors[0].code == "CS0103"
 
 def test_client_503_raises_unavailable(monkeypatch):
-    from compile_service.server import CompileUnavailableError
     client = CompileClient(base_url="http://test")
     resp = type("R", (), {"status_code": 503, "json": lambda *a, **k: {"detail": "compiler unavailable"}})()
     monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
-    try:
+    with pytest.raises(CompileUnavailableError):
         client.compile(code="x", project_name="T")
-        assert False, "should raise"
-    except CompileUnavailableError:
-        pass
+
+# --- 终审修复测试:returncode 校验 / REFERENCE_DLLS glob / server+client 往返 ---
+from compile_service.server import create_app, _backend_from_env
+
+def test_msbuild_nonzero_returncode_is_failure(monkeypatch):
+    # msbuild 进程退出码非 0 且输出无匹配错误行 → 必须判为失败(此前 returncode 被丢弃,误报成功)
+    class FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", lambda *a, **k: FakeProc())
+    mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
+    result = mc.compile(code="public class P {}", project_name="T")
+    assert result.success is False
+
+def test_msbuild_zero_returncode_success_passes(monkeypatch):
+    class FakeProc:
+        returncode = 0
+        stdout = "Build succeeded.\n0 Warning(s)\n0 Error(s)"
+        stderr = ""
+    monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", lambda *a, **k: FakeProc())
+    mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
+    result = mc.compile(code="public class P {}", project_name="T")
+    assert result.success is True
+
+def test_msbuild_zero_returncode_with_errors_still_fails(monkeypatch):
+    # 退出码 0 但输出含错误行 → 仍判失败(returncode 校验不得覆盖解析器结论)
+    class FakeProc:
+        returncode = 0
+        stdout = "Plugin.cs(12,5): error CS0103: x"
+        stderr = ""
+    monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", lambda *a, **k: FakeProc())
+    mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
+    result = mc.compile(code="x", project_name="T")
+    assert result.success is False
+    assert result.errors[0].code == "CS0103"
+
+def test_backend_from_env_globs_refs_dir(monkeypatch, tmp_path):
+    # COMPILE_SERVICE_REQUIRES_DLLS=1 → 对 REFS_DIR 做 *.dll glob(此前只读 REFERENCE_DLLS 环境变量,恒为空)
+    monkeypatch.setenv("COMPILE_SERVICE_REQUIRES_DLLS", "1")
+    monkeypatch.setenv("REFS_DIR", str(tmp_path))
+    (tmp_path / "Kingdee.BOS.dll").write_bytes(b"x")
+    (tmp_path / "ignore.txt").write_text("x")
+    backend = _backend_from_env()
+    assert isinstance(backend, MsbuildCompiler)
+    assert [p.name for p in backend.reference_dlls] == ["Kingdee.BOS.dll"]
+
+def test_backend_from_env_empty_refs_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("COMPILE_SERVICE_REQUIRES_DLLS", "1")
+    monkeypatch.setenv("REFS_DIR", str(tmp_path))
+    with pytest.raises(CompileUnavailableError):
+        _backend_from_env()
+
+def test_backend_from_env_missing_refs_dir_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("COMPILE_SERVICE_REQUIRES_DLLS", "1")
+    monkeypatch.setenv("REFS_DIR", str(tmp_path / "nonexistent"))
+    with pytest.raises(CompileUnavailableError):
+        _backend_from_env()
+
+def _round_trip_client(backend) -> CompileClient:
+    # 真实 HTTP 往返:以 TestClient(starlette portal 同步传输,直连 ASGI app)作 CompileClient 的 session,
+    # 走真实 HTTP 序列化/反序列化。注:httpx 0.28 的 ASGITransport 仅支持异步客户端,而 CompileClient 是同步 Client,故用 TestClient。
+    client = CompileClient(base_url="http://test")
+    client.session = TestClient(create_app(backend=backend))
+    return client
+
+def test_round_trip_compile_matching_rule():
+    client = _round_trip_client(MockCompiler())
+    result = client.compile(code="public class P { public void M() { xxx(); } }", project_name="T")
+    assert result.success is False
+    assert isinstance(result.errors[0], CompileError)
+    assert result.errors[0].code == "CS0103"
+
+def test_round_trip_clean_code_succeeds():
+    client = _round_trip_client(MockCompiler())
+    result = client.compile(code="// clean", project_name="T")
+    assert result.success is True
+    assert result.errors == []
+
+def test_round_trip_unavailable_raises():
+    class DownBackend:
+        def compile(self, code, project_name):
+            raise CompileUnavailableError("compiler down")
+    client = _round_trip_client(DownBackend())
+    with pytest.raises(CompileUnavailableError):
+        client.compile(code="x", project_name="T")

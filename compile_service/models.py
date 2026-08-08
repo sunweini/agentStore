@@ -3,6 +3,10 @@
 from dataclasses import dataclass, field
 
 
+class CompileUnavailableError(RuntimeError):
+    """编译服务不可用(容器挂/超时)。与编译失败区分:前者不算编译轮次。"""
+
+
 @dataclass
 class CompileError:
     file: str
