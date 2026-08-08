@@ -28,3 +28,21 @@ def test_client_429_retries_then_raises(monkeypatch):
 
 def test_no_env_no_client():
     assert KingdeeApiClient.client_from_env_or_none() is None  # 无 env 返回 None(硬门槛信号)
+
+# --- B8: 冒烟客户端 + 打包工具 ---
+from agents.kingdee_plugin_agent.tools.smoke_client import SmokeClient
+from agents.kingdee_plugin_agent.tools.package import PackageBuilder
+
+def test_smoke_verify(monkeypatch, tmp_path):
+    client = SmokeClient(KingdeeApiClient("http://k3", "u", "p", "dc"))
+    dll = tmp_path / "p.dll"
+    dll.write_bytes(b"mock-dll")  # 存在性检查要求 DLL 真实存在
+    # mock 部署+查询:assembly 加载成功(实例属性挂载,无描述符绑定问题)
+    monkeypatch.setattr(client.api, "_post", lambda *a, **k: {"Result": {"IsSuccess": True}})
+    r = client.deploy_and_verify(dll, "SAL_PurchaseOrder")
+    assert r.ok is True
+
+def test_package_build(tmp_path):
+    builder = PackageBuilder(output_dir=tmp_path)
+    p = builder.build({"code": "x", "dll_path": tmp_path, "design": {}, "review": {}})
+    assert p.suffix == ".zip" and p.exists()
