@@ -97,3 +97,49 @@ def test_hybrid_search_returns_merged(tmp_path):
 def test_hybrid_search_empty(tmp_path):
     client = RagClient(data_dir=tmp_path)
     assert client.hybrid_search("guide", "任何", k=2) == []
+
+
+def test_hybrid_search_weighting_logic(tmp_path, monkeypatch):
+    """混合检索融合逻辑钉桩:固定向量排名(B 优先),验证权重翻转首位命中。
+
+    真实 bge-small-zh 嵌入对单 token 查询偏词面(A 含精确 token 时向量通道
+    也偏好 A),无法用真实语料让两通道天然分歧;故钉桩向量通道为固定排名,
+    专注验证加权 RRF 融合数学(BM25 通道仍走真实实现)。
+    """
+    from langchain_core.documents import Document
+
+    client = RagClient(data_dir=tmp_path)
+    doc_a = "FormMetadata 是缓存键,与元数据无关"  # 含精确 API token,语义无关
+    doc_b = "BOS 平台表单元数据 的字段结构定义"  # 语义相关,无精确 token
+    client.add_documents("api_ref", [doc_a, doc_b], [{"ns": "Kingdee.BOS"}]*2)
+    store = client._store("api_ref")
+    all_data = store.get()
+    id_a = next(i for i, t in zip(all_data["ids"], all_data["documents"]) if t == doc_a)
+    id_b = next(i for i, t in zip(all_data["ids"], all_data["documents"]) if t == doc_b)
+
+    # 钉桩向量通道:固定返回 B 第一、A 第二(模拟向量通道偏好语义命中)
+    def fake_vec(query, k=5):
+        return [
+            (Document(page_content=doc_b, metadata={"ns": "Kingdee.BOS"}, id=id_b), 0.3),
+            (Document(page_content=doc_a, metadata={"ns": "Kingdee.BOS"}, id=id_a), 0.5),
+        ]
+
+    monkeypatch.setattr(store, "similarity_search_with_score", fake_vec)
+
+    # (a) 纯 BM25:精确 token 命中 A 置顶
+    hits = client.hybrid_search("api_ref", "FormMetadata", k=2, bm25_weight=1.0)
+    assert hits[0]["text"] == doc_a
+    # (b) 纯向量:语义命中 B 置顶(来自钉桩固定排名)
+    hits = client.hybrid_search("api_ref", "FormMetadata", k=2, bm25_weight=0.0)
+    assert hits[0]["text"] == doc_b
+    # (c) 加权 0.7:RRF 融合后精确命中 A 仍置顶(A=0.7/61+0.3/62 > B=0.3/61)
+    hits = client.hybrid_search("api_ref", "FormMetadata", k=2, bm25_weight=0.7)
+    assert hits[0]["text"] == doc_a
+    # 结果结构:每条含 text/score/metadata 键
+    assert all(set(h) == {"text", "score", "metadata"} for h in hits)
+
+
+def test_hybrid_search_bm25_weight_out_of_range_raises(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    with pytest.raises(ValueError):
+        client.hybrid_search("api_ref", "任何", bm25_weight=1.5)

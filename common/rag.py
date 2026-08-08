@@ -86,6 +86,8 @@ class RagClient:
         方传 bm25_weight=0.7 让精确 API 名优先)。
         返回 [{text, score, metadata}];score 为融合得分,仅相对可比,非概率。
         """
+        if not 0.0 <= bm25_weight <= 1.0:
+            raise ValueError(f"bm25_weight 必须在 [0, 1] 范围内,实际为 {bm25_weight}")
         store = self._store(collection)
         all_data = store.get()  # 公开 API:{"ids","documents","metadatas",...}
         texts = all_data.get("documents") or []
