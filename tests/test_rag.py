@@ -75,7 +75,8 @@ def test_standards_truncate_over_budget(tmp_path):
     (tmp_path / "small.md").write_text("小规则\n", encoding="utf-8")
     loader = StandardsLoader(standards_dir=tmp_path)
     text = loader.inject_text(limit_tokens=100)  # 小预算:截断 + 标注
-    assert "[已截断" in text
+    assert "[已截断,剩余 2 个文件请检索]" in text
+    assert "内容" not in text  # 大文件正文不得残留
 
 
 def test_standards_empty_dir(tmp_path):

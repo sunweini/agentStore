@@ -73,17 +73,20 @@ class StandardsLoader:
     def load_all(self) -> list[str]:
         if not self.standards_dir.exists():
             return []
-        return sorted(p.read_text(encoding="utf-8") for p in self.standards_dir.glob("*.md"))
+        return [
+            p.read_text(encoding="utf-8")
+            for p in sorted(self.standards_dir.glob("*.md"), key=lambda p: p.name)
+        ]
 
     def inject_text(self, limit_tokens: int = 8000) -> str:
         files = self.load_all()
         if not files:
             return ""
-        # 粗略 token 估算:中文 ~1.5 字/token,ASCII ~4 字符/token
+        # token 估算:中文 ~1.5 字/token(乘 2/3 对齐);ASCII 4 字符/token 属偏保守
         budget = limit_tokens
         parts, used = [], 0
         for i, content in enumerate(files):
-            est = len(content) // 2  # 保守估算
+            est = len(content) * 2 // 3
             if used + est > budget:
                 remaining = len(files) - i
                 parts.append(f"[已截断,剩余 {remaining} 个文件请检索]")
