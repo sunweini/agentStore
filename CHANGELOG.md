@@ -5,6 +5,17 @@
 
 ---
 
+## v1.8.1 — 2026-08-08(kingdee-plugin-agent 三份文档:项目/技术/使用手册)
+
+### 文档
+
+- **`docs/kingdee-plugin-agent/project.md`(项目文档)**:背景与痛点(重复劳动/API 复杂/编译门槛)、目标(需求 → 可部署交付包)、成功标准(编译通过率高/符合需求/返工少)、范围(单据/服务/列表 + 澄清→设计→生成→审查→编译→冒烟→打包→沉淀)、架构概览(1 主管 + 8 worker 循环图)、里程碑状态(三个 plan 全交付,164 项测试;待办:团队金蝶 DLL/E2E 门/真实环境联调/线上 DeepSeek 验证)、后续规划(知识自生长/多环境/多子任务单 zip/任务持久化与限流/其他 ERP 扩展方向)、技术栈。
+- **`docs/kingdee-plugin-agent/tech.md`(技术文档)**:LangGraph 图结构(节点/边/interrupt/send/终态 + 完整 ASCII 图)、任务契约(Subtask/TaskState 字段、生命周期状态机、上报契约、审查裁决)、8 worker 详解(职责/输入输出/LLM 调用/降级)、skill 体系(6 个结构 + 渐进式披露 + load_skill 机制 + prompt 变薄单源原则)、知识库(四库设计/混合检索/经验库两态 + 签名去重/种子/检索路由表)、错误处理 25 场景表、安全(apikey/环境凭证/CORS/路径白名单)、部署(docker-compose 拓扑/compile_service/数据目录 gitignore)、测试(eval 集/注入约定/E2E 门)、性能与预算(recursion_limit 公式/并发上限/token 控制)、已知债务与未验证项。
+- **`docs/kingdee-plugin-agent/manual.md`(使用手册)**:快速开始(.env 的 KD_* 4 项 + COMPILE_SERVICE_URL + KINGDEE_API_KEY + 种子灌入命令)、CLI 用法(命令/澄清交互/输出解读/退出码)、Web 用法(API + 演示页:澄清流/任务矩阵/验收操作)、API 端点表(5 端点)、常见问题 7 条、交付物解读(zip 内容)、限制与未验证项。
+- 三份文档均基于代码实读编写,与 `agents/kingdee_plugin_agent/CLAUDE.md` 约束数值一致(返工预算 3/并发 3/编译轮次 5/澄清 10 轮/recursion 100+20n),未验证项(线上 DeepSeek/真实金蝶环境/E2E 门)显式标注。交付报告:`docs/superpowers/plans/kingdee-docs-report.md`。
+
+---
+
 ## v1.8.0 — 2026-08-08(w2 设计阶段经验库回流:历史坑 → 设计规避)
 
 ### 新增功能
