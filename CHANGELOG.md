@@ -14,9 +14,14 @@
 - **w1 澄清 prompt 注入 skill 摘要**:摘要 JSON 走模板变量占位(dev-standards §7.2 f-string 花括号陷阱)
 - **技能文档**:`skills/requirement-clarify/SKILL.md`(一次一问/多选优先/元数据驱动/10 轮上限/决策+假设记录,引用 bill/service/list 模板)
 
+### 修复(评审)
+
+- load_skill references 交付模板正文(name→content 映射,LLM 无文件工具,只给文件名等于没给)
+- sentiment loader 目录名 dash→underscore(load_skill 恒"目录缺失"既有 bug)
+
 ### 测试
 
-- tests/test_kingdee_agent.py 新增 3 项(load_skill 返回 SKILL.md+三模板 / 未知 skill 报错 / skill_summary / 工具回合→schema 回合);全套 149 项全过
+- tests/test_kingdee_agent.py 新增 6 项(load_skill 内容交付 + 未知 skill 报错 / skill_summary / 工具回合→schema 回合 / 单回合直返 / 2 回合上限 / 解析失败→None);全套 152 项全过
 
 ---
 

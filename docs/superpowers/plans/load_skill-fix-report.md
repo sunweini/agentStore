@@ -121,3 +121,59 @@ w5.5/w6/w7 无 LLM 调用点(确定性阶段),按任务范围跳过;supervisor �
    不在本次任务范围;后续若需方法论供给可同样接入。
 4. **w2-w5 的 SKILL_HINT 内容通用**(金蝶插件方法论),requirement-clarify 是当前唯一 skill;
    后续新增 skill 时只需扩展 _AVAILABLE_SKILLS,无需改 worker。
+
+---
+
+# 评审修复(第二轮,1 Important + 1 既有 bug + 测试补全)
+
+## 修复 1(Important):load_skill 交付模板正文,不只文件名
+
+- **问题**:原实现 references 只回 ["bill.md","list.md","service.md"] 文件名列表,
+  SKILL.md 承诺"获取三套类型模板"但模板正文从未到达模型 —— agent 的 LLM 没有文件工具,
+  文件名等于没给,load_skill 的核心承诺落空。
+- **修复**(agents/kingdee_plugin_agent/skills/loader.py):references 改为 **name→content
+  映射**(`{"bill.md": "<模板全文>", ...}`),三套模板正文随 JSON 全量交付;JSON 形状其余不变
+  (skill/summary/scripts/content)。
+- **测试更新**:test_load_skill_returns_requirement_clarify 断言
+  `references["bill.md"]` 含"触发操作"、"拦截方式",service.md 含"服务入口",list.md 含"操作按钮"。
+
+## 修复 2(既有 bug,已确认):sentiment loader 目录名 dash→underscore
+
+- **问题**:agents/sentiment_query_agent/skills/loader.py 的 `_AGENT_SKILLS` 用
+  `agents/sentiment-query-agent/skills`(连字符),实际目录是 `sentiment_query_agent`
+  (下划线)→ `_find_skill` 恒 None → sentiment 的 load_skill 恒返回"目录缺失" error
+  (首轮报告已列为关注点,评审确认为既有 bug)。
+- **修复**:一行改名,load_skill 现可解析 skill 目录并返回完整 payload
+  (实测:dir found=True,keys 全,sentiment 14 测试全过)。
+- **独立提交**(commit 2),未动 kingdee 任何文件。
+
+## 修复 3(Minor):structured_with_skill 非 happy-path 测试补全
+
+新增 3 测试(共享 `_ToolAwareLLM` 基类 + `_NoToolLLM`/`_AlwaysToolLLM`/`_BadParseLLM`
+子类,`_RoundTripLLM` 重构为共享类):
+- (a) `test_structured_with_skill_single_round_when_no_tool_call`:回合 1 未调工具 →
+  单次 invoke,parsed 直接返回(零额外往返)。
+- (b) `test_structured_with_skill_caps_tool_rounds`:回合 2 仍调工具 → None(2 回合
+  上限,防工具调用死循环;恰好 2 次 invoke)。
+- (c) `test_structured_with_skill_parse_failure_returns_none`:parsed=None 且无
+  tool_calls(解析失败)→ None,worker 走确定性骨架。
+
+## 修复 4:CLAUDE.md 约束补线上验证待办
+
+agents/kingdee_plugin_agent/CLAUDE.md 约束节新增:tools + json_schema response_format
+组合未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 generate_questions smoke,
+若被拒改用 sentiment 的 JSON Mode 模式(bind_tools + bind(response_format=json_object))。
+
+## 验证
+
+- kingdee 定向:7 passed(load_skill 内容交付 / skill_summary / 4 个循环分支 / 图全链路)。
+- sentiment:14 passed(含路径修复后 load_skill 可用性)。
+- 全量:`pytest tests/ -q` → **152 passed**(146 基线 + 首轮 3 + 本轮 3 = 152),exit 0。
+- 提交:commit 1(kingdee)「fix(skills): load_skill 交付模板内容(name→content)+ 循环分支测试」;
+  commit 2(sentiment)「fix(sentiment): loader 目录名 dash→underscore(load_skill 目录缺失 bug)」。
+
+## 关注点(残余)
+
+- sentiment 的 references 仍是文件名列表(其 references/ 子目录文件正文未随 JSON 交付,
+  同款问题);sentiment 的格式契约主要由 stepN.py 分步脚本承载,SKILL.md 为方法论主文档,
+  危害低于 kingdee,留待 sentiment 后续迭代单独评估。

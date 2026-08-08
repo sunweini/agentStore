@@ -1200,7 +1200,7 @@ def test_api_acceptance_reject_distinct_reasons_accumulate(tmp_path, monkeypatch
 # ── load_skill 机制(skill 渐进式披露,对照 sentiment 模式)────────────────
 
 def test_load_skill_returns_requirement_clarify():
-    """load_skill("requirement-clarify") 返回 SKILL.md 全文 + 三套类型模板;
+    """load_skill("requirement-clarify") 返回 SKILL.md 全文 + 三套类型模板正文;
     未知 skill → error JSON 并列出可用项。"""
     import json
     from agents.kingdee_plugin_agent.skills.loader import load_skill
@@ -1209,7 +1209,12 @@ def test_load_skill_returns_requirement_clarify():
     assert payload["skill"] == "requirement-clarify"
     assert "金蝶插件需求澄清方法论" in payload["summary"]
     assert "一次一问" in payload["summary"]
-    assert payload["references"] == ["bill.md", "list.md", "service.md"]  # 无 references/ 子目录,模板直放
+    # references 是 name→content 映射:模板正文全量交付(LLM 无文件工具,不能只给文件名)
+    assert set(payload["references"]) == {"bill.md", "list.md", "service.md"}
+    assert "触发操作" in payload["references"]["bill.md"]
+    assert "拦截方式" in payload["references"]["bill.md"]
+    assert "服务入口" in payload["references"]["service.md"]
+    assert "操作按钮" in payload["references"]["list.md"]
     assert "金蝶插件需求澄清方法论" in payload["content"]                   # SKILL.md 全文
     assert payload["scripts"] == []
 
@@ -1228,38 +1233,81 @@ def test_skill_summary():
     assert "多选优先" in summary["requirement-clarify"]
 
 
+from langchain_core.messages import AIMessage
+from agents.kingdee_plugin_agent.graph.workers.w1_requirement import QuestionsOutput
+from agents.kingdee_plugin_agent.skills.loader import load_skill, structured_with_skill
+
+
+class _ToolAwareLLM:
+    """模拟真实模型:bind_tools 能力探测 + with_structured_output(tools, include_raw)。
+
+    invoke 由子类实现;seen 记录每轮 invoke 的输入,so_kwargs 记录
+    with_structured_output 收到的参数(验证 tools 真实下发)。
+    """
+
+    def __init__(self):
+        self.seen = []
+        self.so_kwargs = {}
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def with_structured_output(self, schema, **kwargs):
+        self.so_kwargs = kwargs
+        return self
+
+
+def _tool_call_round():
+    """回合返回:模型请求调 load_skill(parsed=None)。"""
+    return {"raw": AIMessage(content="", tool_calls=[
+        {"id": "call_1", "name": "load_skill", "type": "function",
+         "args": {"skill_name": "requirement-clarify"}}]),
+        "parsed": None}
+
+
+class _RoundTripLLM(_ToolAwareLLM):
+    """回合 1 调工具 → 回合 2 出 schema(验证工具结果喂回)。"""
+
+    def invoke(self, messages):
+        self.seen.append(messages)
+        if len(self.seen) == 1:
+            return _tool_call_round()
+        return {"raw": AIMessage(content='{"questions": ["目标单据?"]}'),
+                "parsed": QuestionsOutput(questions=["目标单据?"])}
+
+
+class _NoToolLLM(_ToolAwareLLM):
+    """回合 1 直接出 schema(不调工具)。"""
+
+    def invoke(self, messages):
+        self.seen.append(messages)
+        return {"raw": AIMessage(content='{"questions": ["目标单据?"]}'),
+                "parsed": QuestionsOutput(questions=["目标单据?"])}
+
+
+class _AlwaysToolLLM(_ToolAwareLLM):
+    """每回合都调工具(验证 2 回合上限强制停止)。"""
+
+    def invoke(self, messages):
+        self.seen.append(messages)
+        return _tool_call_round()
+
+
+class _BadParseLLM(_ToolAwareLLM):
+    """模型产出无法解析(parsed=None 且无 tool_calls)。"""
+
+    def invoke(self, messages):
+        self.seen.append(messages)
+        return {"raw": AIMessage(content=""), "parsed": None,
+                "parsing_error": "json decode failed"}
+
+
 def test_structured_with_skill_binds_tool_and_feeds_result_back():
     """真实模型路径(模拟):load_skill 绑定 → 回合 1 模型调工具 → 执行喂回
-    ToolMessage → 回合 2 出 schema;fake LLM(无 bind_tools)走普通路径。"""
-    from langchain_core.messages import AIMessage, ToolMessage
-    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import QuestionsOutput
-    from agents.kingdee_plugin_agent.skills.loader import load_skill, structured_with_skill
+    ToolMessage → 回合 2 出 schema。"""
+    from langchain_core.messages import ToolMessage
 
-    class RoundTripLLM:
-        """模拟真实模型:with_structured_output 支持 tools + include_raw。"""
-
-        def __init__(self):
-            self.seen, self.bound_tools, self.so_kwargs = [], [], {}
-
-        def bind_tools(self, tools, **kwargs):
-            self.bound_tools = list(tools)
-            return self
-
-        def with_structured_output(self, schema, **kwargs):
-            self.so_kwargs = kwargs
-            return self
-
-        def invoke(self, messages):
-            self.seen.append(messages)
-            if len(self.seen) == 1:
-                return {"raw": AIMessage(content="", tool_calls=[
-                    {"id": "call_1", "name": "load_skill", "type": "function",
-                     "args": {"skill_name": "requirement-clarify"}}]),
-                    "parsed": None}
-            return {"raw": AIMessage(content='{"questions": ["目标单据?"]}'),
-                    "parsed": QuestionsOutput(questions=["目标单据?"])}
-
-    llm = RoundTripLLM()
+    llm = _RoundTripLLM()
     out = structured_with_skill(llm, QuestionsOutput,
                                 [("system", "s"), ("human", "h")])
     assert out.questions == ["目标单据?"]
@@ -1272,3 +1320,30 @@ def test_structured_with_skill_binds_tool_and_feeds_result_back():
     assert any(isinstance(m, ToolMessage) for m in second)
     assert any("金蝶插件需求澄清方法论" in getattr(m, "content", "")
                for m in second)                       # 工具结果真实喂回
+
+
+def test_structured_with_skill_single_round_when_no_tool_call():
+    """回合 1 未调工具 → 单次 invoke,parsed 直接返回(零额外往返)。"""
+    llm = _NoToolLLM()
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["目标单据?"]
+    assert len(llm.seen) == 1
+
+
+def test_structured_with_skill_caps_tool_rounds():
+    """回合 2 仍调工具 → 返回 None(2 回合上限,防工具调用死循环)。"""
+    llm = _AlwaysToolLLM()
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.seen) == 2                         # 回合 1 调工具 + 回合 2 仍调 → 停止
+
+
+def test_structured_with_skill_parse_failure_returns_none():
+    """模型输出解析失败(parsed=None 且无 tool_calls)→ None,worker 走确定性骨架。"""
+    llm = _BadParseLLM()
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.seen) == 1

@@ -58,6 +58,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **recursion_limit 是运行时 config 参数**,不是 compile 参数;按子任务数给足(100+20×n,澄清期按上限 10 算 —— 旧 50+10×n 在 n=10 时 150<实际需求 ~160,复合任务触发 GraphRecursionError)。
 - **w1 澄清上限**:逐问 interrupt ≤10 轮;确认摘要最多再确认 1 次,仍不确认带假设强制收口(防无限循环)。
 - **测试注入约定**:只注入 LLM/外部服务(build_graph(llm=None) + fake 编译/冒烟),不 mock LangGraph 本身。
+- **load_skill 绑定未线上验证**:w1-w5 的 `structured_with_skill` 用 tools + json_schema response_format 组合绑定 load_skill,未对真实 DeepSeek 线上验证;首次真实环境联调时先跑 w1 generate_questions smoke,若被 API 拒绝改用 sentiment 的 JSON Mode 模式(`bind_tools([load_skill], strict=True).bind(response_format={"type": "json_object"})` + 手动 2 回合循环)。
 
 ## v1 已知债务(上线前需决策)
 

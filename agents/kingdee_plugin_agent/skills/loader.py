@@ -7,7 +7,8 @@
 - 查找顺序:agents/kingdee_plugin_agent/skills/ → common/skills/。
 - 与 sentiment 版差异:requirement-clarify 无 references/ 子目录,
   类型模板(bill.md/service.md/list.md)直接放在 skill 目录,load_skill
-  返回的 references 字段即这些模板文件;scripts 恒为空列表(无分步脚本)。
+  返回的 references 字段是 name→content 映射(模板正文全量交付 —— agent 的
+  LLM 没有文件工具,只给文件名等于没给);scripts 恒为空列表(无分步脚本)。
 - structured_with_skill:结构化输出 + load_skill 绑定(官方 tools 参数,
   langchain-openai 1.4.1 源码实测核对 —— bind_tools 后再 with_structured_output
   会经 __getattr__ 委派丢失 tools,必须用 with_structured_output(schema,
@@ -56,7 +57,10 @@ def _find_skill(name: str) -> Path | None:
 
 @tool
 def load_skill(skill_name: str) -> str:
-    """按需加载 skill 完整内容(SKILL.md + 类型模板文件)。
+    """按需加载 skill 完整内容(SKILL.md + 类型模板正文)。
+
+    references 为 name→content 映射(如 {"bill.md": "<模板全文>"}):
+    LLM 没有文件工具,模板正文必须随 JSON 交付,不能只给文件名。
 
     Args:
         skill_name: skill 名(requirement-clarify)。
@@ -72,8 +76,13 @@ def load_skill(skill_name: str) -> str:
 
     skill_md = skill_dir / "SKILL.md"
     content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else "(SKILL.md 缺失)"
-    # requirement-clarify 无 references/ 子目录:类型模板 .md 直接放 skill 目录
-    refs = sorted(p.name for p in skill_dir.glob("*.md") if p.name != "SKILL.md")
+    # requirement-clarify 无 references/ 子目录:类型模板 .md 直接放 skill 目录,
+    # 交付 name→content 映射(模板正文是模型拿到的实质内容)
+    refs = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted(skill_dir.glob("*.md"))
+        if p.name != "SKILL.md"
+    }
     scripts = sorted(p.name for p in (skill_dir / "scripts").glob("*.py"))
     return json.dumps(
         {"skill": skill_name, "summary": _AVAILABLE_SKILLS[skill_name],
