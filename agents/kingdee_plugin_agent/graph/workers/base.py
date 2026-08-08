@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState
 from agents.kingdee_plugin_agent.store.artifact_store import ArtifactStore
+from common.otel import get_tracer
 
 
 class WorkerBase:
@@ -28,8 +29,16 @@ class WorkerBase:
         return (f"STATUS: {status}\n产物: {artifact_key}\n证据: {evidence}\n关注点: {concerns}")
 
     def run(self, state: TaskState, subtask: Subtask) -> tuple[Subtask, str]:
-        """执行本环节,返回(更新后的 subtask, 上报消息)。"""
-        result = self._execute(state, subtask)
+        """执行本环节,返回(更新后的 subtask, 上报消息)。
+
+        可观测(设计 §12):每个 worker 执行打一个 span(worker 状态变迁可观测),
+        低基数属性(subtask_id/plugin_type/status),无用户信息(遵循 OBS-CORE-003)。
+        """
+        with get_tracer().start_as_current_span(f"kingdee.worker.{self.name}") as span:
+            span.set_attribute("subtask_id", subtask.id)
+            span.set_attribute("plugin_type", subtask.plugin_type)
+            result = self._execute(state, subtask)
+            span.set_attribute("status", result["status"])
         status = result["status"]
         key = result.get("artifact_key", "")
         if key:

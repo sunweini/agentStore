@@ -138,7 +138,9 @@ def structured_with_skill(llm, schema, messages):
     真实模型:with_structured_output(schema, tools=[load_skill], include_raw=True)
     —— json_schema 模式官方 tools 参数,输出 schema 与 load_skill 同时下发;
     模型回合 1 调 load_skill → 执行并喂回 ToolMessage → 回合 2 出 schema JSON。
-    parsed 仍为空(模型又调工具/解析失败)→ 返回 None → worker 既有确定性骨架降级。
+    畸形 JSON 重试(设计 §8):parsed 为空且无 tool_calls → 同输入重试 1 次
+    (共 2 次尝试);重试耗尽仍解析失败 → 返回 None → worker 既有确定性骨架降级。
+    工具回合后的结果直接返回(成功出 schema / 又调工具强制停止),不再重试。
 
     不传 strict:worker 输出 schema 含默认值字段(QuestionsOutput.questions 等),
     OpenAI strict json_schema 禁止默认值,传了会被 API 拒绝;load_skill 单字符串
@@ -165,8 +167,14 @@ def structured_with_skill(llm, schema, messages):
             except TypeError:
                 structured = None  # 实现不支持 tools 参数 → 普通结构化输出
             if structured is not None:
-                result = structured.invoke(messages)
-                if isinstance(result, dict) and "raw" in result:
+                # 畸形 JSON 重试(设计 §8):parsed=None 且无 tool_calls(解析失败)→
+                # 同输入重试 1 次(共 2 次尝试),仍失败返回 None → worker 既有确定性
+                # 骨架降级。重试与工具 2 回合上限正交:工具回合后的结果直接返回
+                # (成功出 schema / 又调工具强制停止),不再参与解析重试。
+                for _ in range(2):
+                    result = structured.invoke(messages)
+                    if not (isinstance(result, dict) and "raw" in result):
+                        return result  # 非 include_raw 形态(自定义实现):直接返回
                     raw = result.get("raw")
                     if getattr(raw, "tool_calls", None):
                         tool_msgs = [
@@ -175,8 +183,12 @@ def structured_with_skill(llm, schema, messages):
                             for tc in raw.tool_calls
                         ]
                         result = structured.invoke([*messages, raw, *tool_msgs])
-                    return result.get("parsed")
-                return result  # 非 include_raw 形态(自定义实现):直接返回
+                        return result.get("parsed")
+                    parsed = result.get("parsed")
+                    if parsed is not None:
+                        return parsed
+                    # parsed=None 且无 tool_calls:畸形 JSON → 同输入重试
+                return None
         return llm.with_structured_output(schema).invoke(messages)
     except Exception:
         return None  # LLM 故障 → worker 既有确定性骨架

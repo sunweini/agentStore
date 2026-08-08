@@ -36,6 +36,7 @@ from agents.kingdee_plugin_agent.graph.state import (
     MAX_PARALLEL,
 )
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
+from common.otel import get_tracer
 
 #: 子任务状态 → 下一阶段 worker。生命周期见 state.py 模块 docstring。
 STATUS_TO_WORKER = {
@@ -173,7 +174,16 @@ class Supervisor:
     def decide(self, state: TaskState) -> str:
         """返回动作:run:<subtask_id> | ask_user[:<问题>] | finish | fail[:<原因>]
 
-        顺序(确定性优先,LLM 只做无法机械判定时的选择):
+        可观测(设计 §12):决策打 span,action 为低基数属性(无用户信息)。
+        决策顺序与细节见 _decide。
+        """
+        with get_tracer().start_as_current_span("kingdee.supervisor.decide") as span:
+            action = self._decide(state)
+            span.set_attribute("action", action)
+            return action
+
+    def _decide(self, state: TaskState) -> str:
+        """决策确定性顺序(LLM 只做无法机械判定时的选择):
           1. 依赖失败传递(pending 依赖者 → failed)
           2. 全部 delivered → finish
           3. 存在 failed → fail(依赖传递后)

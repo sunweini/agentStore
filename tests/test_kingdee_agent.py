@@ -525,6 +525,68 @@ def test_smoke_fail_decrements_budget(tmp_path):
     assert st.rework_budget_left == 2  # 冒烟失败扣 1 预算
 
 
+# ── 任务指标计数(设计 §9/§12:pass-rate / 返工轮次 / 冒烟通过率随 State 统计)──
+
+def test_metrics_compile_pass_count_on_success(tmp_path):
+    """w5 编译通过 → compile_pass_count +1(fake 客户端)。"""
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient())
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert st.metrics["compile_pass_count"] == 1
+    assert st.metrics["compile_fail_count"] == 0
+
+
+def test_metrics_compile_fail_count_on_exhaust(tmp_path):
+    """w5 编译 5 轮超限 → compile_fail_count +1。"""
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=99))
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert st.metrics["compile_fail_count"] == 1
+    assert st.metrics["compile_pass_count"] == 0
+
+
+def test_metrics_smoke_pass_and_fail_counts(tmp_path):
+    """w5_5 冒烟结果计数:通过 → smoke_pass_count;失败 → smoke_fail_count。"""
+
+    class FakeOk:
+        def deploy_and_verify(self, dll_path, form_id):
+            return SmokeResult(ok=True, detail="ok")
+
+    class FakeBad:
+        def deploy_and_verify(self, dll_path, form_id):
+            return SmokeResult(ok=False, detail="FormId 映射缺失")
+
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                           smoke_client=FakeOk()).run(st, sub)
+    assert st.metrics["smoke_pass_count"] == 1
+    assert st.metrics["smoke_fail_count"] == 0
+
+    st2 = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub2 = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub2)
+    sub2, msg = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                            smoke_client=FakeBad()).run(st2, sub2)
+    assert st2.metrics["smoke_fail_count"] == 1
+    assert st2.metrics["smoke_pass_count"] == 0
+
+
+def test_metrics_defaults_all_zero():
+    """metrics 缺省全 0(METRIC_KEYS 五项)。"""
+    st = TaskState(requirement_spec={}, todo=[])
+    assert st.metrics == {"compile_pass_count": 0, "compile_fail_count": 0,
+                          "rework_rounds": 0, "smoke_pass_count": 0,
+                          "smoke_fail_count": 0}
+
+
 from agents.kingdee_plugin_agent.graph.workers.w6_package import PackageWorker
 from agents.kingdee_plugin_agent.graph.workers.w7_distill import DistillWorker
 
@@ -556,6 +618,52 @@ def test_package_worker_stamps_spec_version(tmp_path):
         record = _json.loads(z.read("records/spec.json"))
     assert record["spec_version"] == 1
     assert record["requirement_spec"]["requirement"] == "审核校验"
+
+
+def test_package_worker_records_design_and_review(tmp_path):
+    """交付包 records 接线(设计 §5.4/§12):design.md + review.json(含 Minor)进包。
+
+    原实现 deliverable 只有 {code, dll_path, subtask_id},records/design.json 与
+    records/review.json 恒为空 {};修复后从产物库读入,Minor 意见随包可审计。
+    """
+    import zipfile
+    w = PackageWorker(llm=None, store=ArtifactStore(root=tmp_path), builder=None,
+                      output_dir=tmp_path)
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "packaged")])
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    (tmp_path / "A1" / "design.md").write_text("# 设计:A1 库存校验\n数量 > 0 拦截",
+                                               encoding="utf-8")
+    (tmp_path / "A1" / "review.json").write_text(_json.dumps([
+        {"severity": "Minor", "line": 3, "issue": "命名建议", "依据": "规范",
+         "修法": "改标识符"},
+        {"severity": "Critical", "line": 1, "issue": "缺校验", "依据": "s", "修法": "r"},
+    ]), encoding="utf-8")
+    sub = Subtask("A1", "bill", "x", [], "packaged")
+    sub, msg = w.run(st, sub)
+    with zipfile.ZipFile(st.final_deliverable) as z:
+        design = _json.loads(z.read("records/design.json"))
+        review = _json.loads(z.read("records/review.json"))
+    assert design["content"] and "库存校验" in design["content"]   # 设计正文进包
+    assert review[0]["severity"] == "Minor"                        # Minor 意见在包
+    assert review[0]["issue"] == "命名建议"
+    assert review[1]["severity"] == "Critical"
+
+
+def test_package_worker_records_missing_artifacts_tolerated(tmp_path):
+    """记录缺失容错:design.md / review.json 未落盘 → 包仍可产出(记录为空占位)。"""
+    import zipfile
+    w = PackageWorker(llm=None, store=ArtifactStore(root=tmp_path), builder=None,
+                      output_dir=tmp_path)
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "packaged")])
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub = Subtask("A1", "bill", "x", [], "packaged")
+    sub, msg = w.run(st, sub)
+    with zipfile.ZipFile(st.final_deliverable) as z:
+        design = _json.loads(z.read("records/design.json"))
+        review = _json.loads(z.read("records/review.json"))
+    assert design == {} and review == {}
 
 
 def test_distill_proposes_but_never_blocks(tmp_path):
@@ -793,6 +901,58 @@ def test_graph_failed_dep_marks_dependents_failed(tmp_path):
     assert _status_map(r["todo"]) == {"A1": "failed", "B1": "failed"}
 
 
+# ── 失败收尾"未完成"包(设计 §8:部分产物 + 退回意见 + 原因)──────────────
+
+def test_graph_budget_exhausted_produces_failed_package(tmp_path):
+    """返工预算耗尽 fail → 失败打包节点产出 deliverable-failed-*.zip:
+    records/status.json 含原因 + spec_version;compile_errors(编译超限 5 轮
+    后的错误日志)与已有产物(设计/代码/审查记录)逐子任务进包。"""
+    import zipfile
+    store = ArtifactStore(root=tmp_path)
+    sub = Subtask("A1", "bill", "x", [], "needs_rework")
+    sub.compile_errors = [{"code": "CS0103", "message": "名称 m 不存在"}]
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class A1 {}", encoding="utf-8")
+    (tmp_path / "A1" / "design.md").write_text("# 设计:A1 库存校验", encoding="utf-8")
+    (tmp_path / "A1" / "review.json").write_text(_json.dumps([
+        {"severity": "Minor", "line": 2, "issue": "命名建议", "依据": "s", "修法": "r"}]),
+        encoding="utf-8")
+    app = build_graph(llm=None, store=store, output_dir=tmp_path)
+    r = app.invoke({"requirement_spec": {"requirement": "x"},
+                    "todo": [Subtask("B1", "service", "y", [], "pending"), sub],
+                    "rework_budget_left": 0}, _cfg("failpkg", todo_count=2))
+    assert r["action"] == "fail:返工预算耗尽"
+    assert _status_map(r["todo"]) == {"A1": "failed", "B1": "failed"}
+    pkg = r["final_deliverable"]
+    assert "failed" in _Path(pkg).name                      # 文件名标注失败态
+    with zipfile.ZipFile(pkg) as z:
+        status = _json.loads(z.read("records/status.json"))
+        errs = _json.loads(z.read("subtasks/A1/compile_errors.json"))
+        code = z.read("subtasks/A1/source/Plugin.cs").decode("utf-8")
+        design = z.read("subtasks/A1/design.md").decode("utf-8")
+        review = _json.loads(z.read("subtasks/A1/review.json"))
+    assert status["reason"] == "fail:返工预算耗尽"           # 原因进包
+    assert status["spec_version"] == 1
+    assert errs[0]["code"] == "CS0103"                      # 编译超限错误日志进包
+    assert "class A1" in code and "库存校验" in design       # 部分产物进包
+    assert review[0]["severity"] == "Minor"                 # 退回意见(含 Minor)进包
+    assert r["final_deliverables"] == [pkg]
+
+
+def test_graph_time_budget_exhausted_produces_failed_package(tmp_path):
+    """时间预算耗尽 fail(30min 总闸)→ 同样走失败打包(未完成包),原因可审计。"""
+    import time as _t
+    import zipfile
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path), output_dir=tmp_path)
+    r = app.invoke({"requirement_spec": {"requirement": "x"},
+                    "todo": [Subtask("A1", "bill", "x", [], "pending")],
+                    "started_at": _t.time() - 2000}, _cfg("timefail"))
+    assert r["action"] == "fail:时间预算耗尽"
+    with zipfile.ZipFile(r["final_deliverable"]) as z:
+        status = _json.loads(z.read("records/status.json"))
+    assert status["reason"] == "fail:时间预算耗尽"
+
+
 def test_supervisor_decide_terminal_logic():
     """主管 decide 终态确定性子集(finish/fail),依赖失败传递在派发前生效。"""
     s = Supervisor(llm=None, workers={})
@@ -925,6 +1085,121 @@ def test_graph_parallel_caps_at_max_parallel(tmp_path):
     assert max_in_progress <= 3                    # MAX_PARALLEL 生效
     assert final["action"] == "finish"
     assert len(final["final_deliverables"]) == 4
+
+
+# ── 任务指标随 State 统计(设计 §9/§12)───────────────────────────────
+
+def test_graph_metrics_full_flow_with_rework(tmp_path):
+    """图全链路指标:编译通过/冒烟通过计数 + w4 Needs fixes 返工 1 轮 → rework_rounds=1。"""
+    llm = ScriptedLLM(scripts={
+        QuestionsOutput: [{"questions": ["FormId?"]}],
+        PlanOutput: [{"subtasks": [{"id": "A1", "plugin_type": "bill", "title": "x", "deps": []}]}],
+        DesignOutput: [{"design_markdown": "# 设计"}],
+        CodeOutput: [{"code": "class A1 {}"}, {"code": "class A1 { /* 重写 */ }"}],
+        ReviewOutput: [{"findings": [{"severity": "Critical", "issue": "缺校验"}]},
+                       {"findings": []}],
+    }, default={"action": "run"})
+    app = build_graph(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("metrics")
+    r = app.invoke({"requirement_spec": {"requirement": "x"}, "todo": []}, cfg)
+    r = app.invoke(Command(resume="SAL_SaleOrder"), cfg)
+    r = app.invoke(Command(resume="确认"), cfg)
+    assert r["action"] == "finish"
+    m = r["metrics"]
+    assert m["compile_pass_count"] == 1
+    assert m["smoke_pass_count"] == 1
+    assert m["rework_rounds"] == 1            # w4 Needs fixes → 返工 1 轮(预算扣 1 同源)
+    assert m["compile_fail_count"] == 0
+    assert m["smoke_fail_count"] == 0
+
+
+def test_graph_metrics_parallel_merge_no_double_count(tmp_path):
+    """并行指标合并:两个独立子任务同轮编译/冒烟 → 计数 = 2(增量 reducer 求和,
+    跨多轮派发不重复累计)。"""
+    app = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                      output_dir=tmp_path)
+    cfg = _cfg("parmetrics", todo_count=2)
+    final = None
+    for chunk in app.stream({"requirement_spec": {"requirement": "复合需求"},
+                             "todo": [Subtask("A1", "bill", "a"),
+                                      Subtask("B1", "service", "b")]},
+                            cfg, stream_mode="values"):
+        final = chunk
+    assert final["action"] == "finish"
+    m = final["metrics"]
+    assert m["compile_pass_count"] == 2       # 并行两个子任务各自 +1
+    assert m["smoke_pass_count"] == 2
+    assert m["rework_rounds"] == 0
+
+
+# ── OTel span(设计 §12:主管派发 / worker 状态变迁 / 编译轮次打 trace)────
+
+class _RecordingSpan:
+    """fake span:记录 set_attribute 键值(等价 no-op tracer 的可用子集)。"""
+
+    def __init__(self, name):
+        self.name = name
+        self.attrs = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def set_attribute(self, key, value):
+        self.attrs[key] = value
+
+
+class _RecordingTracer:
+    """fake tracer:start_as_current_span 返回记录 span —— 无需真实 collector。"""
+
+    def __init__(self):
+        self.spans = []
+
+    def start_as_current_span(self, name, **kwargs):
+        span = _RecordingSpan(name)
+        self.spans.append(span)
+        return span
+
+
+def test_otel_spans_wired_without_collector(tmp_path, monkeypatch):
+    """可观测(设计 §12):worker 状态迁移 / 编译轮次 / 主管决策各打 span;
+    无 collector(no-op tracer)环境不崩 —— fake tracer 记录 span 名与低基数属性。"""
+    import agents.kingdee_plugin_agent.graph.workers.base as _base_mod
+    import agents.kingdee_plugin_agent.graph.workers.w5_compile as _w5_mod
+    import agents.kingdee_plugin_agent.graph.supervisor as _sup_mod
+
+    rec = _RecordingTracer()
+    monkeypatch.setattr(_base_mod, "get_tracer", lambda: rec)
+    monkeypatch.setattr(_w5_mod, "get_tracer", lambda: rec)
+    monkeypatch.setattr(_sup_mod, "get_tracer", lambda: rec)
+
+    # worker 状态迁移 span + 编译轮次 span(fail_first=1 → 2 轮)
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=1))
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(TaskState(requirement_spec={}, todo=[]), sub)
+    names = [s.name for s in rec.spans]
+    assert names.count("kingdee.w5.compile_round") == 2      # 每轮编译一个 span
+    worker_span = next(s for s in rec.spans if s.name == "kingdee.worker.w5")
+    assert worker_span.attrs["subtask_id"] == "A1"
+    assert worker_span.attrs["plugin_type"] == "bill"
+    assert worker_span.attrs["status"] == "DONE"
+    round_span = next(s for s in rec.spans if s.name == "kingdee.w5.compile_round")
+    assert round_span.attrs["round"] == 1
+    assert round_span.attrs["success"] is False
+
+    # 主管决策 span(action 低基数属性)
+    s = Supervisor(llm=None, workers={})
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "delivered")])
+    assert s.decide(st) == "finish"
+    decide_span = next(s for s in rec.spans if s.name == "kingdee.supervisor.decide")
+    assert decide_span.attrs["action"] == "finish"
 
 
 # ── 各终审 carry-over 修复点 ──────────────────────────────────────────
@@ -1715,10 +1990,35 @@ def test_structured_with_skill_caps_tool_rounds():
     assert len(llm.seen) == 2                         # 回合 1 调工具 + 回合 2 仍调 → 停止
 
 
-def test_structured_with_skill_parse_failure_returns_none():
-    """模型输出解析失败(parsed=None 且无 tool_calls)→ None,worker 走确定性骨架。"""
+def test_structured_with_skill_parse_failure_retries_then_returns_none():
+    """畸形 JSON 重试(设计 §8):解析失败重试 1 次(共 2 次尝试),仍失败 → None。
+
+    重试用同一份输入(不喂回失败响应);worker 走确定性骨架降级。
+    """
     llm = _BadParseLLM()
     out = structured_with_skill(llm, QuestionsOutput,
                                 [("system", "s"), ("human", "h")])
     assert out is None
-    assert len(llm.seen) == 1
+    assert len(llm.seen) == 2                         # 2 次尝试,输入一致
+    assert llm.seen[0] == llm.seen[1]                 # 同输入重试(未掺失败响应)
+
+
+class _RetryThenSuccessLLM(_ToolAwareLLM):
+    """第 1 次解析失败(畸形 JSON)→ 第 2 次成功(重试救回,不再降级骨架)。"""
+
+    def invoke(self, messages):
+        self.seen.append(messages)
+        if len(self.seen) == 1:
+            return {"raw": AIMessage(content=""), "parsed": None,
+                    "parsing_error": "json decode failed"}
+        return {"raw": AIMessage(content='{"questions": ["重试救回?"]}'),
+                "parsed": QuestionsOutput(questions=["重试救回?"])}
+
+
+def test_structured_with_skill_retry_recovers_after_parse_failure():
+    """解析失败 1 次 → 重试成功:结果返回(重试救回,不进确定性骨架)。"""
+    llm = _RetryThenSuccessLLM()
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["重试救回?"]
+    assert len(llm.seen) == 2                         # 失败 1 次 + 重试成功 1 次

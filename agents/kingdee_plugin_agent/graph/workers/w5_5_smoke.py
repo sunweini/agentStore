@@ -28,8 +28,10 @@ class SmokeWorker(WorkerBase):
         r = self.smoke.deploy_and_verify(Path(subtask.code_path or ""),
                                          state.environment.get("form_id", ""))
         if not r.ok:
+            state.metrics["smoke_fail_count"] += 1   # 指标:冒烟失败(设计 §12)
             state.rework_budget_left -= 1
             return {"status": "BLOCKED", "artifact_key": "", "evidence": r.detail,
                     "concerns": "冒烟失败,退回 w5/w3"}
+        state.metrics["smoke_pass_count"] += 1       # 指标:冒烟通过(设计 §12)
         return {"status": "DONE", "artifact_key": "", "evidence": r.detail,
                 "concerns": ""}

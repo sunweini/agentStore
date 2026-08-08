@@ -21,6 +21,28 @@ GLOBAL_REWORK_BUDGET = 3   # 全局返工预算:总重新生成 ≤3 轮
 MAX_PARALLEL = 3           # send() 并行子任务上限
 PIPELINE_TIME_BUDGET = 1800.0  # 全流程时间预算(秒):图级总闸(设计 §8 时间预算超限)
 
+#: 任务指标计数键(设计 §9/§12:pass-rate / 返工轮次 / 冒烟通过率随 State 统计)。
+#: 口径:w5/w5_5 每次执行结果计数(重工重跑会再计,= 编译/冒烟轮次结果);
+#: rework_rounds 由主管按返工事件累计(覆盖 w4 重审 + w5 超限 + w5_5 冒烟失败,
+#: 与返工预算扣减同源,预算扣 1 = 返工 1 轮)。
+METRIC_KEYS = ("compile_pass_count", "compile_fail_count", "rework_rounds",
+               "smoke_pass_count", "smoke_fail_count")
+
+
+def _merge_metrics(current: dict, update: dict) -> dict:
+    """metrics 通道 reducer:按 key 求和合并(并行分支各自上报增量)。
+
+    分支 worker 只上报本步增量(delta,执行前后差值),不是全量 —— 全量
+    求和会在跨多轮派发时重复累计(旧值被反复加回);主管 rework_rounds 同
+    理只上报本次事件数。缺键补齐 0:图级通道初始化不给 dataclass 默认值
+    (实测 Annotated 通道初始为空 dict),补齐后计数键始终完整。
+    """
+    merged = {k: current.get(k, 0) + update.get(k, 0)
+              for k in set(current) | set(update)}
+    for k in METRIC_KEYS:
+        merged.setdefault(k, 0)
+    return merged
+
 
 @dataclass
 class Subtask:
@@ -94,6 +116,9 @@ class TaskState:
     action: str = ""                     # run:<sid> | ask_user[:<问题>] | finish | fail[:<原因>]
     dispatch_id: str = ""                # Send 分支输入通道(分支不写回,并行写会冲突)
     user_feedback: list[str] = field(default_factory=list)
+    # ── 任务指标(设计 §9/§12):计数通道,reducer 求和合并增量 ──
+    metrics: Annotated[dict, _merge_metrics] = field(
+        default_factory=lambda: {k: 0 for k in METRIC_KEYS})
     # ── w1 澄清状态机 ──
     clarify_questions: list[str] = field(default_factory=list)
     clarify_answers: list[str] = field(default_factory=list)

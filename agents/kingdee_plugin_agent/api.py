@@ -37,6 +37,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from agents.kingdee_plugin_agent.agent import build_graph, default_recursion_limit
 from common import config
+from common.otel import init_otel
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,9 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         experience: w7 经验库(验收拒绝原因喂入;None = 跳过沉淀,验收仍记录)。
     """
     app = FastAPI(title="kingdee-plugin-agent")
+    # OTel 初始化(与 sentiment api.py 同款):OTEL_ENDPOINT 配置了才上报;
+    # 未配置返回空 provider(span 丢弃),本地无 collector 不阻塞
+    init_otel()
     # CORS:允许前端演示页(web/kingdee-demo.html)跨域访问(与 sentiment api.py 同款)
     app.add_middleware(
         CORSMiddleware,

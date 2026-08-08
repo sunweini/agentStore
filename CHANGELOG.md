@@ -5,6 +5,26 @@
 
 ---
 
+## v1.10.0 — 2026-08-09(kingdee-plugin-agent:P2 五项 —— 指标/失败收尾包/JSON 重试/records 接线/.env)
+
+### 新增功能
+
+- **任务指标随 State 统计(设计 §9/§12)**:`TaskState.metrics`(Annotated dict + `_merge_metrics` reducer 求和合并):compile_pass_count / compile_fail_count(w5 每次编译结果)、smoke_pass_count / smoke_fail_count(w5_5 冒烟结果)、rework_rounds(主管按返工事件累计,与预算扣减同源,w4 重审 + w5 超限 + w5_5 冒烟失败全覆盖);分支 worker 只上报**增量**(执行前后差值,并行分支 + 跨多轮派发不重复累计)。实测修复两处 LangGraph 通道陷阱:`_send_payload` 的 metrics 快照必须 `dict()` 拷贝(并行分支共享同一 dict 引用时 worker `+=` 原地改通道当前值 → reducer 重复累计,实测双任务 compile_pass_count=4 而非 2);Annotated 通道初始化不给 dataclass 默认值(初始空 dict)→ `_as_state` 缺键补齐 0 + reducer setdefault 补齐,计数键始终完整。
+- **OTel span(设计 §12,复用 common/otel.py)**:worker 状态迁移(`kingdee.worker.<name>`,subtask_id/plugin_type/status 低基数属性)、编译轮次(`kingdee.w5.compile_round`,round/success)、主管决策(`kingdee.supervisor.decide`,action)各打 span;无 collector(no-op tracer)环境不崩;`api.py create_app` 启动时 `init_otel()`(与 sentiment api.py 同款,OTEL_ENDPOINT 配了才上报)。
+- **失败收尾"未完成"包(设计 §8)**:终态 fail → 图路由到新 `w6_fail` 失败打包节点(先交包再 END):收集每个未交付子任务已有产物(design.md / Plugin.cs / review.json,缺失容忍)+ compile_errors(编译超限 5 轮后的错误日志,已记在 subtask)+ 审查裁决,`PackageBuilder.build_failed` 产出 `deliverable-failed-<ts>.zip`(文件名标注失败态),records/status.json 记原因(fail:返工预算耗尽/时间预算耗尽等)+ spec_version + 冻结 spec 快照,逐子任务目录 `subtasks/<sid>/` 存产物;CLI/API 与正常交付包同一通道展示 —— 原实现 fail 只有 TodoList 摘要。
+- **LLM 畸形 JSON 重试(设计 §8)**:`structured_with_skill` 解析失败(parsed=None 且无 tool_calls)→ 同一份输入重试 1 次(共 2 次尝试),仍失败返回 None → worker 确定性骨架降级;重试与工具 2 回合上限正交(工具回合后的结果直接返回,不参与重试)。
+- **交付包 records 接线(设计 §5.4/§12)**:w6 从产物库读 design.md + review.json 传入 deliverable 的 design/review 键(缺失容错)→ 随包落 records/design.json + records/review.json —— 原实现 records 恒为空 {},Minor 意见现在自动进包。
+
+### 测试
+
+- tests/test_kingdee_agent.py 新增 12 项:指标(w5 通过/超限计数、w5_5 通过/失败计数、默认全 0、图全链路含返工 rework_rounds=1、并行双任务合并不重复累计)、OTel span(fake tracer 记录 worker/编译轮次/主管决策 span 名与低基数属性,无 collector 不崩)、失败收尾包(返工预算耗尽 → zip 含原因 + compile_errors + 部分产物 + Minor 意见;时间预算耗尽 → 同样出包)、records 接线(design/review 真实内容进包;缺失容忍)、JSON 重试(失败 1 次重试成功返回;失败 2 次返回 None)。全套 184 项全过(172 既有 + 12 新增)。
+
+### 文档
+
+- `.env.example` 新增 kingdee 配置组:KD_* 4 项(金蝶环境硬门槛)/ COMPILE_SERVICE_URL / COMPILE_SERVICE_REQUIRES_DLLS + REFS_DIR(注释态)/ KINGDEE_API_KEY,OTEL_ENDPOINT 归入 OpenTelemetry 分组 —— 与 manual.md §1.1 声明的 4 组配置一致。
+
+---
+
 ## v1.9.0 — 2026-08-08(kingdee-plugin-agent:时间预算 + 需求版本冻结,设计 §8 两项落地)
 
 ### 新增功能

@@ -19,11 +19,14 @@ LangGraph 1.2.10 API 用法(经安装包 introspection 实测核对,本文件即
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Send, interrupt
 
-from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState
+from agents.kingdee_plugin_agent.graph.state import METRIC_KEYS, Subtask, TaskState
 from agents.kingdee_plugin_agent.graph.supervisor import Supervisor, worker_for_subtask
 from agents.kingdee_plugin_agent.graph.workers.w1_requirement import (
     RequirementWorker,
@@ -69,6 +72,8 @@ def _as_state(payload) -> TaskState:
 
     Send 分支入参实测为 payload dict(见模块 docstring),worker 代码按
     TaskState 属性访问,这里统一转换;todo 条目兼容 Subtask 实例 / dict(JSON 反序列化)。
+    metrics 缺键补齐 0:图级通道初始化给空 dict(实测 Annotated 通道不取
+    dataclass 默认值),补齐后 worker 的计数 `+=` 不会 KeyError。
     """
     if isinstance(payload, TaskState):
         return payload
@@ -80,7 +85,10 @@ def _as_state(payload) -> TaskState:
         else:
             todo.append(Subtask(**{k: s[k] for k in _SUBTASK_FIELDS if k in s}))
     data["todo"] = todo
-    return TaskState(**data)
+    st = TaskState(**data)
+    for k in METRIC_KEYS:
+        st.metrics.setdefault(k, 0)
+    return st
 
 
 def _find_subtask(state: TaskState, dispatch_id: str) -> Subtask:
@@ -101,6 +109,10 @@ def _send_payload(state: TaskState, subtask: Subtask) -> dict:
         "spec_version": state.spec_version,   # w6 打包把冻结版本盖进交付记录
         "final_deliverable": state.final_deliverable,
         "final_deliverables": state.final_deliverables,
+        # 指标计数快照(w5/w5_5 增量上报):dict() 拷贝 —— 并行分支若共享同一
+        # dict 引用,worker 的 `+=` 会原地改通道当前值,reducer 在此基础上再
+        # 求和导致重复累计(实测并行双任务 compile_pass_count=4 而非 2)
+        "metrics": dict(state.metrics),
     }
 
 
@@ -149,22 +161,33 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
     def supervisor_node(state: TaskState) -> dict:
         """主管:先应用分支上报的返工事件(并行返工精确累计),再决策;
         decide 可能原地标记 todo(级联失败/预算耗尽),整体回写。
-        预算是主管唯一写者(rework_budget_left 普通字段,默认 3 才生效)。"""
-        if state.rework_events:
-            state.rework_budget_left = max(0, state.rework_budget_left - sum(state.rework_events))
+        预算是主管唯一写者(rework_budget_left 普通字段,默认 3 才生效)。
+        指标:返工事件数 → rework_rounds 增量(与预算扣减同源,预算扣 1 = 返工 1 轮)。"""
+        n_events = sum(state.rework_events)
+        if n_events:
+            state.rework_budget_left = max(0, state.rework_budget_left - n_events)
         action = supervisor.decide(state)
-        return {"action": action, "todo": state.todo,
-                "rework_budget_left": state.rework_budget_left,
-                "rework_events": []}
+        updates = {"action": action, "todo": state.todo,
+                   "rework_budget_left": state.rework_budget_left,
+                   "rework_events": []}
+        if n_events:
+            updates["metrics"] = {"rework_rounds": n_events}
+        return updates
 
     def route(state: TaskState):
-        """主管动作 → 节点/END 的机械映射(终态判定在 Supervisor.decide)。"""
+        """主管动作 → 节点/END 的机械映射(终态判定在 Supervisor.decide)。
+
+        fail → w6_fail 失败打包节点(先交"未完成"包再 END,设计 §8 失败收尾);
+        finish 直接 END。
+        """
         a = state.action or ""
         if a.startswith("run:"):
             return "dispatcher"
         if a.startswith("ask_user"):
             return "w1"
-        return END  # finish | fail
+        if a.startswith("fail"):
+            return "w6_fail"
+        return END  # finish
 
     def dispatcher_node(state: TaskState):
         """批量派发:依赖满足的 pending 子任务 send() 并行(并发 ≤ MAX_PARALLEL)。
@@ -185,6 +208,42 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
         if not sends:
             return Command(goto="supervisor")  # 防御:状态漂移无派发 → 回主管重决策
         return Command(update={"todo": updates, "action": ""}, goto=sends)
+
+    def fail_package_node(state: TaskState) -> dict:
+        """失败收尾(设计 §8):收集部分产物 + 全部退回意见 + 原因 → "未完成"包。
+
+        仅在终态 fail 时经 route 进入(w6_fail 节点):从产物库收集每个未交付
+        子任务已有产物(design.md / Plugin.cs / review.json,缺失容忍)+
+        compile_errors(编译超限 5 轮后的错误日志,已记在 subtask)+ 审查裁决,
+        PackageBuilder.build_failed 打成 `deliverable-failed-<ts>.zip`,
+        记入 final_deliverable(s) —— CLI/API 与正常交付包同一通道展示,
+        失败也有可审计产物(原实现 fail 只有 TodoList 摘要)。
+        """
+        from agents.kingdee_plugin_agent.tools.package import PackageBuilder
+        builder = package_builder or PackageBuilder(output_dir=output_dir or Path("data/kingdee-deliverables"))
+        collected = []
+        for s in state.todo:
+            if s.status == "delivered":
+                continue  # 已交付子任务不进未完成包
+            entry = {"id": s.id, "status": s.status,
+                     "review_verdict": s.review_verdict,
+                     "compile_errors": list(s.compile_errors)}
+            for name, key in (("design.md", "design"), ("Plugin.cs", "code")):
+                try:
+                    entry[key] = store.read(s.id, name)
+                except Exception:
+                    pass  # 未走到该阶段 → 产物缺失跳过
+            try:
+                review = store.read(s.id, "review.json")
+                entry["review"] = json.loads(review)
+            except Exception:
+                pass
+            collected.append(entry)
+        path = builder.build_failed(collected, reason=state.action,
+                                    spec_version=state.spec_version,
+                                    requirement_spec=state.requirement_spec)
+        return {"final_deliverable": str(path),
+                "final_deliverables": [str(path)]}  # reducer 追加合并
 
     def w1_node(state: TaskState) -> dict:
         """w1 交互节点:初始澄清(问题/确认,interrupt 挂起)或中途 ask_user。
@@ -275,6 +334,7 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
             st = _as_state(payload)
             sub = _find_subtask(st, st.dispatch_id)
             before = st.rework_budget_left
+            metrics_before = dict(st.metrics)   # 指标增量 = 执行前后差值(分支只报增量)
             sub, msg = workers[name].run(st, sub)
             rework = _advance_status(name, sub, st,
                                      budget_deducted=st.rework_budget_left < before)
@@ -283,6 +343,10 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
                 # 返工事件上报主管统一扣预算(分支不直写预算:并行分支同一步
                 # 写同一普通通道会 InvalidUpdateError,且并行累计会丢失)
                 updates["rework_events"] = [1]
+            delta = {k: st.metrics[k] - metrics_before.get(k, 0)
+                     for k in st.metrics if st.metrics[k] != metrics_before.get(k, 0)}
+            if delta:
+                updates["metrics"] = delta      # 指标增量上报(reducer 求和,并行不丢)
             if name == "w6":
                 path = sub.report.get("path", "")
                 if path:
@@ -299,6 +363,7 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("dispatcher", dispatcher_node)
     graph.add_node("w1", w1_node)          # 交互节点(单独注册,非分支 worker)
+    graph.add_node("w6_fail", fail_package_node)  # 失败收尾:先交未完成包再 END
     for name in workers:
         if name != "w1":
             graph.add_node(name, make_worker_node(name))
@@ -306,8 +371,9 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
     graph.add_edge(START, "supervisor")
     graph.add_conditional_edges(
         "supervisor", route,
-        {"dispatcher": "dispatcher", "w1": "w1", END: END},
+        {"dispatcher": "dispatcher", "w1": "w1", "w6_fail": "w6_fail", END: END},
     )
+    graph.add_edge("w6_fail", END)
     # 注意:不给 dispatcher 加静态边 —— 实测(1.2.10)节点返回 Command(goto=[Send...])
     # 时静态边会同时生效,导致主管在分支执行中被再次调度;分支各自经 worker → supervisor 回环
     for name in workers:

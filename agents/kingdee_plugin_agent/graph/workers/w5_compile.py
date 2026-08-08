@@ -19,6 +19,7 @@ from compile_service.models import CompileUnavailableError
 from agents.kingdee_plugin_agent.graph.workers.base import WorkerBase
 from agents.kingdee_plugin_agent.graph.workers.w3_generate import CodeOutput
 from agents.kingdee_plugin_agent.skills.loader import SKILL_HINT, structured_with_skill
+from common.otel import get_tracer
 
 MAX_COMPILE_ROUNDS = 5
 
@@ -78,19 +79,27 @@ class CompileWorker(WorkerBase):
                     "concerns": "编译服务不可用(容器未起),不计编译轮次"}
         code = self.store.read(subtask.id, "Plugin.cs")
         for i in range(MAX_COMPILE_ROUNDS):
-            try:
-                result = self.client.compile(code, subtask.id)
-            except CompileUnavailableError:
-                return {"status": "BLOCKED", "artifact_key": "", "evidence": "",
-                        "concerns": "编译服务 503"}
-            except httpx.HTTPError:
-                # 超时/连接失败(httpx.TimeoutException/ConnectError 均系
-                # HTTPError 子类,实测类层级):服务不可用 → BLOCKED,不计轮次
-                # 不扣预算(原实现异常向上传播 → 节点 raise → 图中断/API 任务死)
-                return {"status": "BLOCKED", "artifact_key": "", "evidence": "",
-                        "concerns": "编译服务不可用(超时/连接失败),不计编译轮次"}
+            # 每轮编译打 span(设计 §12:编译轮次可观测),低基数属性,无用户信息
+            with get_tracer().start_as_current_span("kingdee.w5.compile_round") as span:
+                span.set_attribute("subtask_id", subtask.id)
+                span.set_attribute("round", i + 1)
+                try:
+                    result = self.client.compile(code, subtask.id)
+                except CompileUnavailableError:
+                    span.set_attribute("status", "unavailable")
+                    return {"status": "BLOCKED", "artifact_key": "", "evidence": "",
+                            "concerns": "编译服务 503"}
+                except httpx.HTTPError:
+                    # 超时/连接失败(httpx.TimeoutException/ConnectError 均系
+                    # HTTPError 子类,实测类层级):服务不可用 → BLOCKED,不计轮次
+                    # 不扣预算(原实现异常向上传播 → 节点 raise → 图中断/API 任务死)
+                    span.set_attribute("status", "unavailable")
+                    return {"status": "BLOCKED", "artifact_key": "", "evidence": "",
+                            "concerns": "编译服务不可用(超时/连接失败),不计编译轮次"}
+                span.set_attribute("success", result.success)
             if result.success:
                 subtask.compile_errors = []
+                state.metrics["compile_pass_count"] += 1   # 指标:编译通过(设计 §9)
                 return {"status": "DONE", "artifact_key": "code_path",
                         "path": subtask.code_path, "evidence": f"编译通过(第 {i + 1} 轮)",
                         "concerns": ""}
@@ -101,6 +110,7 @@ class CompileWorker(WorkerBase):
             if fixed is not None:
                 code = fixed
                 self.store.write(subtask.id, "Plugin.cs", code)  # 改写后写回重编
+        state.metrics["compile_fail_count"] += 1           # 指标:编译 5 轮超限(设计 §9)
         state.rework_budget_left -= 1
         return {"status": "BLOCKED", "artifact_key": "", "evidence": "编译 5 轮失败",
                 "concerns": "编译超限,退回 w3/w4 或问用户"}
