@@ -56,3 +56,30 @@ def test_worker_run_dispatch(tmp_path):
     assert new_sub.report["status"] == "DONE"
     assert new_sub.report["worker"] == "dummy"
     assert msg.startswith("STATUS: DONE")
+
+
+from agents.kingdee_plugin_agent.graph.supervisor import Supervisor
+
+
+def test_next_ready_respects_deps():
+    st = TaskState(requirement_spec={}, todo=[
+        Subtask("B1", "service", "y", [], "pending"),           # 无依赖
+        Subtask("A1", "bill", "x", ["B1"], "pending"),          # 依赖 B1
+    ])
+    s = Supervisor(llm=None, workers={})
+    nxt = s._next_ready(st)
+    assert nxt.id == "B1"  # 先无依赖
+
+
+def test_next_ready_respects_concurrency():
+    st = TaskState(requirement_spec={}, todo=[
+        Subtask(f"T{i}", "bill", f"t{i}", [], "in_progress") for i in range(3)
+    ] + [Subtask("T3", "bill", "t3", [], "pending")])
+    s = Supervisor(llm=None, workers={})
+    assert s._next_ready(st) is None  # 并发已达 3
+
+
+def test_budget_exhausted():
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
+    s = Supervisor(llm=None, workers={})
+    assert s._check_budget(st) is False
