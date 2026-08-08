@@ -368,3 +368,35 @@ def test_distill_proposes_but_never_blocks(tmp_path):
     st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
     sub, msg = w.run(st, Subtask("A1", "bill", "x", [], "delivered"))
     assert "STATUS: DONE" in msg  # 失败也不阻塞交付
+
+
+class BrokenExp:
+    def propose(self, *a, **k):
+        raise RuntimeError("chroma down")
+
+
+def test_distill_broken_store_never_blocks(tmp_path):
+    from agents.kingdee_plugin_agent.graph.workers.w7_distill import DistillWorker
+    w = DistillWorker(llm=None, store=ArtifactStore(root=tmp_path), experience=BrokenExp())
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
+    sub = Subtask("A1", "bill", "x", [], "delivered")
+    sub.compile_errors = [{"code": "CS0103", "message": "m"}]
+    sub, msg = w.run(st, sub)
+    assert "DONE_WITH_CONCERNS" in msg
+    assert "沉淀失败" in msg
+
+
+def test_distill_proposes_real_experience(tmp_path):
+    """真实经验库落库:compile_errors 逐条 propose,条目 status=proposed、source=w7。"""
+    from common.rag import RagClient, ExperienceStore
+    client = RagClient(data_dir=tmp_path / "rag")
+    exp = ExperienceStore(client)
+    w = DistillWorker(llm=None, store=ArtifactStore(root=tmp_path), experience=exp)
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
+    sub = Subtask("A1", "bill", "x", [], "delivered")
+    sub.compile_errors = [{"code": "CS0103", "message": "名称 m 不存在"}]
+    sub, msg = w.run(st, sub)
+    assert "STATUS: DONE" in msg
+    hits = client.search("experience", "CS0103", k=5)
+    assert hits and hits[0]["metadata"].get("source") == "w7"
+    assert hits[0]["metadata"].get("status") == "proposed"
