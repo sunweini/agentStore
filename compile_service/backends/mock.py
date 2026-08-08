@@ -13,7 +13,7 @@ DEFAULT_MOCK_RULES = [
 
 class MockCompiler(CompilerBackend):
     def __init__(self, rule_file: Path | None = None):
-        self.rules = DEFAULT_MOCK_RULES
+        self.rules = list(DEFAULT_MOCK_RULES)  # 拷贝,防共享可变默认值被外部改动污染
         if rule_file:
             import json
             self.rules = json.loads(rule_file.read_text())

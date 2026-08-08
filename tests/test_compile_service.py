@@ -67,3 +67,27 @@ def test_mock_compiler_clean_code_passes():
     mc = MockCompiler(rule_file=None)
     result = mc.compile(code="// 无规则命中", project_name="Test")
     assert result.success is True
+
+from fastapi.testclient import TestClient
+from compile_service.server import create_app, CompileUnavailableError
+
+def test_health_ok():
+    client = TestClient(create_app(backend=MockCompiler()))
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+def test_compile_endpoint():
+    client = TestClient(create_app(backend=MockCompiler()))
+    r = client.post("/compile", json={"code": "xxx()", "project_name": "T"})
+    assert r.status_code == 200
+    assert r.json()["success"] is False
+    assert r.json()["errors"][0]["code"] == "CS0103"
+
+def test_compile_unavailable_returns_503():
+    class DownBackend:
+        def compile(self, code, project_name):
+            raise CompileUnavailableError("compiler down")
+    client = TestClient(create_app(backend=DownBackend()))
+    r = client.post("/compile", json={"code": "x", "project_name": "T"})
+    assert r.status_code == 503
