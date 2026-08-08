@@ -17,7 +17,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_AGENT_SKILLS = _PROJECT_ROOT / "agents" / "sentiment-query-agent" / "skills"
+_AGENT_SKILLS = _PROJECT_ROOT / "agents" / "sentiment_query_agent" / "skills"
 _COMMON_SKILLS = _PROJECT_ROOT / "common" / "skills"
 
 # 本 agent 可用的 skill 摘要(启动即加载,渐进式披露的"摘要层")
