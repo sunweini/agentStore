@@ -1,0 +1,8 @@
+{
+  "id": "service_1",
+  "plugin_type": "service",
+  "requirement": "销售出库单审核后校验实发数量不超过订单未发数量",
+  "form_id": "SAL_OUTSTOCK",
+  "field": "FRealQty",
+  "expected_trigger": "AfterExecuteOperationTransaction"
+}

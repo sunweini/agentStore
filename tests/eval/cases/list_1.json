@@ -1,0 +1,8 @@
+{
+  "id": "list_1",
+  "plugin_type": "list",
+  "requirement": "物料列表加载后按类别过滤只显示启用物料",
+  "form_id": "BD_MATERIAL",
+  "field": "FNumber",
+  "expected_trigger": "AfterBindData"
+}
