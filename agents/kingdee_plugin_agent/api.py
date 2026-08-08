@@ -8,6 +8,7 @@
   GET  /tasks/{id}/state         全量状态快照(断线重连兜底)
   POST /tasks/{id}/answers       澄清回答/确认 → interrupt resume(Command(resume=...))
   POST /tasks/{id}/acceptance    artifact 验收 accept/reject + 原因 → 拒绝原因喂 w7 经验库
+  POST /tasks/{id}/feedback      部署后行为错误手动上报 → 原因喂经验库(DEPLOY 通道,设计 §12)
 
 v1 约定:
   - 任务存储 = 内存 dict(app.state.tasks,进程内有效;重启丢失,后续换持久化存储)
@@ -195,6 +196,25 @@ class TaskHandle:
             self._resume = str(answer)
             self._cond.notify_all()
 
+    def record_feedback(self, reason: str) -> dict:
+        """部署后行为错误手动上报(设计 §12 反馈通道):原因喂经验库 DEPLOY 通道。
+
+        与验收拒绝同沉淀模式(proposed 态 + sha256 摘要入签名去重):
+        签名 `DEPLOY|sha256(reason)[:12]`,不同原因各自累计、相同原因去重;
+        沉淀失败不阻塞反馈(never blocks,失败只记日志)。
+        """
+        verdict = {"reason": str(reason or ""), "at": datetime.now().isoformat(timespec="seconds")}
+        if reason and self.experience is not None:
+            try:
+                sig_part = hashlib.sha256(str(reason).encode("utf-8")).hexdigest()[:12]
+                self.experience.propose("DEPLOY", sig_part, str(reason),
+                                        "部署后行为错误手动上报,待人工核验(反馈通道)")
+            except Exception as exc:  # 沉淀失败不阻塞反馈(与验收同语义)
+                logger.warning("service=kingdee-plugin-agent event=feedback_distill_failed "
+                               "task_id=%s error=%s", self.task_id, exc)
+        self._emit("feedback", verdict)
+        return verdict
+
     def record_acceptance(self, accepted: bool, reason: str) -> dict:
         """记录验收结论;拒绝 + 原因 → 喂 w7 经验库(proposed 态,失败不阻塞验收)。"""
         verdict = {"accepted": bool(accepted), "reason": str(reason or ""),
@@ -319,6 +339,9 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         state = {"requirement_spec": {"requirement": requirement,
                                       "environment": env_name},
                  "todo": [],
+                 # 目标环境名记录进 state.environment(冒烟/打包等节点可感知;
+                 # v1 单环境只记录,不做环境级差异化,见 agent CLAUDE.md 债务)
+                 "environment": {"env_name": env_name},
                  "started_at": time.time()}
         handle = TaskHandle(task_id, graph, cfg, state, experience=experience)
         app.state.tasks[task_id] = handle
@@ -396,5 +419,13 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         verdict = handle.record_acceptance(bool(payload.get("accepted")),
                                            str(payload.get("reason") or ""))
         return {"ok": True, "task_id": task_id, "acceptance": verdict}
+
+    @app.post("/tasks/{task_id}/feedback")
+    def feedback(task_id: str, payload: dict, x_api_key: str = Header(default="")):
+        """部署后行为错误手动上报(设计 §12):原因喂经验库 DEPLOY 通道,从不阻塞。"""
+        _check(x_api_key)
+        handle = _get_task_or_404(task_id)
+        verdict = handle.record_feedback(str(payload.get("reason") or ""))
+        return {"ok": True, "task_id": task_id, "feedback": verdict}
 
     return app

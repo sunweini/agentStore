@@ -84,6 +84,54 @@ def test_compile_endpoint():
     assert r.json()["success"] is False
     assert r.json()["errors"][0]["code"] == "CS0103"
 
+
+def test_compile_endpoint_reports_dll_path():
+    """/compile 响应带 dll_path(后端产出);mock 后端无产出 → 空串。"""
+    class WithDll:
+        def compile(self, code, project_name):
+            return CompileResult(success=True, raw_output="", duration_ms=0,
+                                 errors=[], dll_path="/artifacts/T/Plugin.dll")
+    client = TestClient(create_app(backend=WithDll()))
+    r = client.post("/compile", json={"code": "x", "project_name": "T"})
+    assert r.json()["dll_path"] == "/artifacts/T/Plugin.dll"
+    r2 = TestClient(create_app(backend=MockCompiler())).post(
+        "/compile", json={"code": "class X {}", "project_name": "T"})
+    assert r2.json()["dll_path"] == ""
+
+
+def test_dll_download_endpoint():
+    """GET /dll/<project_name> 拉取留存 DLL;非法名 400;后端无留存 404。"""
+    from compile_service.backends.msbuild import MsbuildCompiler
+    artifact_dir = Path("data/kingdee-compiled-test")
+    dll = artifact_dir / "T" / "Plugin.dll"
+    dll.parent.mkdir(parents=True, exist_ok=True)
+    dll.write_bytes(b"PE\x00\x00")
+    try:
+        backend = MsbuildCompiler(msbuild_path="msbuild",
+                                  reference_dlls=[Path("a.dll")],
+                                  artifact_dir=artifact_dir)
+        client = TestClient(create_app(backend=backend))
+        r = client.get("/dll/T")
+        assert r.status_code == 200 and r.content == b"PE\x00\x00"
+        assert client.get("/dll/nope").status_code == 404
+        # ../ 在路由层已被规范化拦截(404,不达 handler)—— handler 层白名单另行单测
+        assert client.get("/dll/../evil").status_code == 404
+        # mock 后端无 artifact_dir → 404
+        r2 = TestClient(create_app(backend=MockCompiler())).get("/dll/T")
+        assert r2.status_code == 404
+    finally:
+        import shutil
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
+
+def test_dll_project_name_whitelist():
+    """DLL 下载 project_name 白名单(与 ArtifactStore 同源,防路径穿越)。"""
+    from compile_service.server import _PROJECT_NAME_RE
+    assert _PROJECT_NAME_RE.match("A1") and _PROJECT_NAME_RE.match("a_b-1")
+    assert not _PROJECT_NAME_RE.match("../evil")
+    assert not _PROJECT_NAME_RE.match("a/b")
+    assert not _PROJECT_NAME_RE.match("a b")
+
 def test_compile_unavailable_returns_503():
     class DownBackend:
         def compile(self, code, project_name):
@@ -124,6 +172,34 @@ def test_client_503_raises_unavailable(monkeypatch):
     monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
     with pytest.raises(CompileUnavailableError):
         client.compile(code="x", project_name="T")
+
+
+def test_client_fetches_dll_to_local_artifact_dir(monkeypatch, tmp_path):
+    """编译成功且服务端产出 DLL → 客户端拉到本地 artifact_dir,dll_path 为本地路径。"""
+    client = CompileClient(base_url="http://test", artifact_dir=tmp_path / "compiled")
+    resp = type("R", (), {"status_code": 200, "json": lambda *a, **k: {
+        "success": True, "raw_output": "", "duration_ms": 5,
+        "dll_path": "/artifacts/T/Plugin.dll", "errors": []}})()
+    dll_resp = type("R", (), {"status_code": 200, "content": b"PE\x00\x00"})()
+    monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
+    monkeypatch.setattr(client.session, "get", lambda *a, **k: dll_resp)
+    result = client.compile(code="x", project_name="T")
+    local = tmp_path / "compiled" / "T" / "Plugin.dll"
+    assert result.dll_path == str(local)
+    assert local.read_bytes() == b"PE\x00\x00"
+
+
+def test_client_dll_fetch_failure_degrades_to_empty(monkeypatch, tmp_path):
+    """服务端产出 DLL 但拉取失败(404/网络)→ dll_path 置空(冒烟按无 DLL 跳过,不崩)。"""
+    client = CompileClient(base_url="http://test", artifact_dir=tmp_path / "compiled")
+    resp = type("R", (), {"status_code": 200, "json": lambda *a, **k: {
+        "success": True, "raw_output": "", "duration_ms": 5,
+        "dll_path": "/artifacts/T/Plugin.dll", "errors": []}})()
+    monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
+    monkeypatch.setattr(client.session, "get", lambda *a, **k:
+                        type("R", (), {"status_code": 404})())
+    result = client.compile(code="x", project_name="T")
+    assert result.dll_path == ""
 
 # --- 终审修复测试:returncode 校验 / REFERENCE_DLLS glob / server+client 往返 ---
 from compile_service.server import create_app, _backend_from_env

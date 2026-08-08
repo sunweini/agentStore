@@ -6,9 +6,10 @@
   → needs_rework(退回 w3 重新生成,扣返工预算) / blocked(等用户) / failed(终态)
 
 C10 追加的图运行字段(agent.py 主管循环使用):
-  action / dispatch_id / user_feedback / ask_question
+  action / dispatch_id / user_feedback / metrics
   clarify_questions / clarify_answers / clarify_feedback / clarify_round
   confirm_attempts / spec_confirmed / final_deliverables(多子任务交付包合并)
+  started_at / spec_version(设计 §8:时间预算 + 需求版本冻结)
 """
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -53,6 +54,7 @@ class Subtask:
     status: str = "pending"
     design_path: str = ""
     code_path: str = ""
+    dll_path: str = ""            # 编译产物 DLL 路径(w5 成功时取自编译后端;mock 后端无产出为空)
     compile_errors: list[dict] = field(default_factory=list)
     review_verdict: str = ""  # Approved | Needs fixes
     review_path: str = ""     # w4 审查报告路径(artifact_key 契约,见 C7 修复)

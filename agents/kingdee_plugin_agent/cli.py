@@ -54,6 +54,9 @@ def run_cli(argv: list[str] | None = None) -> int:
     state = {"requirement_spec": {"requirement": args.requirement,
                                   "environment": args.env},
              "todo": [],
+             # 目标环境名记录进 state.environment(冒烟/打包等节点可感知;
+             # v1 单环境只记录,不做环境级差异化,见 agent CLAUDE.md 债务)
+             "environment": {"env_name": args.env},
              "started_at": time.time()}
 
     # ── 交互澄清循环:interrupt 挂起 → 打印问题/摘要 → stdin 答复 → resume ──

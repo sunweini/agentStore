@@ -99,6 +99,9 @@ class CompileWorker(WorkerBase):
                 span.set_attribute("success", result.success)
             if result.success:
                 subtask.compile_errors = []
+                # 编译产物 DLL:后端产出(真实 msbuild → 服务端留存 → 客户端拉取到
+                # 本地)→ 传给 w5.5 冒烟 / w6 打包;mock 后端无产出 → 空串。
+                subtask.dll_path = getattr(result, "dll_path", "") or ""
                 state.metrics["compile_pass_count"] += 1   # 指标:编译通过(设计 §9)
                 return {"status": "DONE", "artifact_key": "code_path",
                         "path": subtask.code_path, "evidence": f"编译通过(第 {i + 1} 轮)",

@@ -26,6 +26,12 @@ class WorkerBase:
         return p.read_text(encoding="utf-8")
 
     def _report(self, status: str, artifact_key: str, evidence: str, concerns: str) -> str:
+        """上报消息。状态契约(设计):DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT。
+
+        NEEDS_CONTEXT 为设计契约保留值,当前无产出路径(无 worker 上报,图侧
+        亦无分支处理)—— 若未来 worker 需要"缺信息"态,先接通 supervisor 处理
+        再加,勿裸用。
+        """
         return (f"STATUS: {status}\n产物: {artifact_key}\n证据: {evidence}\n关注点: {concerns}")
 
     def run(self, state: TaskState, subtask: Subtask) -> tuple[Subtask, str]:

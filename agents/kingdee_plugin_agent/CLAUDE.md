@@ -17,7 +17,7 @@ START → supervisor ──run:──→ dispatcher ──Send──→ w2/w3/w4
           └──ask_user──→ w1     └──finish|fail──→ END    └──→ supervisor(回环)
 ```
 
-w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约:主管拆解需求为 Subtask(id, plugin_type, title, deps, status, design_path, code_path, compile_errors, review_verdict, review_path, report),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。
+w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 supervisor 各有静态回边。任务契约:主管拆解需求为 Subtask(id, plugin_type, title, deps, status, design_path, code_path, dll_path, compile_errors, review_verdict, review_path, report),worker 只按 `dispatch_id` 处理自己那份,以 `report` dict 上报(状态 + 消息 + 产物路径)。冒烟链路:w1 确认时把目标单据 FormId 提取进 `state.environment["form_id"]`(PlanOutput.form_id 显式槽 + decisions 兜底,见 w1_requirement.extract_form_id),w5 编译成功时把后端产出 DLL 路径存 `subtask.dll_path`(mock 后端为空 → w5.5 跳过部署验证并显式标注,不拿源码冒充)。
 
 | 文件 | 职责 |
 |---|---|
@@ -69,5 +69,5 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **API 线程无并发上限**:每任务一个后台线程,无线程池/并发闸门,流量大时需限流。
 - **apikey 非 timing-safe**:`x_api_key != effective_key` 直接字符串比较,未用 `secrets.compare_digest`。
 - **msgpack 反序列化警告**:TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本时 dataclass 字段/嵌套 dict 需验证兼容(api.py `_subtask_dict` 已兼容 Subtask 实例/dict 两种形态)。
-- **`--env` 未消费**:CLI 的 `--env` 只进 `requirement_spec`,未做环境级差异化处理(单环境 v1)。
+- **`--env` 部分消费**:CLI/API 的 env 值进 `requirement_spec` + `state.environment["env_name"]`(节点可感知),未做环境级差异化处理(单环境 v1)。
 - **CLI 门控仅 KD_BASE_URL**:CLI 只校验 KD_BASE_URL(API 已全校验 4 项),单环境 v1 约定。

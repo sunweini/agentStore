@@ -286,11 +286,19 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
 
         需求版本冻结(设计 §8):确认即冻结 —— 此处给 spec_version 盖章,此后
         requirement_spec 不再被任何节点修改;要改需求须开新任务。
+
+        冒烟链路(结构级修复):确认时从 spec 提取目标单据 FormId 写入
+        state.environment["form_id"],w5.5 部署验证据此映射;environment 只增
+        不改(保留 CLI/API 注入的 env_name 等键)。
         """
         todo = workers["w1"].split_subtasks(state, spec)
         workers["w1"].persist(spec, todo)
+        environment = dict(state.environment)
+        form_id = workers["w1"].extract_form_id(spec)
+        if form_id:
+            environment["form_id"] = form_id
         return {"requirement_spec": spec, "todo": todo, "spec_confirmed": True,
-                "spec_version": 1,
+                "spec_version": 1, "environment": environment,
                 "clarify_answers": [], "clarify_feedback": [],
                 "clarify_round": state.clarify_round + 1, "action": ""}
 

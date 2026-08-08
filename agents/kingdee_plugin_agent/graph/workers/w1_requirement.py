@@ -9,11 +9,16 @@ LLM 契约:
   - split_subtasks:      PlanOutput(subtasks)       — 拆解(plugin_type + deps)
   llm=None 时确定性兜底:1 个默认问题 / 按 spec.plugin_types(缺省 bill)拆单子任务。
 
+form_id 链路(冒烟 w5.5 用):拆解输出 PlanOutput.form_id 为显式槽(LLM 从
+decisions 归纳目标单据);extract_form_id 兜底从 decisions 中"单据/FormId"问题
+的答案取首个标识符 token;两路都取不到返回 ""(冒烟按无 form_id 处理)。
+
 挂起注意(铁律,经安装包核实):interrupt() 所在节点 resume 时会整体重跑,
 interrupt 的 payload 必须由 state 确定性得出 —— 问题清单存 state.clarify_questions,
 确认摘要由已记录答案生成,均不依赖 LLM 重算。
 """
 import json
+import re
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
@@ -65,9 +70,10 @@ class PlanItem(BaseModel):
 
 
 class PlanOutput(BaseModel):
-    """w1 拆解输出:子任务清单(plugin_types + deps)。"""
+    """w1 拆解输出:子任务清单(plugin_types + deps)+ 目标单据 FormId(冒烟用)。"""
 
     subtasks: list[PlanItem] = Field(default_factory=list)
+    form_id: str = ""   # 目标单据 FormId 显式槽(LLM 归纳;空 → extract_form_id 兜底)
 
 
 class RequirementWorker(WorkerBase):
@@ -99,12 +105,6 @@ class RequirementWorker(WorkerBase):
             pass  # LLM 故障 → 默认问题
         return [DEFAULT_QUESTION]
 
-    def interrupt_message(self, state) -> str:
-        """当前轮 interrupt() 的 payload:问题 或 确认摘要(由 state 确定性生成)。"""
-        if state.clarify_round < len(state.clarify_questions):
-            return state.clarify_questions[state.clarify_round]
-        return build_confirmation_summary(self.build_spec(state))
-
     def record_answer(self, state, answer) -> None:
         """记录本轮答复(原地追加;节点把 clarify_answers 整体回写)。"""
         state.clarify_answers.append(str(answer))
@@ -125,7 +125,11 @@ class RequirementWorker(WorkerBase):
         }
 
     def split_subtasks(self, state, spec: dict) -> list[Subtask]:
-        """拆解子任务:LLM 产出(plugin_types + deps),失败回退确定性拆分。"""
+        """拆解子任务:LLM 产出(plugin_types + deps),失败回退确定性拆分。
+
+        LLM 拆解输出带 form_id 显式槽时回写 spec["form_id"](冒烟链路:
+        agent.py _confirm_and_split 经 extract_form_id 取用)。
+        """
         if self.llm is not None:
             try:
                 prompt = ChatPromptTemplate.from_messages([
@@ -135,6 +139,8 @@ class RequirementWorker(WorkerBase):
                 out = structured_with_skill(self.llm, PlanOutput,
                                             prompt.format_messages(spec=json.dumps(spec, ensure_ascii=False)))
                 if out and out.subtasks:
+                    if getattr(out, "form_id", ""):
+                        spec["form_id"] = out.form_id.strip()
                     return [
                         Subtask(id=it.id or f"{chr(65 + i)}1",
                                 plugin_type=it.plugin_type, title=it.title or "插件子任务",
@@ -144,6 +150,26 @@ class RequirementWorker(WorkerBase):
             except Exception:
                 pass  # LLM 故障 → 确定性拆分
         return self._split_fallback(spec)
+
+    #: FormId 提取:形如标识符的 token(金蝶 FormId 如 SAL_SaleOrder / BOS_...)
+    _FORM_ID_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+
+    def extract_form_id(self, spec: dict) -> str:
+        """目标单据 FormId:拆解显式槽(spec["form_id"])优先;兜底从 decisions 中
+        "单据/FormId" 相关问题的答案取首个标识符 token;都取不到返回 ""。
+
+        llm=None 路径(默认问题即问 FormId)经兜底同样能提取;提取结果写进
+        state.environment["form_id"] 供 w5.5 冒烟(agent.py _confirm_and_split)。
+        """
+        raw = str(spec.get("form_id") or "").strip()
+        if not raw:
+            for d in spec.get("decisions", []):
+                q = str(d.get("q", "")).lower()
+                if "formid" in q or "单据" in q or "表单" in q:
+                    raw = str(d.get("a", "")).strip()
+                    break
+        m = self._FORM_ID_TOKEN_RE.search(raw)
+        return m.group(0) if m else ""
 
     def _split_fallback(self, spec: dict) -> list[Subtask]:
         """确定性兜底:按 spec.plugin_types(缺省 bill)拆单子任务。"""

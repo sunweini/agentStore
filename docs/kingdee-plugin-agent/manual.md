@@ -140,6 +140,7 @@ uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload
 | GET | `/tasks/{id}/state` | — | 全量快照:`{task_id, status(running/waiting/done/error), done, error, interrupt, todo, final_deliverables, acceptance}`;404 任务不存在 |
 | POST | `/tasks/{id}/answers` | `{"answer": "…"}`(或 `text`) | `{"ok": true, "task_id": "…"}`;400 answer 必填;409 任务未在等待输入(30s 等待超时/已结束);**需求确认冻结后仅接受执行中问题(ask_user)的恢复,其余 409** |
 | POST | `/tasks/{id}/acceptance` | `{"accepted": true\|false, "reason": "…"}` | `{"ok": true, "task_id": "…", "acceptance": {accepted, reason, at}}`;拒绝 + 原因 → 经验库 propose("ARTIFACT", sha256(reason)[:12], …) |
+| POST | `/tasks/{id}/feedback` | `{"reason": "…"}` | `{"ok": true, "task_id": "…", "feedback": {reason, at}}`;部署后行为错误手动上报 → 经验库 propose("DEPLOY", sha256(reason)[:12], reason, …)(proposed 态,失败不阻塞);404 任务不存在;401 apikey 无效 |
 
 `POST /tasks` 建任务后由后台线程执行图;`interrupt` 事件挂起时,客户端把用户答复 POST 到 `/answers` 恢复图(`Command(resume=...)`),与 CLI stdin 同语义。
 
@@ -168,7 +169,7 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 → `X-API-Key` 头值须与 `KINGDEE_API_KEY`(或 `API_KEYS_JSON` 首个 key)一致;未配置任何 key 时默认拒绝全部请求。
 
 **Q7: 交付包能直接用吗?**
-→ 交付包含源码 + 部署说明 + records(设计/审查记录未接线,当前为空 `{}`;`spec.json` 已接线:记录需求版本号与冻结的需求快照);DLL 当前不入包(w6 未接编译输出,待真实编译后端产出后入包)。**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁。
+→ 交付包含源码 + 部署说明 + records(design.json/review.json 由 w6 从产物库读入,缺失容错为空;`spec.json` 记录需求版本号与冻结的需求快照);DLL 在真实编译后端(mock 后端无产出)时入包 `bin/Plugin.dll`。**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁;编译后端无 DLL 产出时冒烟环节会显式跳过(标注「无 DLL」),不会拿源码冒充产物。
 
 **Q8: 需求确认后想改需求怎么办?**
 → 需求在确认时冻结(`spec_version=1`),确认后任何输入都不会再改动需求规格 —— 中途问题(ask_user)的回答只作为反馈记录;确认后 answers 端点只接受执行中问题的恢复(其余 409"需求已确认并冻结")。要改需求请**开一个新任务**重跑(设计 §8 需求版本冻结)。
@@ -181,12 +182,12 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 ```
 deliverable-<子任务id>-<时间戳>.zip
 ├── source/Plugin.cs        # 插件源码(w3 生成 + w5 修复后的最终版)
-├── bin/Plugin.dll          # 编译产物(当前为空:打包器未接编译输出,DLL 待真实编译后端产出后入包)
+├── bin/Plugin.dll          # 编译产物(真实编译后端产出时入包;mock 后端无产出 → 无此条目)
 ├── deploy.md               # 部署说明(上传 DLL 到金蝶 BOS 插件目录,刷新注册)
 └── records/
     ├── spec.json           # 需求版本冻结记录:{"spec_version": 1, "requirement_spec": 冻结的需求快照}
-    ├── design.json         # 当前为空占位 {} (设计记录未接线)
-    └── review.json         # 当前为空占位 {} (审查记录未接线)
+    ├── design.json         # 设计文档(w6 从产物库读入,缺失容错为空)
+    └── review.json         # 审查记录(含 Minor 全部意见,缺失容错为空)
 ```
 
 部署步骤:把 `bin/Plugin.dll` 上传到金蝶 BOS 插件目录 → 刷新插件注册 → 按部署说明绑定单据 → 冒烟验证。
@@ -195,4 +196,4 @@ deliverable-<子任务id>-<时间戳>.zip
 
 - **插件类型**:bill(单据)/ service(服务)/ list(列表),暂不含定时任务。
 - **未线上验证**:load_skill 工具绑定未对真实 DeepSeek 验证;真实金蝶环境 WebAPI 端点/响应结构为占位契约;E2E 启动门(真实容器编译 3 类型样例)待团队 DLL 解锁;Linux 容器内 BOS 编译兼容性待验证。
-- **v1 单环境**:`--env` 只作为环境名记录,未做环境级差异化配置。
+- **v1 单环境**:`--env` 记录进 `state.environment["env_name"]`(CLI/API 初始 state,节点可感知),未做环境级差异化配置。

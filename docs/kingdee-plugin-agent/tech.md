@@ -89,7 +89,7 @@ w1 ── 静态边 ──► supervisor
 | `rework_events` | 替换合并 | 分支报 `[1]`,主管下超步应用并写 `[]` 清空;同一步两分支同时报事件 last-wins 丢一次(v1 接受该近似,并行返工属边缘场景) |
 | `final_deliverable` | last-wins | 最近一个交付包(兼容既有契约) |
 | `final_deliverables` | 追加去重 | 多子任务交付包合并(v1 逐包) |
-| `environment` | — | 环境配置(冒烟 form_id 等) |
+| `environment` | — | 环境配置:`env_name`(CLI/API `--env` 记录,节点可感知)+ `form_id`(w1 确认时从 spec 提取,冒烟验证用) |
 | `started_at` | — | 建任务时间戳 `time.time()`(CLI/API 初始 state 写入);0.0 = 未设置(旧状态兼容,不判定);存于 state 而非 thread_id → 挂起 resume 后 checkpointer 恢复同一份值不重置;全流程时间预算总闸驱动(§10.2) |
 | `spec_version` | — | 需求版本号,spec 确认时置 1;确认后冻结不可变(§6 #26),w6 打包盖进交付包 `records/spec.json` |
 | `action` | — | 主管动作 `run:<sid>` \| `ask_user[:<问题>]` \| `finish` \| `fail[:<原因>]` |
@@ -174,13 +174,14 @@ w3 确定性骨架保证全部 `{{TOKEN}}` 渲染,防 w4 把未渲染占位符�
 ### w5.5 部署冒烟(SmokeWorker)
 
 - **职责**:运行时验证(assembly 加载 + FormId→plugin 映射),防"编译过跑不起来"。
-- **流程**:`smoke_client.deploy_and_verify(Path(code_path), form_id)`(form_id 取 `state.environment`);失败 → `rework_budget_left -= 1` 后 BLOCKED(needs_rework 恒映射 w3,退回 w3 重新生成);成功 → DONE。
+- **流程**:`smoke_client.deploy_and_verify(Path(dll_path), form_id)`(form_id 取 `state.environment`,w1 确认时从 spec 提取);失败 → `rework_budget_left -= 1` 后 BLOCKED(needs_rework 恒映射 w3,退回 w3 重新生成);成功 → DONE。
+- **无 DLL 跳过(结构级修复)**:验证对象是**编译产物 DLL**(`subtask.dll_path`,w5 成功时取自编译后端),不再误用源码 Plugin.cs;mock 编译后端无 DLL 产出 → DONE_WITH_CONCERNS 显式标注「无 DLL(编译后端未产出),跳过部署验证」,不扣预算、不计冒烟指标(跳过不是冒烟结果);接真实 msbuild 后端后自动恢复验证。
 - **降级**:冒烟客户端未配置(KD_BASE_URL 缺失)→ BLOCKED 但不扣预算 → 图包装器标记 failed(基础设施缺失走重工无意义)。⚠️ 端点 `/metadata/verify` 为初始契约占位,真实环境可用后按部署 API 调整。
 
 ### w6 打包(PackageWorker)
 
 - **职责**:子任务产物 → 交付包 zip。**v1 按子任务逐包交付**(文件名带子任务 id,并行打包互不覆盖);图上包装器把包路径追加进 `state.final_deliverables`,`final_deliverable` 保留最近一个。v2 合并为单一 zip。
-- **产物**:`deliverable-{sid}-{ts}.zip` = `source/Plugin.cs` + `bin/Plugin.dll`(dll_path 存在时;**当前 w6 恒传空串,DLL 未入包**)+ `deploy.md`(部署说明)+ `records/design.json` + `records/review.json`(**均为空占位 `{}`:打包器未接线设计/审查记录**)。
+- **产物**:`deliverable-{sid}-{ts}.zip` = `source/Plugin.cs` + `bin/Plugin.dll`(w5 产出 DLL 时入包,`subtask.dll_path` 非空;mock 后端无产出 → 包内无 bin/ 条目,打包器容忍)+ `deploy.md`(部署说明)+ `records/design.json` + `records/review.json`(w6 从产物库读入,缺失容错为空)+ `records/spec.json`(需求版本冻结记录)。
 
 ### w7 知识沉淀(DistillWorker)
 
@@ -308,8 +309,8 @@ services:
 ### 8.2 compile_service(编译容器)
 
 - **后端选择**(`server.py::_backend_from_env`):`COMPILE_SERVICE_REQUIRES_DLLS=1` → 真实 `MsbuildCompiler`(从 `REFS_DIR` 目录 glob `*.dll`,缺 DLL 构造即抛 `CompileUnavailableError`,服务不启动,标记"DLL 未到位");否则 `MockCompiler`(预设规则表,开发/CI 用,**不当质量门**)。
-- **真实后端**:临时目录生成 csproj(net48)+ 引用 DLL → `msbuild`(120s 超时)→ `error_parser` 解析(正则 `File.cs(12,5): error CS0123: msg`,`(code,file)` 去重,级联洪水上限 10 条)→ 进程 returncode 非零即使无错误行也判失败。
-- **接口**:`GET /health` → `{"status": "ok"}`;`POST /compile {code, project_name}` → `{success, raw_output, duration_ms, errors:[{file, line, code, message, is_fatal}]}`;后端不可用 → 503(客户端 `CompileUnavailableError`)。
+- **真实后端**:临时目录生成 csproj(net48)+ 引用 DLL → `msbuild`(120s 超时)→ `error_parser` 解析(正则 `File.cs(12,5): error CS0123: msg`,`(code,file)` 去重,级联洪水上限 10 条)→ 进程 returncode 非零即使无错误行也判失败;编译成功后把输出 DLL 复制到服务端留存目录(`artifact_dir/<project_name>/Plugin.dll`,临时目录编译完即删),`dll_path` 随结果返回;mock 后端无产出 → 空串。
+- **接口**:`GET /health` → `{"status": "ok"}`;`POST /compile {code, project_name}` → `{success, raw_output, duration_ms, dll_path, errors:[{file, line, code, message, is_fatal}]}`(dll_path = 服务端留存路径,空 = 无 DLL 产出);`GET /dll/{project_name}` → 编译产物二进制(客户端拉取到本地;project_name 过白名单防路径穿越);后端不可用 → 503(客户端 `CompileUnavailableError`)。
 - **Dockerfile**:基础镜像 `mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2022`(Windows 容器,msbuild);`COPY build/references/ → /app/references`;`ENV COMPILE_SERVICE_REQUIRES_DLLS=1`;`docker-entrypoint.sh` 为 mono/Linux 基础镜像预留 DLL 校验入口。⚠️ 金蝶 BOS 编译在 Linux 容器兼容性(mono/.NET 兼容层或 Windows 容器)待验证。
 - **客户端**(tools/compile_client.py):`COMPILE_SERVICE_URL`(缺省 http://localhost:8000),timeout 120s(10s 会让真实编译超时误判)。
 
@@ -359,6 +360,8 @@ default_recursion_limit(n) = 100 + 20 × n
 
 ## 11. 已知债务与未验证项(与 CLAUDE.md 同步)
 
-**v1 已知债务**(上线前需决策):API 任务存 `app.state.tasks` 进程内内存,重启即丢、无持久化/恢复;API 每任务一个后台 daemon 线程,无线程池/并发闸门;apikey 字符串比较非 timing-safe;TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本需验证兼容(api.py `_subtask_dict` 已兼容实例/dict 两形态);CLI `--env` 只进 requirement_spec 未做环境级差异化;CLI 门控仅 KD_BASE_URL(API 已全校验 4 项)。
+**v1 已知债务**(上线前需决策):API 任务存 `app.state.tasks` 进程内内存,重启即丢、无持久化/恢复;API 每任务一个后台 daemon 线程,无线程池/并发闸门;apikey 字符串比较非 timing-safe;TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本需验证兼容(api.py `_subtask_dict` 已兼容实例/dict 两形态);CLI `--env` 部分消费(进 requirement_spec + `state.environment["env_name"]` 记录,未做环境级差异化,单环境 v1);CLI 门控仅 KD_BASE_URL(API 已全校验 4 项)。
+
+**反馈通道(设计 §12)**:`POST /tasks/{id}/feedback {reason}` 部署后行为错误手动上报 → 经验库 propose("DEPLOY", sha256(reason)[:12], reason, …)(proposed 态,同验收拒绝沉淀模式,失败不阻塞);API 端点契约见 api.py 模块 docstring 与 manual.md §4 端点表。
 
 **未验证项**:线上 DeepSeek 验证 load_skill 绑定(见 §4.2);真实金蝶环境 WebAPI 端点/响应结构(当前为文档化初始契约占位,见 tools/kingdee_api.py 头部警告);E2E 启动门(真实容器编译 3 类型样例);Linux 容器 BOS 编译兼容性;规范库(standards)目录与文档导入尚未接真实资料。

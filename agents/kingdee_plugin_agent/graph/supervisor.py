@@ -48,7 +48,10 @@ STATUS_TO_WORKER = {
     "compile_done": "w5_5",
     "smoke_done": "w6",
     "packaged": "w7",
-    "blocked": "w1",          # 等用户信息 → 问用户
+    # blocked 目前无任何写者(死状态,防御保留):若未来某 worker 报"缺用户信息"
+    # 可置此态 → 映射 w1 问用户;_ready_batch 对 blocked 排除派发(防 supervisor↔
+    # dispatcher 空派发忙循环,实测 C10 GraphRecursionError),属防御处理。
+    "blocked": "w1",
     "in_progress": None,      # 执行中,不再派发
     "delivered": None,        # 终态
     "failed": None,           # 终态
@@ -73,7 +76,6 @@ class Supervisor:
 
     - _next_ready:依赖满足 + 并发 < MAX_PARALLEL 时返回下一个可派发的 pending 子任务(单发,C4 契约)
     - _ready_batch:返回可派发批量(≤ 并发上限),prefer 优先(并行派发用)
-    - _check_budget:返工预算是否还有余额
     - _cascade_failed:依赖失败的 pending 依赖者标记 failed(传递)
     - _summary_table:把子任务池渲染成 LLM 可读的摘要表
     - decide:决策入口 —— 终态检查(确定性)→ 派发(确定性/LLM 选优)→ 问用户
@@ -154,9 +156,6 @@ class Supervisor:
                 ready.remove(preferred)
                 ready.insert(0, preferred)
         return ready
-
-    def _check_budget(self, state: TaskState) -> bool:
-        return state.rework_budget_left > 0
 
     def _cascade_failed(self, state: TaskState) -> None:
         """依赖失败传递:依赖已 failed 的 pending 子任务标记 failed。

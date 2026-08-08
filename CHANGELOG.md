@@ -5,6 +5,41 @@
 
 ---
 
+## v1.11.0 — 2026-08-09(kingdee-plugin-agent:死代码清理 + 冒烟链路 form_id/DLL 传递 + 反馈端点 + --env 记录)
+
+### 新增功能
+
+- **冒烟链路结构级修复(1/2)form_id 恒空**:w1 确认拆解时提取目标单据 FormId 写入 `state.environment["form_id"]`(w5.5 部署验证据此映射)—— `PlanOutput.form_id` 显式槽(LLM 拆解输出归纳)+ `RequirementWorker.extract_form_id` 兜底(从 decisions 中"单据/FormId"问题答案取首个标识符 token,llm=None 确定性路径同样可用);`_confirm_and_split` 只增不改 environment(保留 env_name 等键)。
+- **冒烟链路结构级修复(2/2)DLL 传递**:`Subtask.dll_path` 新字段;编译链全通 —— `CompileResult.dll_path`(models)+ 真实 msbuild 后端编译成功后把输出 DLL 复制到服务端留存目录(`artifact_dir/<project_name>/Plugin.dll`,临时目录编译完即删)+ `/compile` 响应带 `dll_path` + 新增 `GET /dll/{project_name}`(project_name 过白名单防路径穿越)+ 客户端 `CompileClient._fetch_dll` 拉到本地(拉取失败优雅降级为空);w5 成功时存 `subtask.dll_path`;w5.5 冒烟验证对象改为 **DLL**(不再误用源码 Plugin.cs),无 DLL(如 mock 后端)→ `DONE_WITH_CONCERNS` 显式标注「无 DLL(编译后端未产出),跳过部署验证」,不扣预算不计冒烟指标;w6 打包 `dll_path` 非空时入包 `bin/Plugin.dll`。
+- **反馈端点(设计 §12)**:`POST /tasks/{id}/feedback {reason}` 部署后行为错误手动上报 → 经验库 `propose("DEPLOY", sha256(reason)[:12], reason, …)`(proposed 态,与验收拒绝同沉淀模式:不同原因各自累计、相同原因去重);apikey 鉴权、404 未知任务、沉淀失败不阻塞反馈(never blocks),SSE 发 `feedback` 事件。
+- **`--env` 消费(最小化)**:CLI/API 初始 state 新增 `environment: {"env_name": …}`(此前 environment 恒空 dict,节点不可见);只记录不做多环境切换(v1 单环境)。
+
+### 死代码清理(评审确认无引用)
+
+- 删 `Supervisor._check_budget`(仅 docstring 提及,预算判定在 `_decide` 第 4 步内联,等价逻辑同处)。
+- 删 `RequirementWorker.interrupt_message`(无调用;agent.py w1 节点内联 payload dict 才是 interrupt 契约 —— API/CLI 按 `type` 字段分支)。
+- `NEEDS_CONTEXT` 状态:设计契约保留值,当前无产出路径、无代码分支 → base.py `_report` docstring 注明"先接通 supervisor 处理再加,勿裸用"。
+- `blocked` 状态:仍无写者,防御保留(守卫未来写者);STATUS_TO_WORKER 注释标注 defensive-only,`_ready_batch` 对 blocked 排除派发防忙循环。
+- 删死 prompt 文件 `prompts/w5_5_smoke.md` + `prompts/w6_package.md`(SmokeWorker/PackageWorker 无 LLM 不加载 prompt,无代码/文档引用)。
+- `state.py` 模块 docstring 的 `ask_question` 字段不存在 → 修正为实际字段(action/dispatch_id/user_feedback/metrics + started_at/spec_version)。
+
+### 测试
+
+- 新增 16 项(全套 201 项):form_id 提取 3 项(显式槽/decisions 兜底/LLM 拆解回写)、DLL 链 4 项(w5 存 dll_path、无 DLL 跳过不扣预算不计指标、dll_path 传至冒烟、w6 入包 bin/ 且无 DLL 无 bin/ 条目)、反馈端点 2 项(404/401、真实 ExperienceStore 两个不同原因累计 + 相同去重 + proposed 态)、--env 2 项(CLI 初始 state、API 初始 state)、编译服务 5 项(/compile 响应 dll_path、GET /dll 下载 + 404 + 路由层拦截 ../、project_name 白名单、客户端拉取到本地、拉取失败降级空);死代码对应测试改写 2 项(`test_budget_exhausted` 改测 `_decide` 预算判定、`test_w1_interrupt_message_…` 改测 record_answer + build_spec);冒烟指标语义更新 2 项(mock 后端无 DLL → 冒烟跳过,smoke_pass_count 不计数,接真实后端后恢复)。
+
+### 修复(评审)
+
+- **冒烟误用源码**(链路级):w5.5 原以 `Path(code_path)`(Plugin.cs 源码)调 deploy_and_verify,冒烟验证对象错误且 form_id 恒空;现 DLL 链路 + form_id 提取双修复(真实 DLL 仍待 P1 真实环境)。
+
+### 文档
+
+- tech.md:w5.5 冒烟行(验证对象 DLL + 无 DLL 跳过)、w6 产物行(DLL 入包)、environment 字段说明(env_name + form_id)、§8.2 编译服务接口(dll_path + GET /dll)、§11 债务 `--env` 措辞(部分消费)+ 反馈通道说明。
+- manual.md:§4 端点表补 `/feedback` 行、FAQ Q7 交付包内容更新、§6 zip 树更新(bin/Plugin.dll 条件入包 + records 已接线)、§7 单环境措辞更新。
+- agents/kingdee_plugin_agent/CLAUDE.md:Subtask 契约补 dll_path + 冒烟链路说明;债务 `--env 未消费` → `部分消费`。
+- 注:tech.md 无 §12 小节,反馈端点契约记于 api.py 模块 docstring + manual.md §4 端点表(设计 §12 对应)。
+
+---
+
 ## v1.10.0 — 2026-08-09(kingdee-plugin-agent:P2 五项 —— 指标/失败收尾包/JSON 重试/records 接线/.env)
 
 ### 新增功能

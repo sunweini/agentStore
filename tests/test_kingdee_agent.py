@@ -96,9 +96,13 @@ def test_next_ready_respects_concurrency():
 
 
 def test_budget_exhausted():
-    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
+    """返工预算耗尽且有未交付工作 → decide 确定性 fail(原 _check_budget 死代码
+    清理,等价预算判定在 _decide 第 4 步,与扣减逻辑同处)。"""
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "pending")],
+                   rework_budget_left=0)
     s = Supervisor(llm=None, workers={})
-    assert s._check_budget(st) is False
+    assert s.decide(st) == "fail:返工预算耗尽"
+    assert st.todo[0].status == "failed"   # 剩余子任务标记 failed(与扣减同语义)
 
 
 def test_next_ready_blocks_on_pending_dep():
@@ -168,6 +172,41 @@ def test_w1_split_subtasks_llm(tmp_path):
     todo = w.split_subtasks(st, {"requirement": "x"})
     assert [t.id for t in todo] == ["A1", "B1"]
     assert todo[0].deps == ["B1"]  # 依赖标注生效
+
+
+def test_w1_extract_form_id_explicit_slot():
+    """FormId 显式槽优先(split 输出 LLM 归纳)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import RequirementWorker
+    w = RequirementWorker(llm=None, store=None)
+    assert w.extract_form_id({"form_id": "SAL_SaleOrder", "decisions": []}) == "SAL_SaleOrder"
+    assert w.extract_form_id({"form_id": "  PUR_ReceiveBill  ", "decisions": []}) == "PUR_ReceiveBill"
+
+
+def test_w1_extract_form_id_from_decision():
+    """兜底:decisions 中"单据/FormId"问题的答案取首个标识符 token(llm=None 路径)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import RequirementWorker
+    w = RequirementWorker(llm=None, store=None)
+    spec = {"decisions": [
+        {"q": "请描述该插件的核心业务场景与目标单据(FormId),以及期望的关键行为。",
+         "a": "销售订单审核插件 SAL_SaleOrder"},
+        {"q": "校验规则?", "a": "数量必须大于 0"},
+    ]}
+    assert w.extract_form_id(spec) == "SAL_SaleOrder"
+    # 无单据相关问题 → 空(冒烟按无 form_id 处理)
+    assert w.extract_form_id({"decisions": [{"q": "校验规则?", "a": "数量大于 0"}]}) == ""
+
+
+def test_w1_split_llm_form_id_written_to_spec(tmp_path):
+    """LLM 拆解输出带 form_id → 回写 spec["form_id"](冒烟链路槽)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w1_requirement import (
+        RequirementWorker, PlanOutput)
+    llm = ScriptedLLM(scripts={PlanOutput: [{"subtasks": [
+        {"id": "A1", "plugin_type": "bill", "title": "单据插件", "deps": []}],
+        "form_id": "SAL_SaleOrder"}]})
+    w = RequirementWorker(llm=llm, store=ArtifactStore(root=tmp_path))
+    spec = {"requirement": "x"}
+    w.split_subtasks(TaskState(requirement_spec={}, todo=[]), spec)
+    assert spec["form_id"] == "SAL_SaleOrder"
 
 
 from agents.kingdee_plugin_agent.graph.workers.w2_design import (
@@ -352,6 +391,14 @@ def _write_code(tmp_path, sub):
     (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
 
 
+def _write_dll(tmp_path, sub):
+    """给子任务写一份假 DLL 并记 dll_path(w5.5 冒烟验证对象,结构级修复后)。"""
+    dll = tmp_path / "A1" / "Plugin.dll"
+    dll.parent.mkdir(parents=True, exist_ok=True)
+    dll.write_bytes(b"PE\x00\x00")
+    sub.dll_path = str(dll)
+
+
 def test_compile_fix_loop(tmp_path):
     """修复循环真实生效:第 1 轮失败 → 重编 → 第 2 轮通过(2 轮)。"""
     w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
@@ -499,7 +546,8 @@ def test_compile_experience_hits_reach_llm_fix_context(tmp_path):
 def test_smoke_ok_no_budget_change(tmp_path):
     class FakeSmoke:
         def deploy_and_verify(self, dll_path, form_id):
-            assert form_id == "SAL_SaleOrder"  # 环境里取 form_id
+            assert form_id == "SAL_SaleOrder"   # 环境里取 form_id
+            assert str(dll_path).endswith("Plugin.dll")  # 验证对象是 DLL 非源码
             return SmokeResult(ok=True, detail="assembly 加载 + 映射验证通过")
 
     st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
@@ -507,6 +555,7 @@ def test_smoke_ok_no_budget_change(tmp_path):
     w = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path), smoke_client=FakeSmoke())
     sub = Subtask("A1", "bill", "x", [], "compile_done")
     _write_code(tmp_path, sub)
+    _write_dll(tmp_path, sub)
     sub, msg = w.run(st, sub)
     assert "STATUS: DONE" in msg
     assert st.rework_budget_left == 3  # 冒烟成功不扣预算
@@ -520,6 +569,8 @@ def test_smoke_fail_decrements_budget(tmp_path):
     st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
     w = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path), smoke_client=FakeSmoke())
     sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    _write_dll(tmp_path, sub)
     sub, msg = w.run(st, sub)
     assert "STATUS: BLOCKED" in msg
     assert st.rework_budget_left == 2  # 冒烟失败扣 1 预算
@@ -565,6 +616,7 @@ def test_metrics_smoke_pass_and_fail_counts(tmp_path):
     st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
     sub = Subtask("A1", "bill", "x", [], "compile_done")
     _write_code(tmp_path, sub)
+    _write_dll(tmp_path, sub)
     sub, msg = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path),
                            smoke_client=FakeOk()).run(st, sub)
     assert st.metrics["smoke_pass_count"] == 1
@@ -573,6 +625,7 @@ def test_metrics_smoke_pass_and_fail_counts(tmp_path):
     st2 = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
     sub2 = Subtask("A1", "bill", "x", [], "compile_done")
     _write_code(tmp_path, sub2)
+    _write_dll(tmp_path, sub2)
     sub2, msg = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path),
                             smoke_client=FakeBad()).run(st2, sub2)
     assert st2.metrics["smoke_fail_count"] == 1
@@ -585,6 +638,84 @@ def test_metrics_defaults_all_zero():
     assert st.metrics == {"compile_pass_count": 0, "compile_fail_count": 0,
                           "rework_rounds": 0, "smoke_pass_count": 0,
                           "smoke_fail_count": 0}
+
+
+# ── 冒烟链路结构级修复:编译产物 DLL 传递 + 无 DLL 跳过验证 ────────────────
+
+def test_w5_stores_dll_path_on_success(tmp_path):
+    """w5 编译通过:后端产出 dll_path → subtask.dll_path(mock 后端为空 → 不设)。"""
+
+    class WithDll:
+        def health(self):
+            return True
+
+        def compile(self, code, project_name):
+            return CompileResult(success=True, raw_output="", duration_ms=0,
+                                 errors=[], dll_path=str(tmp_path / "out" / "Plugin.dll"))
+
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=WithDll())
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "STATUS: DONE" in msg
+    assert sub.dll_path.endswith("Plugin.dll")
+
+    # mock 后端(dll_path 缺省空)→ 不设 dll_path
+    sub2 = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub2)
+    sub2, msg = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                              compile_client=FakeCompileClient()).run(
+        TaskState(requirement_spec={}, todo=[]), sub2)
+    assert sub2.dll_path == ""
+
+
+def test_smoke_skips_without_dll(tmp_path):
+    """无 DLL(编译后端未产出)→ 跳过部署验证:DONE_WITH_CONCERNS 显式标注,
+    不扣预算、不计冒烟指标 —— 不再拿源码 Plugin.cs 冒充 DLL 去验证。"""
+
+    class FakeSmoke:
+        def deploy_and_verify(self, dll_path, form_id):
+            raise AssertionError("无 DLL 时不应调用冒烟客户端")
+
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    w = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path), smoke_client=FakeSmoke())
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)   # 只有源码,无 dll_path
+    sub, msg = w.run(st, sub)
+    assert "STATUS: DONE_WITH_CONCERNS" in msg
+    assert "无 DLL" in msg and "跳过部署验证" in msg
+    assert st.rework_budget_left == 3                     # 不扣预算
+    assert st.metrics["smoke_pass_count"] == 0            # 跳过不是冒烟结果,不计指标
+    assert st.metrics["smoke_fail_count"] == 0
+
+
+def test_smoke_receives_dll_path_from_compile(tmp_path):
+    """fake 后端产出 dll_path → w5 存 subtask.dll_path → w5.5 冒烟收到该路径。"""
+
+    class FakeSmoke:
+        def __init__(self):
+            self.seen = []
+
+        def deploy_and_verify(self, dll_path, form_id):
+            self.seen.append(str(dll_path))
+            return SmokeResult(ok=True, detail="ok")
+
+    fake = FakeSmoke()
+    w5 = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                       compile_client=FakeCompileClient())
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, _ = w5.run(st, sub)
+    # mock 编译后端无 DLL → w5.5 跳过;手工注入 dll_path 验证传递契约
+    sub.dll_path = str(tmp_path / "A1" / "Plugin.dll")
+    (tmp_path / "A1" / "Plugin.dll").write_bytes(b"PE\x00\x00")
+    sub, msg = SmokeWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                           smoke_client=fake).run(st, sub)
+    assert fake.seen == [str(tmp_path / "A1" / "Plugin.dll")]
+    assert "STATUS: DONE" in msg
 
 
 from agents.kingdee_plugin_agent.graph.workers.w6_package import PackageWorker
@@ -600,6 +731,31 @@ def test_package_worker_sets_deliverable(tmp_path):
     sub = Subtask("A1", "bill", "x", [], "packaged")
     sub, msg = w.run(st, sub)
     assert st.final_deliverable.endswith(".zip")
+
+
+def test_package_worker_includes_dll_when_present(tmp_path):
+    """w6 打包:w5 产出 DLL 时入包 bin/Plugin.dll(冒烟链路结构级修复)。"""
+    import zipfile
+    w = PackageWorker(llm=None, store=ArtifactStore(root=tmp_path), builder=None,
+                      output_dir=tmp_path)
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "packaged")])
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    (tmp_path / "A1" / "Plugin.dll").write_bytes(b"PE\x00\x00")
+    sub = Subtask("A1", "bill", "x", [], "packaged")
+    sub.dll_path = str(tmp_path / "A1" / "Plugin.dll")
+    sub, msg = w.run(st, sub)
+    with zipfile.ZipFile(st.final_deliverable) as z:
+        assert "bin/Plugin.dll" in z.namelist()
+        assert z.read("bin/Plugin.dll") == b"PE\x00\x00"
+    # 无 DLL(mock 后端)→ 包内无 bin/ 条目(打包器容忍,现有契约不破坏)
+    st2 = TaskState(requirement_spec={}, todo=[])
+    sub2 = Subtask("A1", "bill", "x", [], "packaged")
+    sub2, _ = PackageWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                            builder=None, output_dir=tmp_path).run(st2, sub2)
+    with zipfile.ZipFile(st2.final_deliverable) as z:
+        assert "bin/Plugin.dll" not in z.namelist()
+        assert "source/Plugin.cs" in z.namelist()
 
 
 def test_package_worker_stamps_spec_version(tmp_path):
@@ -820,6 +976,8 @@ def test_graph_full_flow_to_finish(tmp_path):
     # spec 落盘为 JSON(终审 C5:非 repr)
     spec = _json.loads((tmp_path / "requirement" / "spec.json").read_text(encoding="utf-8"))
     assert spec["decisions"][0]["a"] == "SAL_SaleOrder"
+    # 冒烟链路(结构级修复):确认时从 decisions 提取 FormId → state.environment
+    assert r["environment"]["form_id"] == "SAL_SaleOrder"
 
 
 def test_graph_rework_loop_review_needs_fixes(tmp_path):
@@ -1112,7 +1270,10 @@ def test_graph_parallel_caps_at_max_parallel(tmp_path):
 # ── 任务指标随 State 统计(设计 §9/§12)───────────────────────────────
 
 def test_graph_metrics_full_flow_with_rework(tmp_path):
-    """图全链路指标:编译通过/冒烟通过计数 + w4 Needs fixes 返工 1 轮 → rework_rounds=1。"""
+    """图全链路指标:编译通过计数 + w4 Needs fixes 返工 1 轮 → rework_rounds=1。
+
+    mock 编译后端无 DLL 产出 → w5.5 跳过部署验证(不计冒烟指标,冒烟通过率
+    只统计真实验证结果;接真实 msbuild 后端后 smoke_pass_count 恢复计数)。"""
     llm = ScriptedLLM(scripts={
         QuestionsOutput: [{"questions": ["FormId?"]}],
         PlanOutput: [{"subtasks": [{"id": "A1", "plugin_type": "bill", "title": "x", "deps": []}]}],
@@ -1131,15 +1292,15 @@ def test_graph_metrics_full_flow_with_rework(tmp_path):
     assert r["action"] == "finish"
     m = r["metrics"]
     assert m["compile_pass_count"] == 1
-    assert m["smoke_pass_count"] == 1
+    assert m["smoke_pass_count"] == 0         # mock 后端无 DLL → 冒烟跳过,不计数
     assert m["rework_rounds"] == 1            # w4 Needs fixes → 返工 1 轮(预算扣 1 同源)
     assert m["compile_fail_count"] == 0
     assert m["smoke_fail_count"] == 0
 
 
 def test_graph_metrics_parallel_merge_no_double_count(tmp_path):
-    """并行指标合并:两个独立子任务同轮编译/冒烟 → 计数 = 2(增量 reducer 求和,
-    跨多轮派发不重复累计)。"""
+    """并行指标合并:两个独立子任务同轮编译 → 计数 = 2(增量 reducer 求和,
+    跨多轮派发不重复累计)。冒烟指标:mock 后端无 DLL → 两任务均跳过,不计。"""
     app = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
                       compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
                       output_dir=tmp_path)
@@ -1153,7 +1314,7 @@ def test_graph_metrics_parallel_merge_no_double_count(tmp_path):
     assert final["action"] == "finish"
     m = final["metrics"]
     assert m["compile_pass_count"] == 2       # 并行两个子任务各自 +1
-    assert m["smoke_pass_count"] == 2
+    assert m["smoke_pass_count"] == 0         # 无 DLL → 跳过,不计
     assert m["rework_rounds"] == 0
 
 
@@ -1321,17 +1482,21 @@ def test_w1_spec_persisted_as_json(tmp_path):
     assert plan[0]["id"] == "A1" and plan[0]["plugin_type"] == "bill"
 
 
-def test_w1_interrupt_message_and_record_answer(tmp_path):
-    """w1 澄清循环接口:interrupt_message 逐题出题,record_answer 记录,问完转确认摘要。"""
+def test_w1_record_answer_and_build_spec(tmp_path):
+    """w1 澄清接口:record_answer 记录 + build_spec 组装 decisions(确认摘要的基础)。
+
+    原 interrupt_message 方法为死代码已删除(agent.py w1 节点用内联 payload
+    dict:type/round/text 与 type/confirm/summary,API/CLI 按其契约分支)。
+    """
     w = RequirementWorker(llm=None, store=ArtifactStore(root=tmp_path))
-    st = TaskState(requirement_spec={}, todo=[], clarify_questions=["Q1", "Q2"])
-    assert w.interrupt_message(st) == "Q1"
+    st = TaskState(requirement_spec={"requirement": "审核校验插件"}, todo=[],
+                   clarify_questions=["Q1", "Q2"])
     w.record_answer(st, "A1")
-    assert st.clarify_answers == ["A1"]
-    st.clarify_round = 1
-    assert w.interrupt_message(st) == "Q2"
-    st.clarify_round = 2
-    assert "需求确认摘要" in w.interrupt_message(st)   # 问题问完 → 确认摘要
+    w.record_answer(st, "A2")
+    assert st.clarify_answers == ["A1", "A2"]
+    spec = w.build_spec(st)
+    assert spec["decisions"] == [{"q": "Q1", "a": "A1"}, {"q": "Q2", "a": "A2"}]
+    assert "需求确认摘要" in build_confirmation_summary(spec)   # 确认摘要含决策
 
 
 def test_agent_name_and_recursion_formula():
@@ -1414,6 +1579,29 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
     assert "需求确认摘要" in out                       # 确认摘要已展示给用户
     assert "TodoList 摘要" in out                     # TodoList 摘要已打印
     assert ".zip" in out                              # 交付包路径已打印
+
+
+def test_cli_env_recorded_in_initial_state(tmp_path, monkeypatch):
+    """--env 消费(最小化):env 值进初始 state.environment["env_name"](节点可感知)。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")
+    captured = {}
+    real = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                       compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                       output_dir=tmp_path)
+
+    class _SpyGraph:
+        """记录首次 invoke 的初始 state(后续 resume 是 Command,只认 dict)。"""
+
+        def invoke(self, state, cfg):
+            if isinstance(state, dict) and "state" not in captured:
+                captured["state"] = state
+            return real.invoke(state, cfg)
+
+    monkeypatch.setattr(_cli, "build_graph", lambda: _SpyGraph())
+    answers = iter(["SAL_SaleOrder", "确认"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert run_cli(["给采购单审核加库存校验", "--env", "prod"]) == 0
+    assert captured["state"]["environment"] == {"env_name": "prod"}
 
 # ═══════════════════════════ C12 Web API(apikey + SSE + 澄清/验收)═══════════════════════════
 import time as _time
@@ -1602,6 +1790,16 @@ def test_api_task_creation_sets_started_at(tmp_path, monkeypatch):
     assert handle.state["started_at"] > 0
 
 
+def test_api_initial_state_environment_has_env_name(tmp_path, monkeypatch):
+    """--env 消费(API):env 值进初始 state.environment["env_name"](节点可感知)。"""
+    _set_kd_env(monkeypatch)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    tid = _create_task(client, tmp_path, requirement="x")
+    handle = client.app.state.tasks[tid]
+    assert handle.state["environment"] == {"env_name": "test"}
+
+
 def test_api_answers_frozen_after_confirmation_non_ask_user():
     """需求版本冻结:确认后 answers 拒绝非 ask_user 类型的恢复输入(409)——
     防止任何可被解释为 spec 修改的路径(question/confirm 只出现在确认前)。"""
@@ -1732,6 +1930,61 @@ def test_api_acceptance_reject_distinct_reasons_accumulate(tmp_path, monkeypatch
                           filter={"signature": _acceptance_sig(reason)})
         assert len(hits) == 1, (reason, hits)
     assert len(_artifacts(rag)) == 2    # 累计 2 条不同原因;重复原因已去重
+
+
+# ── 反馈通道(设计 §12:部署后行为错误手动上报 → 经验库 DEPLOY 通道)────────
+
+def _feedback_sig(reason: str) -> str:
+    """反馈条目签名(与 api.py record_feedback 同规则:code|sha256(reason)[:12])。"""
+    import hashlib as _hashlib
+    return f"DEPLOY|{_hashlib.sha256(reason.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _deploy_entries(rag) -> list[dict]:
+    """经验库中全部反馈条目(code=DEPLOY)。"""
+    return [h for h in rag.search("experience", "反馈", k=50)
+            if h["metadata"].get("code") == "DEPLOY"]
+
+
+def test_api_feedback_unknown_task_404():
+    """未知任务反馈 → 404(与验收/answers 同语义,只有 POST 创建的任务存在)。"""
+    client = TestClient(create_app(api_key="k"))
+    r = client.post("/tasks/nope/feedback", json={"reason": "单据保存后未刷新"},
+                    headers=_HEADERS)
+    assert r.status_code == 404
+    # 无 apikey → 401(鉴权先于任务查找)
+    r = client.post("/tasks/nope/feedback", json={"reason": "x"})
+    assert r.status_code == 401
+
+
+def test_api_feedback_feeds_experience(tmp_path, monkeypatch):
+    """部署后行为错误上报 → 真实经验库 DEPLOY 通道入库(proposed 态);两个不同
+    原因各自累计、相同原因去重;沉淀失败不阻塞反馈(never blocks)。"""
+    _set_kd_env(monkeypatch)
+    from common.rag import ExperienceStore, RagClient
+    rag = RagClient(data_dir=tmp_path / "rag")
+    exp = ExperienceStore(rag)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path),
+                                   experience=exp))
+    tid = _create_task(client, tmp_path)
+
+    def _feedback(reason: str) -> None:
+        r = client.post(f"/tasks/{tid}/feedback", json={"reason": reason},
+                        headers=_HEADERS)
+        assert r.status_code == 200
+        assert r.json()["feedback"]["reason"] == reason
+
+    _feedback("单据保存后未刷新")
+    _feedback("审核按钮不生效")        # 不同原因 → 不同签名 → 各自入库
+    _feedback("单据保存后未刷新")      # 相同原因 → 签名去重 → 不重复入库
+    for reason in ("单据保存后未刷新", "审核按钮不生效"):
+        hits = rag.search("experience", reason, k=10,
+                          filter={"signature": _feedback_sig(reason)})
+        assert len(hits) == 1, (reason, hits)
+        assert hits[0]["metadata"]["status"] == "proposed"
+        assert hits[0]["metadata"]["code"] == "DEPLOY"
+    assert len(_deploy_entries(rag)) == 2   # 累计 2 条不同原因;重复已去重
 
 
 # ── load_skill 机制(skill 渐进式披露,对照 sentiment 模式)────────────────
