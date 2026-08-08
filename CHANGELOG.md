@@ -5,6 +5,23 @@
 
 ---
 
+## v1.7.0 — 2026-08-08(knowledge-steward 知识库全生命周期方法论)
+
+### 新增功能
+
+- **knowledge-steward skill**(skills/ 下,与既有 5 个并列,共 6 个):
+  - SKILL.md:沉淀方法论(什么值得沉淀/条目格式/签名去重/proposed→verified/不阻塞纪律)+ 维护手册摘要(种子增补/文档导入/规范库合并/定期 review)+ **检索路由速查表**(api_ref/guide/experience × w2-w5,bm25_weight 0.7 约定、search L2 低=好 vs hybrid RRF 高=好的分数方向警示)
+  - references/distillation.md:沉淀质量标准(条目模板 + 好例/坏例对比、去重边界、签名规则速记表、verify 判据)
+  - references/maintenance.md:维护操作手册(种子增补/文档导入/规范库合并/经验库 review 四类操作分步,幂等可重跑)
+- **loader.py 注册第 6 个 skill**:`_AVAILABLE_SKILLS["knowledge-steward"]` 摘要(沉淀方法论 + 维护手册 + 检索路由);SKILL_HINT 按阶段提示追加 知识沉淀(knowledge-steward)(w1-w5 LLM 也可按需调用)
+- **w7 绑定决策(不绑定)**:w7_distill 为确定性代码(无 LLM 调用,compile_errors 全量 propose),不绑定 load_skill;SKILL.md 显式注明沉淀决策由代码规则完成,"什么值得沉淀"标准作为人工 review / 未来 LLM 化的参照(避免给无 LLM 节点挂无用工具)
+
+### 测试
+
+- tests/test_kingdee_agent.py 新增 1 项:load_skill('knowledge-steward') 内容断言(SKILL.md 含 api_ref/bm25_weight 0.7/L2 vs RRF 分数方向/proposed→verified/无 LLM 绑定说明;references = distillation.md + maintenance.md,含条目模板好例坏例/维护四件套);test_skill_summary 更新为 6 项断言 + knowledge-steward 摘要关键词;skill 全可加载测试扩到 6 个
+
+---
+
 ## v1.6.1 — 2026-08-08(errors.md 纯方法论化:错误条目单一来源经验库(动态))
 
 ### 重构

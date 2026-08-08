@@ -31,7 +31,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 | [prompts/](prompts/) | 节点 prompt 与代码分离:`supervisor.md` + 每 worker 一个;w2/w3/w4 的类型分支要点不在 prompts,单源在 `skills/<skill>/references/`(worker TYPE_PROMPTS 直接读 skill 文件) |
 | [tools/](tools/) | 外部能力:compile_client(编译服务)/ kingdee_api(金蝶元数据)/ smoke_client(冒烟)/ package(打包) |
 | [store/artifact_store.py](store/artifact_store.py) | 产物落盘(JSON 文件库:spec/plan/代码/审查/编译/交付) |
-| [skills/](skills/) | 方法论 skill 目录(5 个):`requirement-clarify`(w1 澄清,老形态模板直放 skill 目录)+ `design-builder`/`code-generator`/`code-reviewer`/`compile-fixer`(w2-w5 方法论,SKILL.md + `references/` 子目录类型要点);`compile-fixer/references/errors.md` 为**纯方法论**(分类/根因/检索/纪律),具体错误映射不进 skill,单一来源经验库(seed + w7 沉淀);`loader.py` 的 load_skill 工具(渐进式披露:摘要启动加载,w1-w5 经 `structured_with_skill` 绑定,LLM 主动调方法论,2 回合上限)+ `skill_summary()` + `SKILL_HINT` |
+| [skills/](skills/) | 方法论 skill 目录(6 个):`requirement-clarify`(w1 澄清,老形态模板直放 skill 目录)+ `design-builder`/`code-generator`/`code-reviewer`/`compile-fixer`(w2-w5 方法论,SKILL.md + `references/` 子目录类型要点)+ `knowledge-steward`(知识库全生命周期:沉淀方法论 + 维护手册 + 检索路由速查表,`references/` = distillation.md + maintenance.md);`compile-fixer/references/errors.md` 为**纯方法论**(分类/根因/检索/纪律),具体错误映射不进 skill,单一来源经验库(seed + w7 沉淀);`loader.py` 的 load_skill 工具(渐进式披露:摘要启动加载,w1-w5 经 `structured_with_skill` 绑定,LLM 主动调方法论,2 回合上限;w7 为确定性代码无 LLM,不绑定,knowledge-steward 供人工维护/未来 LLM 化参照)+ `skill_summary()` + `SKILL_HINT` |
 | [seed/](seed/) | 经验库种子数据(compile_errors.json)+ 灌入脚本 seed_load |
 | [templates/](templates/) | 三类型插件模板(bill/list/service),w3 生成参照 |
 

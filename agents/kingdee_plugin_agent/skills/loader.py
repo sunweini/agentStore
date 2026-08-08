@@ -59,14 +59,21 @@ _AVAILABLE_SKILLS = {
         "→ 重编纪律 5 轮 + 防重复提交;具体错误映射单一来源为经验库"
         "(启动种子 + w7 沉淀),skill 只含方法论"
     ),
+    "knowledge-steward": (
+        "金蝶知识库全生命周期方法论(w7 沉淀 + 人工维护 + 检索路由):沉淀标准"
+        "(可复现错误模式/条目格式/签名去重/proposed→verified/不阻塞纪律)+"
+        "维护手册(种子增补幂等/文档导入/规范库合并 8k 预算超限转检索/定期 review)"
+        "+ 检索路由速查表(api_ref/guide/experience × w2-w5,bm25_weight 0.7 约定、"
+        "L2 低=好 vs RRF 高=好的分数方向);w7 为确定性代码,本文供人工/未来 LLM 化参照"
+    ),
 }
 
 #: 每步注入的 load_skill 提示(告诉 LLM 可调工具拿方法论,对照 sentiment 方案 2a)
 SKILL_HINT = (
     "\n\n可用工具: load_skill(skill_name)。金蝶插件方法论按阶段加载:"
     "需求澄清(requirement-clarify)/设计(design-builder)/生成(code-generator)/"
-    "审查(code-reviewer)/编译修复(compile-fixer),需要时调用 load_skill "
-    "获取专业指导,工具返回内容仅供参考,不改变输出格式。"
+    "审查(code-reviewer)/编译修复(compile-fixer)/知识沉淀(knowledge-steward),"
+    "需要时调用 load_skill 获取专业指导,工具返回内容仅供参考,不改变输出格式。"
 )
 
 

@@ -1261,27 +1261,30 @@ def test_load_skill_returns_requirement_clarify():
 
 
 def test_skill_summary():
-    """skill_summary() 注入系统提示的摘要层:5 个 skill(w1 澄清 + 4 方法论)全在。"""
+    """skill_summary() 注入系统提示的摘要层:6 个 skill(w1 澄清 + 5 方法论)全在。"""
     import json
     from agents.kingdee_plugin_agent.skills.loader import skill_summary
 
     summary = json.loads(skill_summary())
     assert set(summary) == {"requirement-clarify", "design-builder",
-                            "code-generator", "code-reviewer", "compile-fixer"}
+                            "code-generator", "code-reviewer", "compile-fixer",
+                            "knowledge-steward"}
     assert "多选优先" in summary["requirement-clarify"]
     assert "design.md" in summary["design-builder"]
     assert "template.cs" in summary["code-generator"]
     assert "Needs fixes" in summary["code-reviewer"]
     assert "MAX_COMPILE_ROUNDS" in summary["compile-fixer"] or "5 轮" in summary["compile-fixer"]
+    assert "proposed" in summary["knowledge-steward"]     # 沉淀两态在摘要
+    assert "bm25_weight" in summary["knowledge-steward"]  # 检索路由约定在摘要
 
 
-def test_load_skill_all_five_skills():
-    """5 个 skill 全可加载:content = SKILL.md 全文,references = name→content 映射。"""
+def test_load_skill_all_six_skills():
+    """6 个 skill 全可加载:content = SKILL.md 全文,references = name→content 映射。"""
     import json
     from agents.kingdee_plugin_agent.skills.loader import load_skill
 
     for name in ("requirement-clarify", "design-builder", "code-generator",
-                 "code-reviewer", "compile-fixer"):
+                 "code-reviewer", "compile-fixer", "knowledge-steward"):
         payload = json.loads(load_skill.invoke({"skill_name": name}))
         assert payload["skill"] == name
         assert "方法论" in payload["content"]          # SKILL.md 全文交付
@@ -1329,6 +1332,42 @@ def test_load_skill_codegen_review_fixer_references():
     assert "分类框架" in fix["references"]["errors.md"]
     assert "根因分析" in fix["references"]["errors.md"]
     assert "经验库" in fix["references"]["errors.md"]
+
+
+def test_load_skill_knowledge_steward():
+    """knowledge-steward 交付 SKILL.md 全文 + distillation/maintenance 两 references:
+    沉淀质量标准(条目模板/好例坏例)、维护手册(种子增补/幂等)、
+    检索路由速查表关键项(api_ref、bm25_weight 0.7 约定、分数方向警示)。"""
+    import json
+    from agents.kingdee_plugin_agent.skills.loader import load_skill
+
+    payload = json.loads(load_skill.invoke({"skill_name": "knowledge-steward"}))
+    assert payload["skill"] == "knowledge-steward"
+    assert "方法论" in payload["content"]                        # SKILL.md 全文
+    assert set(payload["references"]) == {"distillation.md", "maintenance.md"}
+    assert payload["scripts"] == []
+
+    # SKILL.md:检索路由速查表关键项(api_ref 库 + bm25_weight 0.7 约定 + 分数方向警示)
+    assert "api_ref" in payload["content"]
+    assert "bm25_weight" in payload["content"] and "0.7" in payload["content"]
+    assert "L2" in payload["content"] and "RRF" in payload["content"]
+    # 沉淀方法论关键点:proposed→verified、签名去重、不阻塞纪律、w7 无 LLM 绑定说明
+    assert "proposed" in payload["content"] and "verified" in payload["content"]
+    assert "code|file_pattern" in payload["content"]
+    assert "不阻塞" in payload["content"]
+    assert "无 LLM" in payload["content"]                        # w7 绑定决策文档化
+
+    # distillation.md:条目模板(好例/坏例对比)+ 签名规则
+    dist = payload["references"]["distillation.md"]
+    assert "条目模板" in dist and "好例" in dist and "坏例" in dist
+    assert "signature" in dist and "去重" in dist
+    assert "proposed → verified" in dist
+
+    # maintenance.md:维护四件套(种子增补/文档导入/规范库合并/review)
+    maint = payload["references"]["maintenance.md"]
+    assert "种子增补" in maint and "文档导入" in maint and "规范库合并" in maint
+    assert "定期 review" in maint or "review" in maint
+    assert "幂等" in maint
 
 
 def test_errors_md_pure_methodology_no_static_mappings():
