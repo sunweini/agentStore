@@ -343,3 +343,28 @@ def test_smoke_fail_decrements_budget(tmp_path):
     sub, msg = w.run(st, sub)
     assert "STATUS: BLOCKED" in msg
     assert st.rework_budget_left == 2  # 冒烟失败扣 1 预算
+
+
+from agents.kingdee_plugin_agent.graph.workers.w6_package import PackageWorker
+from agents.kingdee_plugin_agent.graph.workers.w7_distill import DistillWorker
+
+
+def test_package_worker_sets_deliverable(tmp_path):
+    w = PackageWorker(llm=None, store=ArtifactStore(root=tmp_path), builder=None, output_dir=tmp_path)
+    st = TaskState(requirement_spec={}, todo=[Subtask("A1", "bill", "x", [], "packaged")])
+    st.todo[0].code_path = str(tmp_path / "A1" / "Plugin.cs")
+    (tmp_path / "A1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "A1" / "Plugin.cs").write_text("class X {}", encoding="utf-8")
+    sub = Subtask("A1", "bill", "x", [], "packaged")
+    sub, msg = w.run(st, sub)
+    assert st.final_deliverable.endswith(".zip")
+
+
+def test_distill_proposes_but_never_blocks(tmp_path):
+    from common.rag import RagClient, ExperienceStore
+    client = RagClient(data_dir=tmp_path / "rag")
+    store = ExperienceStore(client)
+    w = DistillWorker(llm=None, store=ArtifactStore(root=tmp_path), experience=store)
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=0)
+    sub, msg = w.run(st, Subtask("A1", "bill", "x", [], "delivered"))
+    assert "STATUS: DONE" in msg  # 失败也不阻塞交付
