@@ -32,9 +32,14 @@ def test_parse_basic_error():
     assert result.errors[0].line == 12
 
 def test_parse_cascade_dedup():
-    raw = (FIX / "cascade_flood.txt").read_text()  # 同一引用缺失导致 50 行同类错误
+    raw = (FIX / "cascade_flood.txt").read_text()  # 6 行洪水,仅 2 个唯一 (code, file)
     result = parse_compile_output(raw)
-    assert len(result.errors) <= 10  # 聚合上限
+    assert len(result.errors) == 2  # 去重后的精确数量(<= 10 断言在去重失效时也会通过,故收紧)
+
+def test_parse_cascade_cap():
+    raw = (FIX / "cascade_cap.txt").read_text()  # 12 个互不相同的错误,触发 _MAX_ERRORS=10 上限
+    result = parse_compile_output(raw)
+    assert len(result.errors) == 10  # 聚合上限触发,超出部分被截断
 
 def test_parse_success_output():
     result = parse_compile_output("Build succeeded.\n0 Warning(s)\n0 Error(s)")

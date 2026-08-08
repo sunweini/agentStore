@@ -1,0 +1,12 @@
+Plugin.cs(1,5): error CS0101: The type 'A' already contains a definition for 'a'
+Plugin.cs(2,5): error CS0102: The type 'A' already contains a definition for 'b'
+Plugin.cs(3,5): error CS0103: The name 'c' does not exist in the current context
+Plugin.cs(4,5): error CS0104: 'd' is an ambiguous reference between 'X' and 'Y'
+Plugin.cs(5,5): error CS0105: The using directive for 'e' appeared previously in this namespace
+Plugin.cs(6,5): error CS0106: The modifier 'f' is not valid for this item
+Plugin.cs(7,5): error CS0107: More than one protection modifier
+Plugin.cs(8,5): error CS0108: 'g' hides inherited member 'h'
+Plugin.cs(9,5): error CS0109: The member 'i' does not hide an inherited member
+Plugin.cs(10,5): error CS0110: The evaluation of the constant value for 'j' involves a circular definition
+Plugin.cs(11,5): error CS0111: Type 'k' already defines a member called 'l'
+Plugin.cs(12,5): error CS0112: A static member 'm' cannot be marked as override, virtual, or abstract
