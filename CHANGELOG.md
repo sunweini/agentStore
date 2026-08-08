@@ -21,7 +21,24 @@
 
 ### 测试
 
-- tests/test_kingdee_agent.py 67 项全过(图全链路 + CLI/API 确定性注入路径),tests/test_kingdee_api.py 8 项全过;全套 139 项全过
+- tests/test_kingdee_agent.py 67 项全过(图全链路 + CLI/API 确定性注入路径),tests/test_kingdee_api.py 8 项全过;全套 143 项全过(含 tests/eval 生成质量 eval 4 项)
+
+---
+
+## v1.4.1 — 2026-08-08(Plan C 终审 fix wave:依赖声明/容错/预算/安全)
+
+### 修复(终审 1 Critical + 3 Important + 2 Minor)
+
+- **requirements.txt 补 sse-starlette**(Critical):api.py 依赖 `EventSourceResponse` 但未声明(仅 .venv 预装可用);按 .venv 实测版本 pin `sse-starlette>=3.4.8`,fresh-venv 安装模拟(fastapi+uvicorn+sse-starlette)验证通过。
+- **CompileClient 超时 10s → 120s**(Important):单轮编译按设计 ≤2min,10s 会误杀真实编译。
+- **w5 捕获 httpx.HTTPError**(Important):编译期间超时/连接失败(TimeoutException/ConnectError 均系 HTTPError 子类,实测类层级)→ BLOCKED「编译服务不可用(超时/连接失败)」,不计轮次不扣预算;原实现异常向上传播 → 节点 raise → API 任务死/CLI traceback。
+- **recursion_limit 公式放宽**(Important):`default_recursion_limit` 50+10×n → 100+20×n(n=10 → 300;旧 150 < 实际需求 ~160,n=7 亦无返工余量 → GraphRecursionError)。
+- **ArtifactStore 子任务 id 白名单**(Important):`^[A-Za-z0-9_-]+$` 校验,LLM 生成 `..`/`/` 携带 id → ArtifactStoreError,防越出 artifacts 根目录写文件。
+- **supervisor LLM finish 门控**(Minor):finish 仅 `_all_delivered` 时放行;澄清期(todo 空)幻觉 finish → 回落确定性兜底(原实现零交付结束图,CLI 误报成功)。
+
+### 测试
+
+- tests/test_kingdee_agent.py 追加 3 项(编译 HTTP 错误 BLOCKED 不扣预算 / 产物 id 路径穿越拒绝 / 主管幻觉 finish 回落),全套 146 项全过。
 
 ---
 

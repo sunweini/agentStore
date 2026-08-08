@@ -21,7 +21,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 
 | 文件 | 职责 |
 |---|---|
-| [agent.py](agent.py) | 图构建入口:`build_graph()`(依赖全可注入,测试传 fake;缺省 MemorySaver checkpointer)+ `default_recursion_limit()`(50+10×子任务数) |
+| [agent.py](agent.py) | 图构建入口:`build_graph()`(依赖全可注入,测试传 fake;缺省 MemorySaver checkpointer)+ `default_recursion_limit()`(100+20×子任务数) |
 | [cli.py](cli.py) | CLI 入口 `run_cli`:环境硬门槛(KD_BASE_URL)→ stdin 交互澄清循环 → TodoList 摘要 + 交付包路径 |
 | [api.py](api.py) | Web 入口 `create_app()`:apikey 鉴权 + KD_* 4 项硬门槛(503)+ SSE 实时流 + 澄清应答 + 验收 |
 | [graph/state.py](graph/state.py) | 任务契约 TaskState/Subtask + 常量(GLOBAL_REWORK_BUDGET=3 / MAX_PARALLEL=3,todo 按 id reducer 合并) |
@@ -53,6 +53,15 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **环境硬门槛**:无金蝶环境不进图 —— CLI 未配 KD_BASE_URL 直接退出;API 4 项缺失 503 并点明缺项;冒烟客户端未配置 → BLOCKED → failed(防无限重试循环)。
 - **知识沉淀两态**:w7 写入经验库走 proposed/verified 两态 + "code|file_pattern" 签名去重(防幻觉污染);验收拒绝原因同通道(proposed 态,sha256 摘要入签名,失败不阻塞验收)。
 - **interrupt 语义**:挂起节点 resume 时整体重跑,payload 必须由 state 确定性得出(不依赖 LLM 重算);恢复用 `Command(resume=answer)`。
-- **recursion_limit 是运行时 config 参数**,不是 compile 参数;按子任务数给足(50+10×n,澄清期按上限 10 算)。
+- **recursion_limit 是运行时 config 参数**,不是 compile 参数;按子任务数给足(100+20×n,澄清期按上限 10 算 —— 旧 50+10×n 在 n=10 时 150<实际需求 ~160,复合任务触发 GraphRecursionError)。
 - **w1 澄清上限**:逐问 interrupt ≤10 轮;确认摘要最多再确认 1 次,仍不确认带假设强制收口(防无限循环)。
 - **测试注入约定**:只注入 LLM/外部服务(build_graph(llm=None) + fake 编译/冒烟),不 mock LangGraph 本身。
+
+## v1 已知债务(上线前需决策)
+
+- **内存任务存储**:API 任务存于 `app.state.tasks`(进程内),重启即丢,无持久化/恢复。
+- **API 线程无并发上限**:每任务一个后台线程,无线程池/并发闸门,流量大时需限流。
+- **apikey 非 timing-safe**:`x_api_key != effective_key` 直接字符串比较,未用 `secrets.compare_digest`。
+- **msgpack 反序列化警告**:TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本时 dataclass 字段/嵌套 dict 需验证兼容(api.py `_subtask_dict` 已兼容 Subtask 实例/dict 两种形态)。
+- **`--env` 未消费**:CLI 的 `--env` 只进 `requirement_spec`,未做环境级差异化处理(单环境 v1)。
+- **CLI 门控仅 KD_BASE_URL**:CLI 只校验 KD_BASE_URL(API 已全校验 4 项),单环境 v1 约定。
