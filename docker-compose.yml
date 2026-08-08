@@ -1,0 +1,15 @@
+# docker-compose.yml(首版:compile_service;RAG 存储后续 Plan B 追加)
+services:
+  compile-service:
+    build: ./compile_service
+    ports: ["8000:8000"]
+    volumes:
+      - ./compile_service/build/references:/app/references
+  # api 服务待 Plan C(agent 入口)落地后启用
+  # api:
+  #   build: .
+  #   ports: ["8080:8080"]
+  #   environment:
+  #     - COMPILE_SERVICE_URL=http://compile-service:8000
+  #   volumes:
+  #     - ./data/kingdee-rag:/data/kingdee-rag

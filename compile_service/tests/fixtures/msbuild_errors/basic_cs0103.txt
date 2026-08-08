@@ -1,0 +1,1 @@
+Plugin.cs(12,5): error CS0103: The name 'xxx' does not exist in the current context

@@ -1,0 +1,32 @@
+{
+  "total": 3,
+  "compile_pass_rate": 1.0,
+  "trigger_pass_rate": 1.0,
+  "review_reject_rate": null,
+  "results": [
+    {
+      "id": "bill_1",
+      "plugin_type": "bill",
+      "compiled": true,
+      "review_passed": false,
+      "trigger_ok": true,
+      "errors": []
+    },
+    {
+      "id": "list_1",
+      "plugin_type": "list",
+      "compiled": true,
+      "review_passed": false,
+      "trigger_ok": true,
+      "errors": []
+    },
+    {
+      "id": "service_1",
+      "plugin_type": "service",
+      "compiled": true,
+      "review_passed": false,
+      "trigger_ok": true,
+      "errors": []
+    }
+  ]
+}
