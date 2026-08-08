@@ -39,8 +39,10 @@ class CompileClient:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(r.content)
             return str(target)
-        except httpx.HTTPError:
-            return ""   # 拉取失败 → 无本地 DLL,冒烟按"无 DLL"跳过验证(优雅降级)
+        except (httpx.HTTPError, OSError):
+            # 拉取/落盘失败(网络、磁盘满、权限等)→ 无本地 DLL,冒烟按
+            # "无 DLL"跳过验证(优雅降级,不把 w5 节点打崩)
+            return ""
 
     def compile(self, code: str, project_name: str) -> CompileResult:
         r = self.session.post(f"{self.base_url}/compile",

@@ -30,6 +30,9 @@
 ### 修复(评审)
 
 - **冒烟误用源码**(链路级):w5.5 原以 `Path(code_path)`(Plugin.cs 源码)调 deploy_and_verify,冒烟验证对象错误且 form_id 恒空;现 DLL 链路 + form_id 提取双修复(真实 DLL 仍待 P1 真实环境)。
+- **/compile 写侧 project_name 路径穿越(Important)**:白名单此前只守 GET /dll 读侧;POST /compile 的 project_name 未校验即拼进 `artifact_dir/<project_name>/` 并 mkdir —— `../../references` 可任意目录写文件;入口套同一白名单,非法 → 400(后端不执行不落盘)。
+- **form_id 提取误取 "FormId" 词(Minor)**:答案如"单据 FormId 是 SAL_SaleOrder"会取到 "FormId";finditer 跳过大小写不敏感的 formid token 后再接受。
+- **DLL 拉取 OSError 未捕获(Minor)**:`_fetch_dll` 只捕 httpx.HTTPError,磁盘满/权限(mkdir/write_bytes 抛 OSError)会打崩 w5;改为 `except (httpx.HTTPError, OSError)` 降级为空 dll_path。
 
 ### 文档
 

@@ -42,6 +42,11 @@ def create_app(backend) -> FastAPI:
 
     @app.post("/compile")
     def compile_endpoint(req: CompileRequest):
+        # project_name 白名单(与 GET /dll 同源):真实后端把它拼进
+        # artifact_dir/<project_name>/Plugin.dll 并 mkdir(parents=True),
+        # 不校验 = 写侧路径穿越(如 ../../references 可往任意目录写文件)。
+        if not _PROJECT_NAME_RE.match(req.project_name):
+            raise HTTPException(400, f"非法 project_name: {req.project_name!r}")
         try:
             result = backend.compile(code=req.code, project_name=req.project_name)
         except CompileUnavailableError as e:

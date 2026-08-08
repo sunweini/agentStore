@@ -194,6 +194,10 @@ def test_w1_extract_form_id_from_decision():
     assert w.extract_form_id(spec) == "SAL_SaleOrder"
     # 无单据相关问题 → 空(冒烟按无 form_id 处理)
     assert w.extract_form_id({"decisions": [{"q": "校验规则?", "a": "数量大于 0"}]}) == ""
+    # 评审 Minor:答案里带 "FormId" 词本身 → 跳过该 token,取真正的单据号
+    assert w.extract_form_id({"decisions": [
+        {"q": "目标单据是?", "a": "单据 FormId 是 SAL_SaleOrder"}]}) == "SAL_SaleOrder"
+    assert w.extract_form_id({"decisions": [{"q": "单据?", "a": "FormId"}]}) == ""
 
 
 def test_w1_split_llm_form_id_written_to_spec(tmp_path):

@@ -140,6 +140,23 @@ def test_compile_unavailable_returns_503():
     r = client.post("/compile", json={"code": "x", "project_name": "T"})
     assert r.status_code == 503
 
+
+def test_compile_rejects_bad_project_name_no_file_written(tmp_path, monkeypatch):
+    """写侧路径穿越防护(评审 Important):非法 project_name(如 ../../references)
+    → 400,后端不被调用、artifact_dir 不产生任何文件(校验在 backend.compile 之前)。"""
+    from compile_service.backends.msbuild import MsbuildCompiler
+    artifact_dir = tmp_path / "out"
+    backend = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")],
+                              artifact_dir=artifact_dir)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: type("P", (), {
+        "stdout": "Build succeeded.", "stderr": "", "returncode": 0})())
+    client = TestClient(create_app(backend=backend))
+    r = client.post("/compile", json={"code": "x", "project_name": "../../references"})
+    assert r.status_code == 400
+    assert not artifact_dir.exists()      # 未触达后端 → 无任何落盘
+    r2 = client.post("/compile", json={"code": "x", "project_name": "A1"})
+    assert r2.status_code == 200 and r2.json()["success"] is True
+
 import pytest
 from compile_service.backends.msbuild import MsbuildCompiler
 
@@ -198,6 +215,22 @@ def test_client_dll_fetch_failure_degrades_to_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
     monkeypatch.setattr(client.session, "get", lambda *a, **k:
                         type("R", (), {"status_code": 404})())
+    result = client.compile(code="x", project_name="T")
+    assert result.dll_path == ""
+
+
+def test_client_dll_fetch_oserror_degrades_to_empty(monkeypatch, tmp_path):
+    """落盘失败(评审 Minor:磁盘满/权限,mkdir 抛 OSError)→ dll_path 置空
+    (降级契约,不把 w5 节点打崩)。FileExistsError 系 OSError 子类。"""
+    client = CompileClient(base_url="http://test", artifact_dir=tmp_path / "compiled")
+    resp = type("R", (), {"status_code": 200, "json": lambda *a, **k: {
+        "success": True, "raw_output": "", "duration_ms": 5,
+        "dll_path": "/artifacts/T/Plugin.dll", "errors": []}})()
+    dll_resp = type("R", (), {"status_code": 200, "content": b"PE\x00\x00"})()
+    monkeypatch.setattr(client.session, "post", lambda *a, **k: resp)
+    monkeypatch.setattr(client.session, "get", lambda *a, **k: dll_resp)
+    # artifact_dir 是已存在的文件 → target.parent.mkdir 抛 FileExistsError(OSError)
+    (tmp_path / "compiled").write_text("i am a file", encoding="utf-8")
     result = client.compile(code="x", project_name="T")
     assert result.dll_path == ""
 

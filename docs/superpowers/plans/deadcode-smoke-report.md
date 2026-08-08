@@ -84,3 +84,26 @@
 
 - 真实 msbuild 后端 DLL 链路(留存/下载/冒烟/入包)未经真实环境验证 —— P1 真实 DLL 到位后按 E2E 门验证。
 - 冒烟跳过语义(mock 模式)使 smoke_pass_count 恒 0,真实指标口径以真实后端为准;如需 mock 模式可观测性,可后续加"skip_count"指标(本次未加,避免指标契约膨胀)。
+
+---
+
+## 八、评审修复(1 Important + 2 Minors,commit 267bdb3 之后追加)
+
+### Important — POST /compile 写侧 project_name 路径穿越
+- **问题**:白名单只守 GET /dll 读侧;POST /compile 的 project_name 未校验即拼进 `artifact_dir/<project_name>/Plugin.dll` 并 `mkdir(parents=True)` —— 构造 `../../references` 可在编译容器(端口暴露到宿主机)任意目录写文件。
+- **修复**:`compile_endpoint` 入口套同一 `_PROJECT_NAME_RE` 白名单,非法 → 400(`backend.compile` 之前,后端不执行、不落盘)。
+- **测试**:`test_compile_rejects_bad_project_name_no_file_written`(真实 MsbuildCompiler + artifact_dir;`../../references` → 400 且 artifact_dir 不存在;合法名仍 200)。
+
+### Minor 2 — extract_form_id 兜底可能取到 "FormId" 词本身
+- **问题**:答案如"单据 FormId 是 SAL_SaleOrder"时,首个标识符 token 是 "FormId"。
+- **修复**:`finditer` 遍历 token,`token.lower() != "formid"` 才接受(大小写不敏感跳过);全为 FormId 词 → 空串。
+- **测试**:`test_w1_extract_form_id_from_decision` 追加两断言(跳过 FormId 词取 SAL_SaleOrder;纯 FormId 词 → "")。
+
+### Minor 4 — CompileClient._fetch_dll 只捕 httpx.HTTPError
+- **问题**:`write_bytes`/`mkdir` 的 OSError(磁盘满/权限)未捕获 → 异常传播打崩 w5 节点。
+- **修复**:`except (httpx.HTTPError, OSError)` → dll_path 空串(降级契约)。
+- **测试**:`test_client_dll_fetch_oserror_degrades_to_empty`(artifact_dir 是已存在文件 → mkdir 抛 FileExistsError(OSError 子类)→ dll_path == "")。
+
+### 结果
+- 全套 `.venv/bin/python -m pytest tests/ -q`:**203 passed**(201 + 2 新增测试函数;form_id 断言并入既有测试)。
+- 提交:`fix(compile): /compile project_name 白名单 + form_id 提取跳过 FormId 词 + DLL 拉取 OSError 降级`。
