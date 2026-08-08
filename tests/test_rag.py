@@ -82,3 +82,18 @@ def test_standards_truncate_over_budget(tmp_path):
 def test_standards_empty_dir(tmp_path):
     loader = StandardsLoader(standards_dir=tmp_path)
     assert loader.inject_text() == ""
+
+
+def test_hybrid_search_returns_merged(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    client.add_documents("api_ref",
+        ["Kingdee.BOS.Core.Metadata.FormMetadata 表单元数据",
+         "BOS 平台扩展字段用法"], [{"ns": "Kingdee.BOS"}]*2)
+    hits = client.hybrid_search("api_ref", "FormMetadata", k=2, bm25_weight=0.7)
+    assert len(hits) >= 1
+    assert all("text" in h for h in hits)
+
+
+def test_hybrid_search_empty(tmp_path):
+    client = RagClient(data_dir=tmp_path)
+    assert client.hybrid_search("guide", "任何", k=2) == []
