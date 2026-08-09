@@ -92,14 +92,16 @@ class MsbuildCompiler(CompilerBackend):
                 [self.msbuild_path, str(csproj), "/nologo", "/v:minimal"],
                 capture_output=True, text=True, timeout=180)
             raw = (proc.stdout or "") + (proc.stderr or "")
+            # DLL 字节必须在临时目录删除前读取(TemporaryDirectory 退出即删,Windows 上延迟读会 FileNotFoundError)
             built_dll = next(Path(tmp).rglob("Plugin.dll"), None)
+            dll_bytes = built_dll.read_bytes() if built_dll is not None else None
         result = parse_compile_output(raw)
         # 进程非零退出(msbuild 崩溃/引用缺失/工具链异常)即使无错误行也判失败,不能只信输出文本
         result.success = result.success and proc.returncode == 0
         result.duration_ms = 0
-        if result.success and built_dll is not None:
+        if result.success and dll_bytes is not None:
             target = self.artifact_dir / project_name / "Plugin.dll"
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(built_dll.read_bytes())
+            target.write_bytes(dll_bytes)
             result.dll_path = str(target)
         return result
