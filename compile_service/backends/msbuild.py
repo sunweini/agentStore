@@ -15,6 +15,7 @@ DLL 产物(冒烟链路结构级修复):编译成功后把输出 DLL(临时目�
 result.dll_path 返回留存路径,客户端经 `GET /dll/{project_name}` 拉取。
 mock 后端无产出 → dll_path 为空。
 """
+import os
 import subprocess
 import tempfile
 import xml.sax.saxutils
@@ -45,11 +46,13 @@ _CSPROJ_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <OutputPath>bin\\Debug\\</OutputPath>
   </PropertyGroup>
+{csc_tool}
   <ItemGroup>
     <Reference Include="mscorlib" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Data" />
+    <Reference Include="System.Configuration" />
     <Reference Include="System.Xml" />
 {references}
   </ItemGroup>
@@ -86,13 +89,16 @@ def default_msbuild_path() -> str:
 class MsbuildCompiler(CompilerBackend):
     def __init__(self, msbuild_path: str | None = None, reference_dlls: list[Path] | None = None,
                  artifact_dir: Path | None = None,
-                 target_framework: str = "v4.8"):
+                 target_framework: str = "v4.8",
+                 csc_tool_path: str | None = None):
         if not reference_dlls:
             raise CompileUnavailableError("金蝶 BOS DLL 未提供,真实编译不可用")
         self.msbuild_path = msbuild_path or default_msbuild_path()
         self.reference_dlls = reference_dlls
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else _DEFAULT_ARTIFACT_DIR
         self.target_framework = target_framework
+        # Roslyn csc 目录(Framework csc 仅支持 C# 5;真实代码用 $ 插值等 C# 6+ 语法时必配)
+        self.csc_tool_path = csc_tool_path or os.getenv("CSC_TOOL_PATH")
 
     def compile(self, files: list[CompileFile], project_name: str) -> CompileResult:
         if not files:
@@ -112,13 +118,19 @@ class MsbuildCompiler(CompilerBackend):
             compiles = "".join(
                 f'    <Compile Include="{xml.sax.saxutils.escape(f.name)}" />\n'
                 for f in files).rstrip("\n")
+            csc_tool = ""
+            if self.csc_tool_path:
+                csc_tool = ("  <PropertyGroup>\n"
+                            f"    <CscToolPath>{self.csc_tool_path}</CscToolPath>\n"
+                            "    <CscToolExe>csc.exe</CscToolExe>\n"
+                            "  </PropertyGroup>")
             csproj.write_text(
                 _CSPROJ_TEMPLATE.format(target_framework=self.target_framework,
-                                        references=refs, compiles=compiles),
+                                        references=refs, compiles=compiles, csc_tool=csc_tool),
                 encoding="utf-8")
             proc = subprocess.run(
                 [self.msbuild_path, str(csproj), "/nologo", "/v:minimal"],
-                capture_output=True, text=True, timeout=180)
+                capture_output=True, text=True, timeout=300)
             raw = (proc.stdout or "") + (proc.stderr or "")
             # DLL 字节必须在临时目录删除前读取(TemporaryDirectory 退出即删,Windows 上延迟读会 FileNotFoundError)
             built_dll = next(Path(tmp).rglob("Plugin.dll"), None)

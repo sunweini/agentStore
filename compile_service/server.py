@@ -113,6 +113,7 @@ def _backend_from_env() -> CompilerBackend:
       MSBUILD_PATH           显式 msbuild 路径(缺省走 default_msbuild_path() 探测:
                              PATH 的 msbuild(VS 环境)→ Framework 自带兜底,兼容无 VS 环境)
       COMPILE_ARTIFACT_DIR   编译产物 DLL 留存目录(缺省 MsbuildCompiler 代码相对默认 仓库根/data/kingdee-compiled)
+      CSC_TOOL_PATH          Roslyn csc 目录(Framework csc 仅 C# 5;真实代码用 $ 插值等语法时必配)
     """
     if os.getenv("COMPILE_SERVICE_REQUIRES_DLLS") == "1":
         # 从 REFS_DIR 目录 glob *.dll(此前只读 REFERENCE_DLLS 环境变量,容器内从未设置 → 真实后端永远无法启动)。
@@ -125,6 +126,7 @@ def _backend_from_env() -> CompilerBackend:
             reference_dlls=reference_dlls,
             target_framework=os.getenv("TARGET_FRAMEWORK", "v4.8"),
             artifact_dir=Path(artifact_dir) if artifact_dir else None,
+            csc_tool_path=os.getenv("CSC_TOOL_PATH") or None,
         )
     return MockCompiler()
 
