@@ -5,6 +5,55 @@
 
 ---
 
+## v1.15.0 — 2026-08-09(kingdee-plugin-agent:RAG embedding 模型配置化 + 切换远程服务重灌)
+
+### 新增功能
+
+- **RAG embedding 模型配置化**(`common/rag.py::_embedding_model`,lru_cache
+  单例保留):`EMBEDDING_*` 环境变量组经 common.config 读取(.env 同源):
+  - `EMBEDDING_PROVIDER` = `huggingface`(默认,本地 sentence-transformers,
+    离线可用)| `openai-compatible`(远程 OpenAI 兼容 embedding 服务,经
+    langchain-openai 的 OpenAIEmbeddings 接入,延迟导入);
+  - `EMBEDDING_MODEL` 缺省:huggingface 用 `BAAI/bge-small-zh-v1.5`(512 维),
+    openai-compatible 用 `Qwen/Qwen3-Embedding-8B`;
+  - `EMBEDDING_BASE_URL`:**openai-compatible 必填**,缺失抛清晰错误
+    (RagError,不静默回退);
+  - `EMBEDDING_API_KEY` 可选,默认空;免鉴权服务自动传占位符 `not-needed`
+    (langchain-openai 校验要求非空);
+- **切换团队远程嵌入服务并全量重灌**:`.env` 配 `openai-compatible` +
+  `http://10.33.17.234:32320`(openclaw memorySearch)+ Qwen3-Embedding-8B;
+  drop `data/kingdee-rag` 后重灌三集合 —— 维度 512 → **4096**(Qwen3-Embedding-8B,
+  实测远程 POST /v1/embeddings);hybrid_search 冒烟通过(guide "插件开发" 命中
+  熊说知识库 + 内部 skill;api_ref "BusinessDataServiceHelper" bm25=0.7 首位
+  命中星空企业版开发笔记)。
+
+### 集合灌入(2026-08-09 切换后终态,重跑新增 0)
+
+- guide 75 chunks / 28 源(内部 skill 54 = 上版 53 + maintenance.md §5 新增
+  1 + 官方 6 页 21);api_ref 4 chunks / 3 源;experience 10(种子)。
+- **活页漂移复现**:BOS FAQ 精选页(685345938776315392)重跑 +2,属源侧内容
+  更新(既有结论,非管线缺陷),其余全部 +0。
+
+### 文档
+
+- `.env.example` 新增 RAG 嵌入模型配置组(EMBEDDING_* + 远程示例 + 换模型
+  重灌警告);
+- `agents/kingdee_plugin_agent/CLAUDE.md` 常用操作新增「配 embedding 模型」
+  (配置项 + 换模型必须 drop 重灌);
+- `knowledge-steward/references/maintenance.md` 新增 §5「更换 embedding 模型
+  (全量重灌)」:删库 → 三集合重灌命令 → 验证(冒烟/维度/幂等 +0/全量测试)。
+
+### 测试
+
+- 新增 `tests/conftest.py`:autouse 夹具清除 `EMBEDDING_*` env + 清
+  `_embedding_model` 缓存 —— 测试环境隔离(真实 .env 配远程服务时,
+  RagClient 测试仍确定性走 huggingface 本地默认,不依赖网络);
+- `tests/test_rag.py` 新增 5 项 env 分支测试:huggingface 默认/自定义模型、
+  openai-compatible 默认模型+base_url、自定义 model+api_key 透传、缺
+  `EMBEDDING_BASE_URL` 抛错;全套 **246 passed**(241 基线 + 5 新)。
+
+---
+
 ## v1.14.0 — 2026-08-09(kingdee-plugin-agent:RAG 导入管线 + guide/api_ref 集合灌入)
 
 ### 新增功能

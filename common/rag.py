@@ -26,6 +26,11 @@ API 依据(铁律:以官方文档为准,不凭记忆):
     更新、文档与向量保持不变(实证 chromadb 1.5.9),故 verify 状态翻转走
     该路径。Collection.get(where=...) 返回 {"ids","documents","metadatas",...},
     空命中返回空列表(公开 API,实测)。
+  - 嵌入模型配置化:EMBEDDING_PROVIDER=huggingface(默认,本地
+    sentence-transformers)/ openai-compatible(远程 OpenAI 兼容 embedding
+    服务,经 langchain-openai 的 OpenAIEmbeddings 接入,官方集成)。换模型 =
+    向量空间变更,已有向量全部失效,须 drop data/kingdee-rag 全量重灌
+    (见 knowledge-steward 维护手册)。
 """
 import re
 from collections import defaultdict
@@ -36,6 +41,8 @@ from pathlib import Path
 from langchain_chroma import Chroma
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 
+from common import config
+
 RAG_COLLECTIONS = ("api_ref", "guide", "experience")
 
 
@@ -45,9 +52,47 @@ class RagError(RuntimeError):
 
 @lru_cache(maxsize=1)
 def _embedding_model():
-    """BGE 中文嵌入,全局单例(模型加载一次,~2GB 内存)。"""
+    """嵌入模型工厂,全局单例(lru_cache,进程内只构造一次)。
+
+    由 EMBEDDING_* 环境变量决定(经 common.config 读取,.env 同源):
+
+      EMBEDDING_PROVIDER
+        "huggingface"(默认)| "openai-compatible"
+      EMBEDDING_MODEL
+        huggingface 默认 "BAAI/bge-small-zh-v1.5";
+        openai-compatible 默认 "Qwen/Qwen3-Embedding-8B"
+      EMBEDDING_BASE_URL
+        openai-compatible 必填(缺失抛 RagError 清晰报错);
+        示例:http://10.33.17.234:32320(openclaw memorySearch 团队
+        嵌入服务,POST /v1/embeddings)
+      EMBEDDING_API_KEY
+        可选,默认空;openai-compatible 分支无密钥时传占位符
+        "not-needed"(langchain-openai 校验要求非空,服务端免鉴权时
+        该占位符不会发送真实密钥)
+
+    ⚠️ 换嵌入模型 = 向量空间变更:已有向量全部失效、检索结果无意义,
+    必须 drop data/kingdee-rag 后全量重灌(seed_load + --seed-internal +
+    官方 URL,流程见 knowledge-steward/references/maintenance.md §5)。
+    """
+    provider = config.get_env("EMBEDDING_PROVIDER", "huggingface").strip().lower()
+    if provider == "openai-compatible":
+        base_url = config.get_env("EMBEDDING_BASE_URL").strip()
+        if not base_url:
+            raise RagError(
+                "EMBEDDING_PROVIDER=openai-compatible 时必须设置 "
+                "EMBEDDING_BASE_URL(远程 embedding 服务地址,如 "
+                "http://10.33.17.234:32320)"
+            )
+        # 延迟导入:默认 huggingface 路径不加载 langchain_openai
+        from langchain_openai import OpenAIEmbeddings
+
+        return OpenAIEmbeddings(
+            model=config.get_env("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B"),
+            base_url=base_url,
+            api_key=config.get_env("EMBEDDING_API_KEY") or "not-needed",
+        )
     return HuggingFaceEmbeddings(
-        model_name="BAAI/bge-small-zh-v1.5",
+        model_name=config.get_env("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5"),
         encode_kwargs={"normalize_embeddings": True},
     )
 

@@ -119,3 +119,43 @@
 
 **注意**:verify 只处理元数据,文档文本若有修正需走
 `client.add_documents` 新条目 + 旧条目归档,不原地改文本。
+
+## 5. 更换 embedding 模型(全量重灌)
+
+**何时做**:RAG 嵌入模型配置变更(EMBEDDING_PROVIDER / EMBEDDING_MODEL 修改),
+或切换本地/远程嵌入服务。
+
+**为什么必须全量重灌**:换模型 = 向量空间变更,旧向量与新模型产物不在同一
+空间,检索结果无意义 —— **不是增量更新能解决的**,必须删库重建。
+
+**步骤**:
+
+1. 改 `.env` 的 `EMBEDDING_*` 组(见 `.env.example` 注释):
+   - `EMBEDDING_PROVIDER=huggingface`(默认本地)|
+     `openai-compatible`(远程 OpenAI 兼容服务,`EMBEDDING_BASE_URL` 必填);
+   - `EMBEDDING_MODEL` 缺省:huggingface 用 `BAAI/bge-small-zh-v1.5`,
+     openai-compatible 用 `Qwen/Qwen3-Embedding-8B`;
+   - `EMBEDDING_API_KEY` 可选(免鉴权服务可不配);
+2. **删库**:`rm -rf data/kingdee-rag`(chroma 持久化目录,全量重建);
+3. **全量重灌三集合**(顺序无要求,每步验证输出):
+   - 经验库种子:
+     `python -m agents.kingdee_plugin_agent.seed.seed_load`
+     (输出 "种子灌入完成:新增 N 条",预期 10);
+   - guide 内部 skill 文档:
+     `python -m agents.kingdee_plugin_agent.tools.ingest --seed-internal --collection guide`;
+   - 金蝶官方页(guide 6 页 + api_ref 3 页,URL 清单见
+     `docs/superpowers/plans/rag-ingest-report.md` §2 / 灌入后 metadata.source,
+     活页 FAQ 页重跑偶发 +1~3 属源侧漂移,见 §2 注意);
+4. **验证**:
+   - `hybrid_search` 冒烟(guide 查 "插件开发"、api_ref 查
+     "BusinessDataServiceHelper" bm25_weight=0.7)确认合理命中;
+   - 确认新向量维度(如 bge-small-zh 512 维 vs Qwen3-Embedding-8B 4096 维,
+     维度不匹配时 chroma 建集合报错,重灌前删库可避免旧集合残留干扰);
+   - 全部灌完后重跑一次灌入命令确认新增 0(幂等);
+   - 跑全套测试 `pytest tests/ -q`。
+
+**注意**:
+- **换模型后先删库再灌**:直接重灌会命中去重式幂等(同 source 同文本跳过),
+  "新增 0"是旧向量仍在、并非已切换 —— 删库是切换生效的**唯一**方式;
+- 测试环境隔离:单元测试会清除 `EMBEDDING_*` 环境变量,确定性走本地
+  huggingface 默认,不依赖远程服务(见 tests/conftest.py)。

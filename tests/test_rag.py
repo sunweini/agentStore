@@ -3,7 +3,74 @@ import json
 import pytest
 
 from agents.kingdee_plugin_agent.seed.seed_load import load_seed_data
-from common.rag import RagClient, RagError
+from common.rag import RagClient, RagError, _embedding_model
+
+
+# ---- embedding 模型配置化(EMBEDDING_* env 分支;autouse 夹具已清除 env + 清缓存) ----
+
+
+def test_embedding_model_huggingface_default(monkeypatch):
+    """无 EMBEDDING_* env:走 huggingface 默认(BAAI/bge-small-zh-v1.5,离线本地)。"""
+    from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+
+    model = _embedding_model()
+    assert isinstance(model, HuggingFaceEmbeddings)
+    assert model.model_name == "BAAI/bge-small-zh-v1.5"
+
+
+def test_embedding_model_huggingface_custom_model(monkeypatch):
+    """EMBEDDING_PROVIDER=huggingface + 自定义 EMBEDDING_MODEL:env 透传构造参数。
+
+    mock 构造函数断言(真实构造会用不存在的 hub 模型名发起下载)。
+    """
+    import common.rag as rag_module
+
+    captured = {}
+
+    class _FakeHF:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(rag_module, "HuggingFaceEmbeddings", _FakeHF)
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "huggingface")
+    monkeypatch.setenv("EMBEDDING_MODEL", "custom/zh-embed")
+    _embedding_model()
+    assert captured["model_name"] == "custom/zh-embed"
+    assert captured["encode_kwargs"] == {"normalize_embeddings": True}
+
+
+def test_embedding_model_openai_compatible_defaults(monkeypatch):
+    """openai-compatible 分支:OpenAIEmbeddings + 默认 Qwen 模型 + 指定 base_url。"""
+    from langchain_openai import OpenAIEmbeddings
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://10.33.17.234:32320")
+    model = _embedding_model()
+    assert isinstance(model, OpenAIEmbeddings)
+    assert model.model == "Qwen/Qwen3-Embedding-8B"  # openai-compatible 缺省模型
+    assert model.openai_api_base == "http://10.33.17.234:32320"
+
+
+def test_embedding_model_openai_compatible_custom(monkeypatch):
+    """openai-compatible 分支:自定义模型 + API key 透传。"""
+    from langchain_openai import OpenAIEmbeddings
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://embed.example/v1")
+    monkeypatch.setenv("EMBEDDING_MODEL", "custom/embed-8B")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "sk-embed-key")
+    model = _embedding_model()
+    assert isinstance(model, OpenAIEmbeddings)
+    assert model.model == "custom/embed-8B"
+    assert model.openai_api_base == "http://embed.example/v1"
+    assert model.openai_api_key.get_secret_value() == "sk-embed-key"  # SecretStr 需解包
+
+
+def test_embedding_model_openai_compatible_missing_base_url(monkeypatch):
+    """openai-compatible 缺 EMBEDDING_BASE_URL:抛清晰错误(不静默回退)。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai-compatible")
+    with pytest.raises(RagError, match="EMBEDDING_BASE_URL"):
+        _embedding_model()
 
 
 def test_rag_client_creates_dirs(tmp_path):
