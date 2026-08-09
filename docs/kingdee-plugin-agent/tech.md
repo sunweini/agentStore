@@ -249,7 +249,7 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 - 状态机:`proposed ──verify()──▶ verified`;`archive()` 归档(文档与向量不动,仅元数据 status 更新,chromadb `Collection.update(ids, metadatas)` 路径)。
 - **签名去重**:`signature = "code|file_pattern"`;`propose()` 先按 `filter={"signature": sig}` 精确查重,同签名已存在直接返回,防 w7 幻觉污染。
 - `search_related(error_code, message, k)` 仅返回 proposed/verified:proposed 标 `confidence="unverified"`,verified/种子(无 status 元数据,视为人工策展等同已核验)标 `confidence="verified"`;archived 等其余状态被过滤。
-- **种子**:`seed/compile_errors.json` 7 条(CS0246/CS0103/CS0234/CS1061/CS0506/CS0115 等),`seed_load` CLI 幂等灌入(签名去重,"种子灌入完成:新增 N 条")。
+- **种子**:`seed/compile_errors.json` 10 条(CS0246/CS0103/CS0234/CS1061/CS0506/CS0115 + 真实环境 MSB3274/MSB3275/CS0246-EventArgs),`seed_load` CLI 幂等灌入(签名去重,"种子灌入完成:新增 N 条")。
 
 ### 5.4 检索路由表
 
@@ -286,7 +286,7 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 19 | 验收拒绝原因沉淀失败 | 不阻塞验收(记录 warning 日志) |
 | 20 | 路径穿越 | ArtifactStore 子任务 id 白名单 `^[A-Za-z0-9_-]+$`,非法抛 ArtifactStoreError |
 | 21 | 并行写同一通道冲突 | todo/rework_events/final_deliverables 走 reducer;预算主管唯一写者;dispatch_id 分支不写回 |
-| 22 | 时间预算 | 编译单轮 ≤120s(httpx timeout);msbuild 后端 120s 超时;answers 端点等图挂起 ≤30s 否则 409;单任务编译阶段 ≤15min 天然满足(5 轮 × 120s ≤10min);**全流程 ≤30min 图级总闸**:`started_at` 距今 >1800s 且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`(LLM 决策上下文摘要表含"已用/总闸"时长,可自行选择 fail) |
+| 22 | 时间预算 | 编译单轮 ≤120s(httpx timeout);msbuild 后端 180s 超时(首次冷启动较慢);answers 端点等图挂起 ≤30s 否则 409;单任务编译阶段 ≤15min(5 轮 × 180s 上限,w5 内部覆盖);**全流程 ≤30min 图级总闸**:`started_at` 距今 >1800s 且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`(LLM 决策上下文摘要表含"已用/总闸"时长,可自行选择 fail) |
 | 23 | 需求版本冻结 | spec 确认(`spec_confirmed`)即冻结:`spec_version=1` 盖章,requirement_spec 此后无任何写路径(w1 只在未确认时改 spec);API answers 确认后仅接受 ask_user 类型恢复(409 拒绝 question/confirm 残留输入,防回归);修改需求须开新任务;w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json` |
 | 24 | 澄清无限循环 | 逐问 ≤10 轮;确认最多 1 次补充,仍不确认带假设强制收口 |
 | 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 中断后内存任务存储重启即丢(v1 债务),重建任务重跑 |
@@ -323,9 +323,9 @@ services:
 ### 8.2 compile_service(编译容器)
 
 - **后端选择**(`server.py::_backend_from_env`):`COMPILE_SERVICE_REQUIRES_DLLS=1` → 真实 `MsbuildCompiler`(从 `REFS_DIR` 目录 glob `*.dll`,缺 DLL 构造即抛 `CompileUnavailableError`,服务不启动,标记"DLL 未到位");否则 `MockCompiler`(预设规则表,开发/CI 用,**不当质量门**)。
-- **真实后端**:临时目录生成 csproj(net48)+ 引用 DLL → `msbuild`(120s 超时)→ `error_parser` 解析(正则 `File.cs(12,5): error CS0123: msg`,`(code,file)` 去重,级联洪水上限 10 条)→ 进程 returncode 非零即使无错误行也判失败;编译成功后把输出 DLL 复制到服务端留存目录(`artifact_dir/<project_name>/Plugin.dll`,临时目录编译完即删),`dll_path` 随结果返回;mock 后端无产出 → 空串。
+- **真实后端(msbuild.py)**:**旧式 csproj(ToolsVersion 4.0)** —— 兼容无 VS 环境的 .NET Framework 自带 MSBuild(`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe`),配合 .NET Framework 4.8 Developer Pack(参考程序集)编译 `TargetFrameworkVersion` 目标;SDK 风格 csproj 需 VS 15+,纯 Framework 环境不可用(E2E 门实际环境验证)。**msbuild_path 探测**:`default_msbuild_path()` 优先 PATH 中的 msbuild(VS 环境),兜底 Framework 自带路径;`MSBUILD_PATH` 环境变量显式覆盖。**target_framework 可配**:`TARGET_FRAMEWORK` 环境变量,默认 `v4.8`(需 Developer Pack);低于引用程序集框架(金蝶 BOS DLL 为 v4.8)会触发 MSB3274/3275 引用被静默跳过。**编译超时 180s**(msbuild 首次冷启动较慢)。流程:临时目录生成 csproj + 引用 DLL(HintPath)→ `msbuild /nologo /v:minimal` → `error_parser` 解析(正则 `File.cs(12,5): error CS0123: msg`,`(code,file)` 去重,级联洪水上限 10 条)→ 进程 returncode 非零即使无错误行也判失败;**DLL 字节在 TemporaryDirectory 退出前读取**(Windows 上退出后延迟读 FileNotFoundError)后复制到服务端留存目录(`artifact_dir/<project_name>/Plugin.dll`),`dll_path` 随结果返回;mock 后端无产出 → 空串。
 - **接口**:`GET /health` → `{"status": "ok"}`;`POST /compile {code, project_name}` → `{success, raw_output, duration_ms, dll_path, errors:[{file, line, code, message, is_fatal}]}`(dll_path = 服务端留存路径,空 = 无 DLL 产出);`GET /dll/{project_name}` → 编译产物二进制(客户端拉取到本地;project_name 过白名单防路径穿越);后端不可用 → 503(客户端 `CompileUnavailableError`)。
-- **Dockerfile**:基础镜像 `mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2022`(Windows 容器,msbuild);`COPY build/references/ → /app/references`;`ENV COMPILE_SERVICE_REQUIRES_DLLS=1`;`docker-entrypoint.sh` 为 mono/Linux 基础镜像预留 DLL 校验入口。⚠️ 金蝶 BOS 编译在 Linux 容器兼容性(mono/.NET 兼容层或 Windows 容器)待验证。
+- **Dockerfile**:基础镜像 `mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2022`(Windows 容器,msbuild);`COPY build/references/ → /app/references`;`ENV COMPILE_SERVICE_REQUIRES_DLLS=1`;`docker-entrypoint.sh` 为 mono/Linux 基础镜像预留 DLL 校验入口。⚠️ 金蝶 BOS 编译在 Linux 容器兼容性(mono/.NET 兼容层或 Windows 容器)**未验证** —— **实际采用 Windows 原生部署**(Windows Server 2016 金蝶服务器本机/同网段机器直接跑 uvicorn,见 windows-deployment.md,E2E 门已验证),容器方案保留为备选。
 - **客户端**(tools/compile_client.py):`COMPILE_SERVICE_URL`(缺省 http://localhost:8000),timeout 120s(10s 会让真实编译超时误判)。
 
 ### 8.3 数据目录(gitignore)
@@ -338,7 +338,7 @@ services:
 - **注入约定**:只注入 LLM/外部服务(`build_graph(llm=None)` + fake 编译/冒烟),**不 mock LangGraph 本身**;CLI 测试 monkeypatch 模块级 `build_graph`。
 - **图可达性测试**:覆盖 主管循环、依赖拓扑、并行派发(≤3)、返工预算、finish/fail 终态、interrupt 澄清流、Send 分支 payload 快照、reducer 合并、防"supervisor↔dispatcher 空派发忙循环"。
 - **eval 集**(tests/eval/):`cases/*.json`(3 类型样例)+ `run_eval.py`(w3 生成 → mock 编译 → 事件断言)+ `baseline.json`(确定性基线,`llm=None`,提交/CI 对比回归);评估用 `EVAL_MOCK_RULES`(CS9990 未渲染占位符残留 —— 默认 MockCompiler 规则对真实插件误报,勿用);`trigger_ok` 断言覆盖方法声明(裸子串会命中设计摘要注释,误报)。
-- **E2E 门(未达成)**:真实容器编译 3 类型样例插件各一通过 —— 依赖团队金蝶 BOS DLL 到位(里程碑 1 启动门);mock 编译服务仅作开发期辅助,不当质量门。
+- **E2E 门(✅ 已达成)**:bill/service/list 三类型样例插件在真实金蝶 DLL 环境编译通过并产出 DLL —— 环境:Windows Server 2016 金蝶服务器 + 金蝶 WebSite\bin DLL + .NET 4.8 DevPack + Framework MSBuild(旧式 csproj);mock 编译服务仅作开发期辅助,不当质量门。
 
 ## 10. 性能与预算
 
@@ -359,7 +359,7 @@ default_recursion_limit(n) = 100 + 20 × n
 | 子任务退回上限 | `Subtask.max_rework`(0 = 全局默认) | 设计 §5.1「上限」字段:rework_count 超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework(`_advance_status` 判定);与全局预算的协同:子任务上限是环节级更早触发的闸门,全局 ≤3 轮是任务级最终防线,返工轮次已实际发生仍照扣全局预算,两者叠加不抵消 |
 | 编译轮次 | ≤5(`MAX_COMPILE_ROUNDS`) | 服务不可用不计轮次 |
 | 澄清轮次 | ≤10(w1 `MAX_ROUNDS`) | 逐问上限;确认 ≤2 次尝试 |
-| 单轮编译 | ≤120s | httpx timeout + msbuild timeout |
+| 单轮编译 | ≤120s(httpx)/180s(msbuild) | httpx timeout + msbuild timeout(首次冷启动较慢) |
 | 单任务编译阶段 | ≤15min(天然 ≤10min) | 5 轮 × 120s,w5 内部覆盖 |
 | 全流程时间预算 | ≤30min(`PIPELINE_TIME_BUDGET=1800.0`) | 图级总闸:decide 确定性 fail(§6 #22);`started_at` 由 CLI/API 建任务时写入 |
 | answers 等待 | ≤30s | 超时 409 让客户端重试 |
@@ -379,4 +379,4 @@ default_recursion_limit(n) = 100 + 20 × n
 
 **反馈通道(设计 §12)**:`POST /tasks/{id}/feedback {reason}` 部署后行为错误手动上报 → 经验库 propose("DEPLOY", sha256(reason)[:12], reason, …)(proposed 态,同验收拒绝沉淀模式,失败不阻塞);API 端点契约见 api.py 模块 docstring 与 manual.md §4 端点表。
 
-**未验证项**:线上 DeepSeek 验证 load_skill 绑定(见 §4.2);真实金蝶环境 WebAPI 端点/响应结构(当前为文档化初始契约占位,见 tools/kingdee_api.py 头部警告);E2E 启动门(真实容器编译 3 类型样例);Linux 容器 BOS 编译兼容性;规范库(standards)目录与文档导入尚未接真实资料。
+**未验证项**:线上 DeepSeek 验证 load_skill 绑定(见 §4.2);真实金蝶环境 WebAPI 端点/响应结构(编译侧已真实验证,E2E 门 ✅;元数据/冒烟侧仍为文档化初始契约占位,见 tools/kingdee_api.py 头部警告);Linux 容器 BOS 编译兼容性(实际采用 Windows 原生部署,见 windows-deployment.md,容器方案保留);规范库(standards)目录与文档导入尚未接真实资料。

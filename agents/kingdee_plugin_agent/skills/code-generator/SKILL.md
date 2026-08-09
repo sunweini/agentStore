@@ -20,7 +20,8 @@ w4 审查必然打回。
 
 1. **模板优先**:以模板为基准 —— 基类继承(AbstractBillPlugIn /
    AbstractOperationServicePlugIn / AbstractListPlugIn)、事件签名、using 引用
-   均为团队验证过的基准,**不改模板骨架**,业务实现只填入 {{BUSINESS_LOGIC}}
+   均为**已真实环境编译验证的基准**(三类型模板已在 Windows + 金蝶 BOS DLL
+   环境编译通过并产出 DLL),**不改模板骨架**,业务实现只填入 {{BUSINESS_LOGIC}}
    等占位符位置。
 2. **指南参数化**:业务细节取自设计文档 + guide 检索(插件类型过滤);
    字段/操作/API 签名必须真实(来自元数据/指南),禁止编造。

@@ -5,5 +5,8 @@
   {"code": "CS1061", "file_pattern": "", "message": "对象不包含成员定义(方法名/事件名错)", "fix": "用元数据查询确认事件名(如 AfterDoOperation)", "source": "seed"},
   {"code": "CS0246", "file_pattern": "AbstractOperationServicePlugIn", "message": "服务插件基类找不到(缺 K3 Core 引用)", "fix": "引用 Kingdee.K3.Core.dll", "source": "seed"},
   {"code": "CS0506", "file_pattern": "", "message": "不是重写,基类中不存在该成员(事件签名不匹配基类)", "fix": "核对基类事件签名并完全匹配(如 OnLoad(EventArgs e) / AfterDoOperation(AfterDoOperationEventArgs e)),模板 templates/<type>/template.cs 有基准", "source": "seed"},
-  {"code": "CS0115", "file_pattern": "", "message": "找不到合适的方法可重写(override 的方法不在基类)", "fix": "确认事件名与签名与基类完全一致;签名错误是级联源头,先修签名再处理后续错误", "source": "seed"}
+  {"code": "CS0115", "file_pattern": "", "message": "找不到合适的方法可重写(override 的方法不在基类)", "fix": "确认事件名与签名与基类完全一致;签名错误是级联源头,先修签名再处理后续错误", "source": "seed"},
+  {"code": "MSB3274", "file_pattern": "", "message": "无法解析引用(目标框架低于引用程序集,引用被跳过)", "fix": "TARGET_FRAMEWORK 提到引用程序集的框架版本(金蝶 BOS DLL 为 v4.8);按 warning MSB3274/3275 判定", "source": "seed"},
+  {"code": "MSB3275", "file_pattern": "", "message": "主引用引用的程序集与目标框架不兼容(传递引用被跳过)", "fix": "同 MSB3274:提升 TARGET_FRAMEWORK 至 v4.8", "source": "seed"},
+  {"code": "CS0246", "file_pattern": "EventArgs", "message": "EventArgs 找不到(缺 using System)", "fix": "模板已补 using System;若 LLM 生成代码缺 System 命名空间引用,补 using System;", "source": "seed"}
 ]

@@ -2264,7 +2264,7 @@ def test_seed_load_cli_main(tmp_path, capsys):
     from agents.kingdee_plugin_agent.seed.seed_load import main
 
     n1 = main(["--data-dir", str(tmp_path)])
-    assert n1 >= 7                                # 7 条种子(含签名类 CS0506/CS0115)
+    assert n1 >= 10                               # 10 条种子(含签名类 CS0506/CS0115 + 真实环境 MSB3274/3275、CS0246-EventArgs)
     out = capsys.readouterr().out
     assert f"种子灌入完成:新增 {n1} 条" in out    # 打印契约(步骤 1.4 依赖的输出)
     n2 = main(["--data-dir", str(tmp_path)])

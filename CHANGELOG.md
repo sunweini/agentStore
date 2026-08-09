@@ -5,6 +5,37 @@
 
 ---
 
+## v1.13.0 — 2026-08-09(kingdee-plugin-agent:E2E 门达成 —— 真实金蝶环境编译全通,部署/种子/文档同步)
+
+### 新增功能
+
+- **旧式 csproj 兼容 Framework MSBuild(无 VS 环境)**:`compile_service/backends/msbuild.py` 由 SDK 风格 csproj(需 VS 15+)改为生成 **ToolsVersion 4.0 旧式 csproj** —— 兼容 .NET Framework 自带 MSBuild(`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe`),配合 .NET Framework 4.8 Developer Pack(参考程序集)编译 `TargetFrameworkVersion` 目标,无需安装 Visual Studio。
+- **msbuild_path 自动探测**:`default_msbuild_path()` 优先 PATH 中的 msbuild(VS 环境),兜底 Framework 自带路径;`MSBUILD_PATH` 环境变量可显式覆盖(`server.py::_backend_from_env` 接线)。
+- **target_framework 可配**:`TARGET_FRAMEWORK` 环境变量(默认 `v4.8`,需 Developer Pack 参考程序集);编译超时 120s → **180s**(msbuild 首次冷启动较慢)。
+- **DLL persist 时序修复**:编译成功后 DLL 字节**在 TemporaryDirectory 退出前读取**(Windows 上退出后延迟读会 FileNotFoundError),再落盘服务端留存目录。
+
+### 修复
+
+- **三类型模板真实编译修复(真实金蝶 DLL 反射验证,commit 51e5468)**:bill/list 模板补 `using System;`(EventArgs 找不到 CS0246);`AfterDoOperationEventArgs` 在 `Kingdee.BOS.Core.DynamicForm.PlugIn.Args`(bill 补 using);service 模板删除**不存在的** `using Kingdee.K3.Core.ServiceHelper;` 假引用(类型不存在),基类 `AbstractOperationServicePlugIn` 在 `Kingdee.BOS.Core.DynamicForm.PlugIn`。
+- **E2E 门达成(里程碑 1 启动门 ✅)**:bill/service/list 三类型样例插件在 **Windows Server 2016 金蝶服务器 + 金蝶 WebSite\bin 真实 DLL + .NET 4.8 DevPack + Framework MSBuild** 环境全部编译通过并产出 DLL —— 真实编译后端首次端到端验证通过,不再是 mock 质量门。
+
+### 测试
+
+- 全套 212 项全过;种子 7 条 → **10 条**(新增 MSB3274/MSB3275/CS0246(EventArgs)真实踩坑种子),seed_load 幂等断言更新(7 → 10,二次灌入仍为 0)。
+
+### 文档
+
+- **新增 `docs/kingdee-plugin-agent/windows-deployment.md`**:Windows 编译服务部署手册 —— 前置(Windows Server 2016+ / Python 3.10 / git clone)、.NET 4.8 Developer Pack、金蝶 DLL 采集(WebSite\bin,授权注意)、start_compile.bat + schtasks 保活、health + 真实编译验证、故障排查(端口/500 日志/MSB3274-3275/mock-vs-real 判别)、与 Ubuntu agent 连接(COMPILE_SERVICE_URL)。
+- **种子踩坑(compile_errors.json)**:MSB3274/3275(引用程序集框架高于编译目标 → 引用被静默跳过,TARGET_FRAMEWORK 提到 v4.8)+ CS0246 EventArgs(缺 using System)。
+- **manual.md**:部署节(Windows 编译服务部署步骤 + 端口冲突换端口)+ FAQ 增补(端口被金蝶占/编译 500 看 E:\uv.log/MSB3274-3275 提 TARGET_FRAMEWORK)+ 限制节更新(E2E 门已达成)。
+- **tech.md**:§8.2 msbuild 后端更新(旧式 csproj 理由 / msbuild_path 探测 / target_framework 可配)+ §9 E2E 门状态 ✅(环境注明)+ §11 未验证项移除 E2E 门与 Linux 容器兼容性(实际采用 Windows 原生部署,容器方案保留)。
+- **project.md**:里程碑 E2E 门 ❌待 DLL → ✅ 已达成(注明环境);待办更新(剩真实金蝶 WebAPI 凭证联调 + RAG 内容)。
+- **设计文档 §13**:E2E 门状态更新;Linux 容器兼容性条目备注(实际采用 Windows 原生部署,容器方案保留)。
+- **skill 措辞**:design-builder / code-generator SKILL.md"模板为团队验证基准"类措辞更新为"三类型模板已真实环境编译验证(Windows + 金蝶 BOS DLL)";compile-fixer SKILL.md/errors.md 保持纯方法论(具体错误已入种子,不写进 skill 静态内容)。
+- agents/kingdee_plugin_agent/CLAUDE.md:常用操作「接真实金蝶环境」补编译服务 Windows 部署环境变量(COMPILE_SERVICE_REQUIRES_DLLS=1 / REFS_DIR / TARGET_FRAMEWORK=v4.8 / MSBUILD_PATH 可选)+ E2E 门达成 + DLL 来源 WebSite\bin(授权注意)。
+
+---
+
 ## v1.12.0 — 2026-08-09(kingdee-plugin-agent:下发模板补验收标准/上限字段 + 设计文档 14→8 worker 偏差同步)
 
 ### 新增功能

@@ -54,7 +54,7 @@
 
 ### 5.1 已完成
 
-三个实现 plan 全部交付(Plan A 编译服务 / Plan B 知识基建 / Plan C 编排与入口),此后 v1.9~v1.12 持续补强,当前 **212 项测试全过**(记录于 CHANGELOG v1.12.0,含图全链路、CLI、API、RAG、模板、编译服务、eval 集)。
+三个实现 plan 全部交付(Plan A 编译服务 / Plan B 知识基建 / Plan C 编排与入口),此后 v1.9~v1.13 持续补强,**E2E 门已达成**(三类型样例真实编译通过),当前 **212 项测试全过**(记录于 CHANGELOG v1.13.0,含图全链路、CLI、API、RAG、模板、编译服务、eval 集)。
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
@@ -65,13 +65,14 @@
 | v1.10 P2 五项 | 指标随 State 统计(TaskState.metrics 五计数器)+ OTel span(低基数)、失败收尾"未完成"包(w6_fail → deliverable-failed-*.zip)、LLM 畸形 JSON 重试(2 次尝试)、交付包 records 接线(design/review 进包)、.env 配置组 | ✅ 交付 |
 | v1.11 冒烟链路 + 反馈通道 | 冒烟链路结构级修复(FormId 提取 + DLL 传递,验证对象改 DLL)、反馈端点 POST /tasks/{id}/feedback(经验库 DEPLOY 通道)、`--env` 记录进 state.environment | ✅ 交付 |
 | v1.12 下发模板字段 | 验收标准(Subtask.acceptance_criteria,w4 审查对照)+ 子任务退回上限(Subtask.max_rework/rework_count,超限子任务 failed 而非 needs_rework) | ✅ 交付 |
+| v1.13 E2E 门达成 | 三类型模板真实编译修复(using System / 命名空间 / 删除假引用)+ 旧式 csproj 兼容 Framework MSBuild(msbuild_path 探测 + target_framework 可配 + 180s 超时)+ DLL persist 时序修复;**bill/service/list 三类型样例在 Windows Server 2016 金蝶服务器(WebSite\bin 真实 DLL + .NET 4.8 DevPack + Framework MSBuild)全部编译通过并产出 DLL** —— 里程碑 1 启动门达成 | ✅ 达成 |
 
 ### 5.2 待办(未验证项)
 
 以下均为**未验证/未达成**项,上线前需推进:
 
-- **团队金蝶 BOS DLL 到位 → 真实容器编译(里程碑 1 启动门)**:真实 msbuild 后端在容器内编译需金蝶 BOS 引用 DLL(授权合规);启动门 = 真实容器编译 bill/service/list 三类型样例插件各一通过。当前 CI/测试走 mock 编译后端,不当质量门。
-- **真实金蝶环境联调**:WebAPI 客户端(FormId/字段/操作查询)与冒烟客户端的端点路径、响应结构目前是**文档化初始契约(占位)**,需在真实实例上对照金蝶文档验证调整;Linux 容器内 BOS 编译兼容性(mono/.NET 兼容层或 Windows 容器)待验证。
+- **真实金蝶 WebAPI 联调**:编译侧 E2E 门已达成(Windows 原生部署,见 [windows-deployment.md](windows-deployment.md));但 WebAPI 客户端(FormId/字段/操作查询)与冒烟客户端的端点路径、响应结构目前是**文档化初始契约(占位)**,需在真实实例上对照金蝶文档验证调整 —— 需要真实金蝶环境的 **WebAPI 登录凭证**(KD_* 4 项)。
+- **RAG 内容**:规范库(standards)目录与文档导入尚未接真实资料(官方文档/内部资料),guide/api_ref 库目前以模板与要点为主。
 - **线上 DeepSeek 验证 load_skill 绑定**:w1-w5 的 `structured_with_skill`(tools + json_schema 组合)未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 smoke,被 API 拒绝则回退 JSON Mode 模式(见 `agents/kingdee_plugin_agent/CLAUDE.md` 约束)。
 - **v1 已知债务**(见 tech.md §11):API 内存任务存储重启即丢、线程无并发上限、apikey 非 timing-safe、`--env` 部分消费(v1.11:记录进 requirement_spec + `state.environment["env_name"]`,节点可感知;未做环境级差异化,单环境 v1)、CLI 门控仅查 KD_BASE_URL。
 

@@ -22,7 +22,7 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 
 - `subtask.compile_errors`:本轮编译错误列表(每条含 code/message)
 - 经验库(ExperienceStore):proposed/verified 两态条目 + "code|file_pattern" 签名
-- 种子数据:seed/compile_errors.json(启动幂等灌入,7 条基准)
+- 种子数据:seed/compile_errors.json(启动幂等灌入,10 条基准,含真实环境 MSB3274/3275 等)
 - 维护场景输入:官方文档爬取结果 / 内部资料 / 规范新增
 
 ## 流程(沉淀方法论,w7 绑定时用)

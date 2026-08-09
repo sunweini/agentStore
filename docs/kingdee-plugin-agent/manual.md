@@ -35,13 +35,13 @@ COMPILE_SERVICE_URL=http://localhost:8000
 KINGDEE_API_KEY=sk-demo-key
 ```
 
-可选:`COMPILE_SERVICE_REQUIRES_DLLS=1` + `REFS_DIR`(编译容器内真实 msbuild 后端用)。
+可选:`COMPILE_SERVICE_REQUIRES_DLLS=1` + `REFS_DIR` + `TARGET_FRAMEWORK=v4.8`(真实 msbuild 后端用 —— **Windows 部署必配**,见 1.3 与 [windows-deployment.md](windows-deployment.md))。
 
 ### 1.2 灌入经验库种子(首次必做)
 
 ```bash
 python -m agents.kingdee_plugin_agent.seed.seed_load
-# 输出:种子灌入完成:新增 7 条(幂等:重复执行新增 0 条)
+# 输出:种子灌入完成:新增 10 条(幂等:重复执行新增 0 条)
 # 可选 --data-dir <dir> 指定数据目录(默认 data/kingdee-rag,与 RAG 客户端一致)
 ```
 
@@ -49,14 +49,24 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 
 ### 1.3 起编译服务(需要时)
 
-编译环节(w5)依赖编译服务;服务不可用时该环节报 BLOCKED(不计编译轮次)并最终标记失败。真实 msbuild 后端需要金蝶 BOS DLL 放入 `compile_service/build/references/`(**团队解锁项,未到位前无法起真实编译**):
+编译环节(w5)依赖编译服务;服务不可用时该环节报 BLOCKED(不计编译轮次)并最终标记失败。真实 msbuild 后端需要金蝶 BOS DLL 放入 `compile_service/build/references/`。
 
-```bash
-docker-compose up -d            # 起 compile-service(8000 端口;无 DLL 会启动失败)
-curl http://localhost:8000/health   # {"status":"ok"}
+**推荐部署方式:Windows 原生部署(E2E 门已验证)** —— 在金蝶服务器本机或同网段 Windows 机器上直接跑编译服务,完整步骤见 [windows-deployment.md](windows-deployment.md)(.NET 4.8 Developer Pack + 金蝶 WebSite\bin DLL + start_compile.bat + schtasks 保活):
+
+```bat
+rem start_compile.bat(内容,详见 windows-deployment.md)
+set COMPILE_SERVICE_REQUIRES_DLLS=1
+set REFS_DIR=E:\kingdee\compile_service\build\references
+set TARGET_FRAMEWORK=v4.8
+cd /d E:\kingdee\compile_service
+uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 8000 >> E:\uv.log 2>&1
 ```
 
-> 重要:镜像 Dockerfile **无条件**设置 `COMPILE_SERVICE_REQUIRES_DLLS=1`(固定走真实后端分支),references 目录为空时容器**启动即失败**(真实后端构造时抛 CompileUnavailableError,报"DLL 未到位")—— 未提供金蝶 BOS DLL 前不要依赖 docker-compose 起编译服务。mock 后端仅在**本机不带该环境变量**直接运行 `uvicorn compile_service.server:create_factory`(开发/测试)时生效,不当质量门;测试环境(w5)在无编译服务时按 BLOCKED → 标记失败处理。
+```bash
+curl http://<windows-机>:8000/health   # {"status":"ok"}
+```
+
+Docker 方式(Linux 容器,备选,未验证):`docker-compose up -d`(8000 端口;镜像 Dockerfile **无条件**设置 `COMPILE_SERVICE_REQUIRES_DLLS=1` 固定走真实后端分支,references 目录为空时容器**启动即失败** —— 未提供金蝶 BOS DLL 前不要依赖 docker-compose 起编译服务;Linux 容器内 BOS 编译兼容性未验证,Windows 原生部署为实际采用方案)。mock 后端仅在**本机不带该环境变量**直接运行 `uvicorn compile_service.server:create_factory`(开发/测试)时生效,不当质量门;测试环境(w5)在无编译服务时按 BLOCKED → 标记失败处理。
 
 ### 1.4 校验环境
 
@@ -169,13 +179,22 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 → `X-API-Key` 头值须与 `KINGDEE_API_KEY`(或 `API_KEYS_JSON` 首个 key)一致;未配置任何 key 时默认拒绝全部请求。
 
 **Q7: 交付包能直接用吗?**
-→ 交付包含源码 + 部署说明 + records(design.json/review.json 由 w6 从产物库读入,缺失容错为空;`spec.json` 记录需求版本号与冻结的需求快照);DLL 在真实编译后端(mock 后端无产出)时入包 `bin/Plugin.dll`。**上线前仍需人工 review 并在真实金蝶环境验收** —— 当前 WebAPI 客户端端点与冒烟验证路径为初始契约占位(未在真实实例验证),真实编译(E2E 门)待团队金蝶 BOS DLL 到位后解锁;编译后端无 DLL 产出时冒烟环节会显式跳过(标注「无 DLL」),不会拿源码冒充产物。
+→ 交付包含源码 + 部署说明 + records(design.json/review.json 由 w6 从产物库读入,缺失容错为空;`spec.json` 记录需求版本号与冻结的需求快照);DLL 在真实编译后端(mock 后端无产出)时入包 `bin/Plugin.dll`。**上线前仍需人工 review 并在真实金蝶环境验收** —— 编译侧 E2E 门已达成(三类型样例真实编译通过,见 windows-deployment.md),但 WebAPI 客户端端点与冒烟验证路径仍为初始契约占位(未在真实实例验证);编译后端无 DLL 产出时冒烟环节会显式跳过(标注「无 DLL」),不会拿源码冒充产物。
 
 **Q8: 需求确认后想改需求怎么办?**
 → 需求在确认时冻结(`spec_version=1`),确认后任何输入都不会再改动需求规格 —— 中途问题(ask_user)的回答只作为反馈记录;确认后 answers 端点只接受执行中问题的恢复(其余 409"需求已确认并冻结")。要改需求请**开一个新任务**重跑(设计 §8 需求版本冻结)。
 
 **Q9: 任务跑了很久没结束?**
-→ 全流程时间预算 30min 图级总闸:超时且仍有未交付子任务 → 自动收尾失败(`fail:时间预算耗尽`),剩余子任务标记 failed。单轮编译 ≤120s、单任务编译阶段 ≤15min(5 轮 × 120s 天然满足)由编译环节内部覆盖。真超时通常是编译服务不可用/LLM 故障,先查 §5 Q2。
+→ 全流程时间预算 30min 图级总闸:超时且仍有未交付子任务 → 自动收尾失败(`fail:时间预算耗尽`),剩余子任务标记 failed。单轮编译超时(客户端 httpx 120s / msbuild 后端 180s)、单任务编译阶段 ≤15min(5 轮上限,天然满足)由编译环节内部覆盖。真超时通常是编译服务不可用/LLM 故障,先查 §5 Q2。
+
+**Q10: 编译服务端口被金蝶占用了?**
+→ 金蝶 WebAPI 常占 8000 端口。换端口:`start_compile.bat` 里 `--port` 改别的端口(如 8088,先确认防火墙放行),agent 侧 `.env` 的 `COMPILE_SERVICE_URL` 同步改为 `http://<windows-机>:8088`。
+
+**Q11: 编译返回 500/服务起不来?**
+→ Windows 部署下服务日志写在 `E:\uv.log`(start_compile.bat 重定向),先看日志尾部找 traceback;常见三类:① 缺 .NET 4.8 Developer Pack(msbuild 报找不到参考程序集)→ 装 DevPack;② references 目录缺 DLL(启动即报"DLL 未到位")→ 从金蝶服务器 WebSite\bin 拷贝;③ 端口被占 → 换端口(见 Q10)。
+
+**Q12: 编译报 warning MSB3274/MSB3275(引用被跳过)?**
+→ 金蝶 BOS DLL 是 .NET 4.8,编译目标框架低于引用程序集时引用被**静默跳过**(不报 error,编出来缺类型)。把 `TARGET_FRAMEWORK` 提到 `v4.8`(start_compile.bat 已默认设置;改了要重启服务)。经验库有对应种子(MSB3274/MSB3275)。
 
 ## 6. 交付物解读(zip 内容)
 
@@ -195,5 +214,6 @@ deliverable-<子任务id>-<时间戳>.zip
 ## 7. 限制与未验证项
 
 - **插件类型**:bill(单据)/ service(服务)/ list(列表),暂不含定时任务。
-- **未线上验证**:load_skill 工具绑定未对真实 DeepSeek 验证;真实金蝶环境 WebAPI 端点/响应结构为占位契约;E2E 启动门(真实容器编译 3 类型样例)待团队 DLL 解锁;Linux 容器内 BOS 编译兼容性待验证。
+- **E2E 门(编译侧)已达成**:三类型样例在 Windows Server 2016 金蝶服务器(WebSite\bin 真实 DLL + .NET 4.8 DevPack + Framework MSBuild)真实编译通过并产出 DLL,见 [windows-deployment.md](windows-deployment.md)。
+- **未线上验证**:load_skill 工具绑定未对真实 DeepSeek 验证;真实金蝶环境 WebAPI 端点/响应结构为占位契约(编译侧已真实验证,元数据/冒烟侧仍未);Linux 容器内 BOS 编译兼容性未验证(实际采用 Windows 原生部署)。
 - **v1 单环境**:`--env` 记录进 `state.environment["env_name"]`(CLI/API 初始 state,节点可感知),未做环境级差异化配置。

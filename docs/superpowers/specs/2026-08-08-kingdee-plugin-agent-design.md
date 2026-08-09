@@ -340,11 +340,11 @@ mock-compiler/                   # ★ 本地 mock 编译服务(预设错误规�
 
 ## 13. 风险与待确认
 
-- **里程碑 1 前置**:真实编译容器(含金蝶 BOS DLL)是启动门 — 团队 DLL 到位是解锁项,先行协调。
+- **里程碑 1 前置(✅ 已达成,2026-08-09)**:真实编译是启动门 — 三类型样例插件(bill/service/list)在真实金蝶 DLL 环境全部编译通过并产出 DLL。实际环境:Windows Server 2016 金蝶服务器 + 金蝶 WebSite\bin DLL + .NET 4.8 DevPack + Framework MSBuild(旧式 csproj);配套产物:三类型模板真实编译修复 + 部署手册 `docs/kingdee-plugin-agent/windows-deployment.md` + MSB3274/3275 等真实踩坑种子。DLL 授权合规注意仍有效(金蝶 DLL 为商业软件,内部使用需确认授权,勿公开分发)。
 - 错误解析器按真实 msbuild 错误样本规格化测试,防 mock 格式与生产脱节。
 
 - 金蝶官方文档可爬性需验证(站点结构/登录墙)。
-- 编译容器:金蝶 BOS 编译在 Linux 容器的兼容性(可能需 mono/.NET 兼容层或 Windows 容器)。
+- 编译容器:金蝶 BOS 编译在 Linux 容器的兼容性(可能需 mono/.NET 兼容层或 Windows 容器)。**备注:实际采用 Windows 原生部署**(金蝶服务器本机/同网段 Windows 机器直接跑编译服务,E2E 门已验证);Linux/Windows 容器方案保留为备选,未验证。
 - 内部资料格式:markdown/word/pdf 混排,解析管线按实际样本调整。
 - 第一阶段(w1)用户确认与澄清轮次上限:防止无限追问,默认上限 10 轮。
 - BGE 嵌入本地推理拖 torch(~2GB+),API 容器资源成本需评估(可选:嵌入服务独立部署)。
