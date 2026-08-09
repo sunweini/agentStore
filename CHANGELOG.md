@@ -5,6 +5,35 @@
 
 ---
 
+## v1.16.0 — 2026-08-09(kingdee-plugin-agent:编译服务 Windows 部署全配置化 —— 零硬编码路径)
+
+### 变更
+
+- **compile_service 部署路径全配置化**(环境变量覆盖 + 代码相对默认,零硬编码 Windows/容器路径):
+  - `compile_service/backends/msbuild.py`:`default_msbuild_path()` 探测优先级
+    `MSBUILD_PATH` env → PATH 的 msbuild(VS 环境)→ `FRAMEWORK_MSBUILD_PATH` env →
+    硬编码 Framework 自带路径(最后兜底);`artifact_dir` 缺省从 cwd 相对
+    `data/kingdee-compiled` 改为**代码相对** `仓库根/data/kingdee-compiled`
+    (compile_service/backends/msbuild.py 上溯 3 层),构造函数仍可覆盖。
+  - `compile_service/server.py`:`REFS_DIR` 缺省从容器路径 `/app/references` 改为
+    **代码相对** `compile_service/build/references`(Windows 原生部署与容器 /app 挂载均可用);
+    新增 `COMPILE_ARTIFACT_DIR` env → 透传 MsbuildCompiler.artifact_dir;
+    `MSBUILD_PATH` 现由后端直接读 env(独立于 server.py 参数)。
+  - `compile_service/Dockerfile`:显式 `ENV REFS_DIR=/app/references`,保持容器布局
+    契约不变(镜像内 references 固定 /app/references,避开代码相对默认值接管)。
+  - `compile_service/fetch_kingdee_dlls.ps1`:新增 `KINGDEE_BIN_DIR` 环境变量提供
+    金蝶 WebSite\bin 源目录(-SourceDir 参数仍最优先,env 后于参数、先于自动探测)。
+  - 文档:windows-deployment.md(start_compile.bat 改 `%~dp0` 相对 + 全量 env 表 +
+    PORT/HOST 约定说明)、manual.md、agent CLAUDE.md、.env.example 同步。
+
+### 测试
+
+- 新增 6 个配置化单测:`default_msbuild_path()` 三态(MSBUILD_PATH env / FRAMEWORK_MSBUILD_PATH
+  env / 硬编码兜底 intact)、`artifact_dir` 缺省代码相对、`_backend_from_env` REFS_DIR
+  缺省代码相对 build/references、COMPILE_ARTIFACT_DIR env 透传;全量回归通过。
+
+---
+
 ## v1.15.0 — 2026-08-09(kingdee-plugin-agent:RAG embedding 模型配置化 + 切换远程服务重灌)
 
 ### 新增功能

@@ -5,7 +5,8 @@
   有 DLL ──► compile: 生成旧式 csproj + 源文件 ──► msbuild ──► 输出交解析器
 
 兼容性:生成**旧式 csproj**(ToolsVersion 4.0),兼容无 VS 的机器上
-.NET Framework 自带 MSBuild(C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\MSBuild.exe),
+.NET Framework 自带 MSBuild(最后兜底 `C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\MSBuild.exe`,
+可用 `FRAMEWORK_MSBUILD_PATH` 环境变量覆盖),
 配合 .NET Framework Developer Pack(参考程序集)编译 TargetFrameworkVersion 目标。
 SDK 风格 csproj 需要 VS 15+,纯 Framework 环境不可用。
 
@@ -21,8 +22,12 @@ from compile_service.backends.protocol import CompilerBackend
 from compile_service.error_parser import parse_compile_output
 from compile_service.models import CompileResult, CompileUnavailableError
 
-# .NET Framework 自带 MSBuild 探测路径(无 VS 环境的兜底)
+# .NET Framework 自带 MSBuild 探测路径(无 VS 环境的**最后兜底**;可用 FRAMEWORK_MSBUILD_PATH 环境变量覆盖)
 _FRAMEWORK_MSBUILD = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe"
+
+# 编译产物 DLL 留存目录缺省:代码相对(compile_service/backends/msbuild.py 上溯 3 层 = 仓库根/data/kingdee-compiled),
+# 不随 cwd 漂移;构造函数 artifact_dir 或服务端 COMPILE_ARTIFACT_DIR 环境变量可覆盖
+_DEFAULT_ARTIFACT_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "kingdee-compiled"
 
 # 旧式 csproj 模板:兼容 Framework MSBuild 4.0(无 VS 环境)
 _CSPROJ_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
@@ -56,25 +61,36 @@ _CSPROJ_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
 
 
 def default_msbuild_path() -> str:
-    """探测可用 msbuild:优先 PATH 中的 msbuild(VS 环境),兜底 Framework 自带。"""
+    """探测可用 msbuild(优先级从高到低):
+    1. `MSBUILD_PATH` 环境变量(显式指定 —— 后端直接读 env,独立于 server.py 参数也可用);
+    2. PATH 中的 msbuild(VS 环境);
+    3. `FRAMEWORK_MSBUILD_PATH` 环境变量(覆盖 Framework 兜底路径,如系统盘非 C:);
+    4. 硬编码 Framework 自带路径(最后兜底);
+    全不可用 → 返回 "msbuild" 字符串,交由 subprocess 报错(路径不存在时错误信息清晰)。
+    """
+    import os
     import shutil
+    env = os.getenv("MSBUILD_PATH")
+    if env:
+        return env
     p = shutil.which("msbuild")
     if p:
         return p
-    if Path(_FRAMEWORK_MSBUILD).exists():
-        return _FRAMEWORK_MSBUILD
+    framework = os.getenv("FRAMEWORK_MSBUILD_PATH") or _FRAMEWORK_MSBUILD
+    if Path(framework).exists():
+        return framework
     return "msbuild"
 
 
 class MsbuildCompiler(CompilerBackend):
     def __init__(self, msbuild_path: str | None = None, reference_dlls: list[Path] | None = None,
-                 artifact_dir: Path = Path("data/kingdee-compiled"),
+                 artifact_dir: Path | None = None,
                  target_framework: str = "v4.8"):
         if not reference_dlls:
             raise CompileUnavailableError("金蝶 BOS DLL 未提供,真实编译不可用")
         self.msbuild_path = msbuild_path or default_msbuild_path()
         self.reference_dlls = reference_dlls
-        self.artifact_dir = Path(artifact_dir)
+        self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else _DEFAULT_ARTIFACT_DIR
         self.target_framework = target_framework
 
     def compile(self, code: str, project_name: str) -> CompileResult:

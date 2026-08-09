@@ -11,6 +11,8 @@
 #   -SourceDir "E:\Program Files (x86)\Kingdee\K3Cloud\WebSite\bin"   # specify Kingdee bin dir (skip auto-detect)
 #   -TargetDir "E:\agentstore\compile_service\build\references"        # target dir (default: repo\build\references)
 #   -All          # copy ALL Kingdee.*.dll (default: core 4 + common extras)
+# Env:
+#   KINGDEE_BIN_DIR  # if set, used as the source dir (before auto-detect; -SourceDir still wins)
 
 param(
     [string]$SourceDir = "",
@@ -45,11 +47,16 @@ $candidates = @(
 )
 
 if (-not $SourceDir) {
-    foreach ($c in $candidates) {
-        if (Test-Path (Join-Path $c "Kingdee.BOS.dll")) {
-            $SourceDir = $c
-            Write-Host "Detected Kingdee bin dir: $SourceDir"
-            break
+    if ($env:KINGDEE_BIN_DIR) {
+        $SourceDir = $env:KINGDEE_BIN_DIR
+        Write-Host "Using KINGDEE_BIN_DIR: $SourceDir"
+    } else {
+        foreach ($c in $candidates) {
+            if (Test-Path (Join-Path $c "Kingdee.BOS.dll")) {
+                $SourceDir = $c
+                Write-Host "Detected Kingdee bin dir: $SourceDir"
+                break
+            }
         }
     }
 }

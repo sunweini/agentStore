@@ -32,6 +32,10 @@ class CompileRequest(BaseModel):
 #: project_name 白名单(与 ArtifactStore 同源,防 DLL 下载路径穿越)
 _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
+#: REFS_DIR 缺省:代码相对 compile_service/build/references(Windows 原生部署与容器内 /app 挂载均可用;
+#: 容器镜像 Dockerfile 显式 ENV REFS_DIR=/app/references 保持容器布局不变)
+_DEFAULT_REFS_DIR = Path(__file__).resolve().parent / "build" / "references"
+
 
 def create_app(backend) -> FastAPI:
     app = FastAPI(title="kingdee-compile-service")
@@ -81,18 +85,24 @@ def create_app(backend) -> FastAPI:
 def _backend_from_env() -> CompilerBackend:
     """按环境变量选后端:COMPILE_SERVICE_REQUIRES_DLLS=1 → 真实 msbuild(缺 DLL 构造即抛),否则 mock。
 
-    MSBUILD_PATH 缺省走 default_msbuild_path() 探测(PATH 的 msbuild → Framework 自带兜底,
-    兼容无 VS 环境);TARGET_FRAMEWORK 可配编译目标(默认 v4.8,需 Developer Pack 参考程序集)。
+    环境变量(全部可选,缺省均代码相对,零硬编码部署路径):
+      REFS_DIR               金蝶 BOS DLL 目录(缺省 compile_service/build/references,代码相对)
+      TARGET_FRAMEWORK       编译目标(默认 v4.8,需 Developer Pack 参考程序集)
+      MSBUILD_PATH           显式 msbuild 路径(缺省走 default_msbuild_path() 探测:
+                             PATH 的 msbuild(VS 环境)→ Framework 自带兜底,兼容无 VS 环境)
+      COMPILE_ARTIFACT_DIR   编译产物 DLL 留存目录(缺省 MsbuildCompiler 代码相对默认 仓库根/data/kingdee-compiled)
     """
     if os.getenv("COMPILE_SERVICE_REQUIRES_DLLS") == "1":
         # 从 REFS_DIR 目录 glob *.dll(此前只读 REFERENCE_DLLS 环境变量,容器内从未设置 → 真实后端永远无法启动)。
         # 目录缺失/为空 → glob 得空列表 → MsbuildCompiler 构造抛 CompileUnavailableError(设计行为,标记"DLL 未到位")。
-        refs_dir = Path(os.getenv("REFS_DIR", "/app/references"))
+        refs_dir = Path(os.getenv("REFS_DIR") or _DEFAULT_REFS_DIR)
         reference_dlls = [p for p in refs_dir.glob("*.dll")]
+        artifact_dir = os.getenv("COMPILE_ARTIFACT_DIR")
         return MsbuildCompiler(
             msbuild_path=os.getenv("MSBUILD_PATH") or None,
             reference_dlls=reference_dlls,
             target_framework=os.getenv("TARGET_FRAMEWORK", "v4.8"),
+            artifact_dir=Path(artifact_dir) if artifact_dir else None,
         )
     return MockCompiler()
 

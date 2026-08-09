@@ -45,6 +45,8 @@ python -m venv .venv
 pip install -r requirements.txt          :: fastapi/uvicorn 等编译服务依赖
 ```
 
+> 仓库可放**任意盘符/目录**(示例用 E:\kingdee\agentStore):部署脚本全部用 `%~dp0` 相对定位 + 环境变量,
+> 不依赖固定盘符;schtasks 的 `/tr` 与 SYSTEM 账户 python 例外,需绝对路径(§7)。
 > 若机器无法访问外网 pip,先在能联网的机器 `pip download -r requirements.txt -d wheels\` 再 `pip install wheels\*.whl`。
 
 ## 4. 安装 .NET Framework 4.8 Developer Pack
@@ -67,6 +69,13 @@ dir "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramewo
 编译仅需**引用程序集**(编译期),拷到编译服务机器的 `compile_service\build\references\`:
 
 ```bat
+:: 方式 A(推荐):fetch_kingdee_dlls.ps1 自动拷贝(核心 4 + 常用扩展,或 -All 全量)
+::   -SourceDir 显式指定金蝶 bin;缺省自动探测常见安装路径;
+::   KINGDEE_BIN_DIR 环境变量可替代自动探测提供源目录(-SourceDir 优先于 env)
+set KINGDEE_BIN_DIR=C:\Program Files (x86)\Kingdee\K3Cloud\WebSite\bin
+powershell -ExecutionPolicy Bypass -File compile_service\fetch_kingdee_dlls.ps1
+
+:: 方式 B(手工拷贝):
 mkdir E:\kingdee\agentStore\compile_service\build\references
 cd "C:\Program Files (x86)\Kingdee\K3Cloud\WebSite\bin"
 copy Kingdee.BOS.dll          E:\kingdee\agentStore\compile_service\build\references\
@@ -79,6 +88,7 @@ copy Kingdee.K3.Core.dll      E:\kingdee\agentStore\compile_service\build\refere
 
 > ⚠️ **授权注意**:金蝶 BOS DLL 为**商业软件**,拷贝仅限内部编译使用,须确认金蝶授权范围,
 > **勿公开分发、勿提交仓库**(`compile_service/build/references/` 当前仅 .gitkeep 占位,保持空目录入库、DLL 只放本地)。
+> DLL 就位目录 = 服务端 `REFS_DIR` 缺省值(代码相对 `compile_service/build/references`,§6 可覆盖)。
 
 ## 6. 编写 start_compile.bat 并启动
 
@@ -87,6 +97,7 @@ copy Kingdee.K3.Core.dll      E:\kingdee\agentStore\compile_service\build\refere
 ```bat
 @echo off
 rem kingdee 编译服务启动脚本(Windows 原生部署;幂等,可被 schtasks 重复触发)
+rem %~dp0 = 脚本所在目录(compile_service\):所有路径相对定位,仓库换盘符/目录无需改脚本
 setlocal
 cd /d %~dp0..
 if exist .venv\Scripts\activate.bat call .venv\Scripts\activate.bat
@@ -102,10 +113,14 @@ rem ---- 真实 msbuild 后端必配 ----
 set COMPILE_SERVICE_REQUIRES_DLLS=1
 set REFS_DIR=%~dp0build\references
 set TARGET_FRAMEWORK=v4.8
-rem MSBUILD_PATH 可选:缺省自动探测(PATH 的 msbuild(VS 环境) → Framework 自带兜底)
+rem MSBUILD_PATH 可选:显式指定 msbuild;缺省自动探测(PATH 的 msbuild(VS 环境) → Framework 自带兜底)
 rem set MSBUILD_PATH=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe
+rem FRAMEWORK_MSBUILD_PATH 可选:覆盖 Framework 自带兜底路径(系统盘非 C: 或 MSBuild 版本不同时用)
+rem set FRAMEWORK_MSBUILD_PATH=D:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe
+rem COMPILE_ARTIFACT_DIR 可选:编译产物 DLL 留存目录(缺省 仓库根\data\kingdee-compiled,代码相对)
+rem set COMPILE_ARTIFACT_DIR=%~dp0..\data\kingdee-compiled
 
-python -m uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 8000 >> E:\uv.log 2>&1
+python -m uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 8000 >> "%~dp0..\uv.log" 2>&1
 ```
 
 启动:
@@ -113,20 +128,24 @@ python -m uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 80
 ```bat
 cd /d E:\kingdee\agentStore
 compile_service\start_compile.bat
-:: 前台会阻塞(日志进 E:\uv.log);验证:
+:: 前台会阻塞(日志进 仓库根\uv.log,由 %~dp0 相对定位,不依赖盘符);验证:
 curl http://localhost:8000/health     :: {"status":"ok"}
 ```
 
-环境变量说明:
+环境变量说明(服务端全部 env 可配 + 代码相对默认,**零硬编码部署路径**):
 
 | 变量 | 值 | 说明 |
 |---|---|---|
 | `COMPILE_SERVICE_REQUIRES_DLLS` | `1` | 走真实 MsbuildCompiler;不带此变量 = mock 后端(仅开发/CI,不当质量门) |
-| `REFS_DIR` | `compile_service\build\references` 绝对路径 | 金蝶 DLL 目录;为空 → 服务**启动即失败**(报"DLL 未到位") |
+| `REFS_DIR` | `%~dp0build\references`(代码相对默认 `compile_service\build\references`) | 金蝶 DLL 目录;为空 → 服务**启动即失败**(报"DLL 未到位") |
 | `TARGET_FRAMEWORK` | `v4.8` | 编译目标框架,需 Developer Pack;低于金蝶 DLL 框架会 MSB3274/3275(§10.4) |
-| `MSBUILD_PATH` | 可选 | 显式指定 msbuild;缺省自动探测:PATH 的 msbuild → `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe` 兜底 |
+| `MSBUILD_PATH` | 可选 | 显式指定 msbuild;缺省自动探测:PATH 的 msbuild → Framework 自带兜底;后端直接读该 env(不经 server 参数) |
+| `FRAMEWORK_MSBUILD_PATH` | 可选 | 覆盖 Framework 自带兜底路径(缺省 `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe`;系统盘非 C: 时设置) |
+| `COMPILE_ARTIFACT_DIR` | 可选 | 编译产物 DLL 留存目录(缺省 仓库根 `data\kingdee-compiled`,代码相对,不随启动目录漂移) |
 
-> 换端口(金蝶常占 8000):改 `--port 8088`,agent 侧 `COMPILE_SERVICE_URL` 同步(§9)。
+> **端口/监听地址(PORT/HOST)**:由 uvicorn 启动参数控制(`--host 0.0.0.0 --port 8000`),服务**不读** `PORT`/`HOST`
+> 环境变量;需要环境变量驱动就在 bat 里 `set PORT=8088` 后改 `--port %PORT%`。
+> 换端口(金蝶常占 8000):改 bat 的 `--port 8088`,agent 侧 `COMPILE_SERVICE_URL` 同步(§9)。
 
 ## 7. schtasks 计划任务保活
 
@@ -153,7 +172,7 @@ curl http://localhost:8000/health          :: {"status":"ok"}
 ::    {"project_name": "sample-bill", "code": "using System; using Kingdee.BOS.Core.Bill.PlugIn; using Kingdee.BOS.Core.DynamicForm.PlugIn.Args; using Kingdee.BOS.Core.Metadata; using Kingdee.BOS.Util; namespace Sample { public class BillSample : AbstractBillPlugIn { public override void OnLoad(EventArgs e) { base.OnLoad(e); } public override void AfterDoOperation(AfterDoOperationEventArgs e) { base.AfterDoOperation(e); } } }"}
 curl -X POST http://localhost:8000/compile -H "Content-Type: application/json" --data-binary @sample-bill.json
 :: 期望:{"success": true, "dll_path": "...\\data\\kingdee-compiled\\sample-bill\\Plugin.dll", "errors": [], ...}
-:: success=false 时看 errors 列表与 E:\uv.log(§10)
+:: success=false 时看 errors 列表与 仓库根\uv.log(§10)
 
 :: 3) 拉取 DLL 验证产物可下载
 curl -o Plugin.dll http://localhost:8000/dll/sample-bill
@@ -189,7 +208,7 @@ curl http://<windows-机IP>:8000/health    # {"status":"ok"}
 
 ### 10.1 服务起不来 / 编译 500
 
-先看日志:start_compile.bat 重定向到 **`E:\uv.log`**(手工前台跑时直接看控制台)。常见三类:
+先看日志:start_compile.bat 重定向到 **`仓库根\uv.log`**(手工前台跑时直接看控制台)。常见三类:
 
 1. **缺 Developer Pack**:msbuild 报找不到参考程序集/`TARGETFRAMEWORK` 相关 → 装 §4 DevPack。
 2. **references 缺 DLL**:启动即报"金蝶 BOS DLL 未提供,真实编译不可用" → 按 §5 拷贝。
@@ -197,8 +216,11 @@ curl http://<windows-机IP>:8000/health    # {"status":"ok"}
 
 ### 10.2 msbuild 找不到
 
-后端探测顺序:PATH 的 msbuild(VS 环境)→ `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe`(Framework 自带,一般必在)。
-若仍报找不到,`MSBUILD_PATH` 显式指到 msbuild.exe 并确认路径存在;编译日志 E:\uv.log 会打印 msbuild 调用。
+后端探测顺序:`MSBUILD_PATH` 环境变量(显式)→ PATH 的 msbuild(VS 环境)→
+`FRAMEWORK_MSBUILD_PATH`(覆盖兜底路径)→ `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe`
+(Framework 自带,一般必在)→ 退化 "msbuild"。
+若仍报找不到:确认安装的是 Developer Pack 而非仅 Runtime(§4);`MSBUILD_PATH` 显式指到 msbuild.exe 并确认路径存在;
+系统盘非 C: 时用 `FRAMEWORK_MSBUILD_PATH` 指向本机 Framework 目录;编译日志 仓库根\uv.log 会打印 msbuild 调用。
 
 ### 10.3 编译通过但缺类型/引用被跳过(warning MSB3274 / MSB3275)
 
@@ -216,12 +238,12 @@ curl http://<windows-机IP>:8000/health    # {"status":"ok"}
 ### 10.5 服务好了但 agent 仍报编译 BLOCKED
 
 - agent 侧 `COMPILE_SERVICE_URL` 是否指向本机(非 localhost);防火墙/网络是否可达(§9)。
-- 服务日志确认请求真的到达(E:\uv.log 有访问行)。
+- 服务日志确认请求真的到达(仓库根\uv.log 有访问行)。
 
 ## 11. 注意事项
 
 - **授权合规**:金蝶 DLL 仅限内部编译使用,确认授权范围,勿公开分发、勿提交仓库。
-- **日志轮转**:E:\uv.log 会持续增长,建议定期清理或按天改名(如用批处理 + schtasks 定时轮转)。
+- **日志轮转**:仓库根\uv.log 会持续增长,建议定期清理或按天改名(如用批处理 + schtasks 定时轮转)。
 - **references 增删 DLL 后需重启服务**(后端构造时一次性读取)。
 - **编译时间**:msbuild 首次冷启动较慢(超时 180s),预热后单次编译数秒级。
 - **agent 侧无需金蝶 DLL**:编译只发生在编译服务侧,agent 机器不需要安装 .NET/金蝶环境。

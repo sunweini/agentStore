@@ -319,3 +319,71 @@ def test_round_trip_unavailable_raises():
     client = _round_trip_client(DownBackend())
     with pytest.raises(CompileUnavailableError):
         client.compile(code="x", project_name="T")
+
+# --- 部署路径全配置化:env 覆盖 + 代码相对默认(零硬编码路径) ---
+from compile_service.backends.msbuild import default_msbuild_path, MsbuildCompiler, _DEFAULT_ARTIFACT_DIR
+
+def test_default_msbuild_path_msbuild_env_respected(monkeypatch, tmp_path):
+    """MSBUILD_PATH 环境变量最高优先(后端直接读 env,独立于 server.py 参数也可用),压过 PATH 探测。"""
+    p = tmp_path / "custom" / "MSBuild.exe"
+    p.parent.mkdir()
+    p.write_bytes(b"")
+    monkeypatch.setenv("MSBUILD_PATH", str(p))
+    monkeypatch.setenv("FRAMEWORK_MSBUILD_PATH", str(tmp_path / "nonexistent.exe"))
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/path/msbuild.exe")  # PATH 命中也不应覆盖 env
+    assert default_msbuild_path() == str(p)
+
+def test_default_msbuild_path_framework_env_override(monkeypatch, tmp_path):
+    """FRAMEWORK_MSBUILD_PATH 覆盖 Framework 兜底路径(缺省为硬编码 Windows 路径)。"""
+    p = tmp_path / "framework" / "MSBuild.exe"
+    p.parent.mkdir()
+    p.write_bytes(b"")
+    monkeypatch.delenv("MSBUILD_PATH", raising=False)
+    monkeypatch.setenv("FRAMEWORK_MSBUILD_PATH", str(p))
+    monkeypatch.setattr("shutil.which", lambda *a, **k: None)
+    assert default_msbuild_path() == str(p)
+
+def test_default_msbuild_path_framework_fallback_intact(monkeypatch):
+    """无 env 覆盖且 PATH 无 msbuild → 仍回退硬编码 Framework 路径(最后兜底,默认值未破坏)。"""
+    from compile_service.backends import msbuild as msb
+    monkeypatch.delenv("MSBUILD_PATH", raising=False)
+    monkeypatch.delenv("FRAMEWORK_MSBUILD_PATH", raising=False)
+    monkeypatch.setattr("shutil.which", lambda *a, **k: None)
+    # Linux 上无法真实创建 C:\... 路径,模拟其 exists(仅对该路径生效)
+    monkeypatch.setattr(msb.Path, "exists", lambda self: str(self) == msb._FRAMEWORK_MSBUILD)
+    assert default_msbuild_path() == msb._FRAMEWORK_MSBUILD
+
+def test_artifact_dir_default_code_relative():
+    """artifact_dir 缺省 = 代码相对 仓库根/data/kingdee-compiled(compile_service/.. 解析后),非 cwd 相对。"""
+    from compile_service.backends import msbuild as msb
+    mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
+    expected = Path(msb.__file__).resolve().parent.parent.parent / "data" / "kingdee-compiled"
+    assert mc.artifact_dir == expected
+    assert str(mc.artifact_dir).endswith("data/kingdee-compiled")
+
+def test_backend_from_env_default_refs_dir_code_relative(monkeypatch):
+    """REFS_DIR 缺省 = 代码相对 compile_service/build/references(非容器路径 /app/references)。"""
+    from compile_service.server import _backend_from_env, _DEFAULT_REFS_DIR
+    assert str(_DEFAULT_REFS_DIR).endswith("compile_service/build/references")
+    dll = _DEFAULT_REFS_DIR / "tmp-kingdee-refs-test.dll"
+    dll.write_bytes(b"x")
+    try:
+        monkeypatch.setenv("COMPILE_SERVICE_REQUIRES_DLLS", "1")
+        monkeypatch.delenv("REFS_DIR", raising=False)
+        backend = _backend_from_env()
+        assert isinstance(backend, MsbuildCompiler)
+        assert "tmp-kingdee-refs-test.dll" in [p.name for p in backend.reference_dlls]
+        # 未配 COMPILE_ARTIFACT_DIR → artifact_dir 走代码相对默认
+        assert backend.artifact_dir == _DEFAULT_ARTIFACT_DIR
+    finally:
+        dll.unlink(missing_ok=True)
+
+def test_backend_from_env_artifact_dir_env(monkeypatch, tmp_path):
+    """COMPILE_ARTIFACT_DIR 环境变量 → 透传给 MsbuildCompiler.artifact_dir(留存目录可配)。"""
+    monkeypatch.setenv("COMPILE_SERVICE_REQUIRES_DLLS", "1")
+    monkeypatch.setenv("REFS_DIR", str(tmp_path))
+    (tmp_path / "Kingdee.BOS.dll").write_bytes(b"x")
+    monkeypatch.setenv("COMPILE_ARTIFACT_DIR", str(tmp_path / "artifacts"))
+    backend = _backend_from_env()
+    assert isinstance(backend, MsbuildCompiler)
+    assert backend.artifact_dir == (tmp_path / "artifacts")

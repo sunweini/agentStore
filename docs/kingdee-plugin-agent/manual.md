@@ -35,7 +35,7 @@ COMPILE_SERVICE_URL=http://localhost:8000
 KINGDEE_API_KEY=sk-demo-key
 ```
 
-可选:`COMPILE_SERVICE_REQUIRES_DLLS=1` + `REFS_DIR` + `TARGET_FRAMEWORK=v4.8`(真实 msbuild 后端用 —— **Windows 部署必配**,见 1.3 与 [windows-deployment.md](windows-deployment.md))。
+可选:`COMPILE_SERVICE_REQUIRES_DLLS=1` + `REFS_DIR` + `TARGET_FRAMEWORK=v4.8`(真实 msbuild 后端用 —— **Windows 部署必配**,见 1.3 与 [windows-deployment.md](windows-deployment.md));再可选 `MSBUILD_PATH` / `FRAMEWORK_MSBUILD_PATH` / `COMPILE_ARTIFACT_DIR`(缺省全部代码相对,零硬编码部署路径)。
 
 ### 1.2 灌入经验库种子(首次必做)
 
@@ -87,12 +87,13 @@ python -m agents.kingdee_plugin_agent.tools.ingest --dir <目录> --collection g
 **推荐部署方式:Windows 原生部署(E2E 门已验证)** —— 在金蝶服务器本机或同网段 Windows 机器上直接跑编译服务,完整步骤见 [windows-deployment.md](windows-deployment.md)(.NET 4.8 Developer Pack + 金蝶 WebSite\bin DLL + start_compile.bat + schtasks 保活):
 
 ```bat
-rem start_compile.bat(内容,详见 windows-deployment.md)
+rem start_compile.bat(内容,详见 windows-deployment.md;%~dp0 = 脚本所在目录,仓库换盘符无需改脚本)
 set COMPILE_SERVICE_REQUIRES_DLLS=1
-set REFS_DIR=E:\kingdee\compile_service\build\references
+set REFS_DIR=%~dp0build\references
 set TARGET_FRAMEWORK=v4.8
-cd /d E:\kingdee\compile_service
-uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 8000 >> E:\uv.log 2>&1
+rem 可选:MSBUILD_PATH(显式 msbuild)/FRAMEWORK_MSBUILD_PATH(覆盖 Framework 兜底路径)/COMPILE_ARTIFACT_DIR(DLL 留存目录)
+cd /d %~dp0..
+uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 8000 >> "%~dp0..\uv.log" 2>&1
 ```
 
 ```bash
@@ -224,7 +225,7 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 → 金蝶 WebAPI 常占 8000 端口。换端口:`start_compile.bat` 里 `--port` 改别的端口(如 8088,先确认防火墙放行),agent 侧 `.env` 的 `COMPILE_SERVICE_URL` 同步改为 `http://<windows-机>:8088`。
 
 **Q11: 编译返回 500/服务起不来?**
-→ Windows 部署下服务日志写在 `E:\uv.log`(start_compile.bat 重定向),先看日志尾部找 traceback;常见三类:① 缺 .NET 4.8 Developer Pack(msbuild 报找不到参考程序集)→ 装 DevPack;② references 目录缺 DLL(启动即报"DLL 未到位")→ 从金蝶服务器 WebSite\bin 拷贝;③ 端口被占 → 换端口(见 Q10)。
+→ Windows 部署下服务日志写在 `仓库根\uv.log`(start_compile.bat 以 `%~dp0..` 相对重定向,不依赖盘符),先看日志尾部找 traceback;常见三类:① 缺 .NET 4.8 Developer Pack(msbuild 报找不到参考程序集)→ 装 DevPack;② references 目录缺 DLL(启动即报"DLL 未到位")→ 从金蝶服务器 WebSite\bin 拷贝(或 `KINGDEE_BIN_DIR` env + fetch_kingdee_dlls.ps1,见 windows-deployment.md §5);③ 端口被占 → 换端口(见 Q10)。
 
 **Q12: 编译报 warning MSB3274/MSB3275(引用被跳过)?**
 → 金蝶 BOS DLL 是 .NET 4.8,编译目标框架低于引用程序集时引用被**静默跳过**(不报 error,编出来缺类型)。把 `TARGET_FRAMEWORK` 提到 `v4.8`(start_compile.bat 已默认设置;改了要重启服务)。经验库有对应种子(MSB3274/MSB3275)。
