@@ -463,7 +463,7 @@ def _ingest_md_file(path: Path, collection: str, root: Path, data_dir: Path | No
 
 
 def ingest_dir(dir: Path, collection: str, data_dir: Path | None = None) -> int:
-    """目录批量导入:递归 *.md,逐文件处理;单文件失败 log + 继续,
+    """目录批量导入:递归 *.md + *.cs(代码文件,代码感知分块),逐文件处理;单文件失败 log + 继续,
     全部失败才抛 IngestError(不静默全跳过)。返回总新增 chunk 数。
 
     幂等为**去重式**:文件未变重跑新增 0;编辑已灌入的文件后重跑会新增
@@ -471,7 +471,7 @@ def ingest_dir(dir: Path, collection: str, data_dir: Path | None = None) -> int:
     """
     if collection not in RAG_COLLECTIONS:
         raise IngestError(f"未知库: {collection}(可选 {', '.join(RAG_COLLECTIONS)})")
-    files = sorted(Path(dir).rglob("*.md"))
+    files = sorted([f for f in Path(dir).rglob("*") if f.suffix.lower() in (".md", ".cs") and f.is_file()])
     if not files:
         raise IngestError(f"目录无 markdown 文件: {dir}")
     total, failed = 0, []
@@ -506,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--url", action="append", default=[], metavar="URL",
                     help="要导入的页面 URL(可重复,逐条失败继续)")
     ap.add_argument("--dir", type=Path, metavar="PATH",
-                    help="批量导入目录下所有 *.md(相对路径作 source)")
+                    help="批量导入目录下所有 *.md/*.cs(相对路径作 source)")
     ap.add_argument("--seed-internal", action="store_true",
                     help="导入内部 skill 文档(skills/**/*.md,SKILL.md + references)到 guide")
     ap.add_argument("--delete-source", metavar="SOURCE",
