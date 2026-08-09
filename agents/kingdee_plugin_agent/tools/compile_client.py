@@ -14,8 +14,9 @@ from compile_service.models import CompileError, CompileResult, CompileUnavailab
 
 
 class CompileClient:
-    #: 单轮编译 ≤2min(设计 §6.6),timeout 按上限定;10s 会让真实编译超时误判
-    def __init__(self, base_url: str, timeout: float = 120.0,
+    #: 后端 msbuild 超时 300s(Roslyn 冷启动 + 30 引用),客户端须 > 后端,否则首次编译
+    #: 120-300s 窗口会被误报"编译服务不可用(超时)"(httpx.TimeoutException → BLOCKED)
+    def __init__(self, base_url: str, timeout: float = 320.0,
                  artifact_dir: Path = Path("data/kingdee-compiled")):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
