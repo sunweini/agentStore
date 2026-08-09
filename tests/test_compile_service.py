@@ -359,12 +359,12 @@ def test_artifact_dir_default_code_relative():
     mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
     expected = Path(msb.__file__).resolve().parent.parent.parent / "data" / "kingdee-compiled"
     assert mc.artifact_dir == expected
-    assert str(mc.artifact_dir).endswith("data/kingdee-compiled")
+    assert str(mc.artifact_dir).replace("\\", "/").endswith("data/kingdee-compiled")
 
 def test_backend_from_env_default_refs_dir_code_relative(monkeypatch):
     """REFS_DIR 缺省 = 代码相对 compile_service/build/references(非容器路径 /app/references)。"""
     from compile_service.server import _backend_from_env, _DEFAULT_REFS_DIR
-    assert str(_DEFAULT_REFS_DIR).endswith("compile_service/build/references")
+    assert str(_DEFAULT_REFS_DIR).replace("\\", "/").endswith("compile_service/build/references")
     dll = _DEFAULT_REFS_DIR / "tmp-kingdee-refs-test.dll"
     dll.write_bytes(b"x")
     try:
