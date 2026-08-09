@@ -235,7 +235,21 @@ curl http://<windows-机IP>:8000/health    # {"status":"ok"}
 - 基类/事件参数命名空间:bill 的 `AfterDoOperationEventArgs` 在 `Kingdee.BOS.Core.DynamicForm.PlugIn.Args`;
   service 基类 `AbstractOperationServicePlugIn` 在 `Kingdee.BOS.Core.DynamicForm.PlugIn`;模板已正确(E2E 反射验证)。
 
-### 10.5 服务好了但 agent 仍报编译 BLOCKED
+### 10.5 编译报 C# 6+ 语法错误($ 插值等)/CscToolPath 配置/编译超时
+
+真实插件代码常用 **C# 6+ 语法**(如字符串内插 `$"..."`),而 **Framework 自带 csc 只支持 C# 5**
+—— 会报 **CS1056「意外的字符$」**。修复:配置 **`CSC_TOOL_PATH`** 环境变量指向 Roslyn csc 目录
+(如 NuGet 还原的 `packages\Microsoft.Net.Compilers\<版本>\tools`),编译服务自动在 csproj 写入
+`CscToolPath`/`CscToolExe=csc.exe` 调用 Roslyn;改后**重启服务**。
+
+- **报 MSB4067「无法识别元素 <CscToolPath>」**:该属性被写成了 Project 直接子元素 ——
+  CscToolPath/CscToolExe 必须包在 `<PropertyGroup>` 内(编译服务已正确包裹;手改 csproj 时注意)。
+- **编译超时(服务日志 subprocess TimeoutExpired)**:Roslyn 冷启动 + 引用 DLL 多时首次编译
+  可能超 180s —— 后端超时已放宽到 **300s**,仍超时按实际调大。
+  agent 侧客户端超时默认 120s,首编超 120s 会被 agent 误判「编译服务不可用(超时)」——
+  预热后单次编译数秒级,可先重试观察,持续误判则同步调大 agent 侧超时。
+
+### 10.6 服务好了但 agent 仍报编译 BLOCKED
 
 - agent 侧 `COMPILE_SERVICE_URL` 是否指向本机(非 localhost);防火墙/网络是否可达(§9)。
 - 服务日志确认请求真的到达(仓库根\uv.log 有访问行)。
@@ -245,5 +259,5 @@ curl http://<windows-机IP>:8000/health    # {"status":"ok"}
 - **授权合规**:金蝶 DLL 仅限内部编译使用,确认授权范围,勿公开分发、勿提交仓库。
 - **日志轮转**:仓库根\uv.log 会持续增长,建议定期清理或按天改名(如用批处理 + schtasks 定时轮转)。
 - **references 增删 DLL 后需重启服务**(后端构造时一次性读取)。
-- **编译时间**:msbuild 首次冷启动较慢(超时 180s),预热后单次编译数秒级。
+- **编译时间**:msbuild 首次冷启动较慢(后端超时已放宽 300s,见 §10.5),预热后单次编译数秒级。
 - **agent 侧无需金蝶 DLL**:编译只发生在编译服务侧,agent 机器不需要安装 .NET/金蝶环境。

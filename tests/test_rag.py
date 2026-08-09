@@ -153,7 +153,7 @@ def test_seed_load_idempotent(tmp_path):
     client = RagClient(data_dir=tmp_path)
     n1 = load_seed_data(client)
     n2 = load_seed_data(client)
-    assert n1 >= 10 and n2 == 0  # 10 条(含签名类 CS0506/CS0115 与真实环境 MSB3274/3275、CS0246-EventArgs 种子);二次灌入 0(幂等)
+    assert n1 >= 10 and n2 == 0  # 13 条(含签名类 CS0506/CS0115、真实环境 MSB3274/3275、CS0246-EventArgs、Roslyn 相关 CS1056/MSB4067/TimeoutExpired 种子);二次灌入 0(幂等)
     # 种子文本与 ExperienceStore.propose 格式统一(设计 §6.2:种子即 w7 格式样本)
     hits = client.search("experience", "CS0246", k=5, filter={"signature": "CS0246|"})
     assert hits[0]["text"] == "[CS0246] 命名空间或类型找不到(缺 Kingdee.BOS 引用) 修复:csproj 加 Reference 到 Kingdee.BOS.dll"

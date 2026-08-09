@@ -5,6 +5,37 @@
 
 ---
 
+## v1.18.0 — 2026-08-10(kingdee-plugin-agent:Windows 编译经验沉淀 —— Roslyn/编译环境方法论)
+
+### 新增功能
+
+- **Roslyn 编译器支持(代码已随 1bfcf8f 落地,本版补知识沉淀与文档)**:`CSC_TOOL_PATH`
+  环境变量指向 Roslyn csc 目录 → 编译服务在 csproj 写入 `CscToolPath`/`CscToolExe=csc.exe`
+  —— Framework 自带 csc 仅支持 C# 5,真实插件代码的字符串内插等 C# 6+ 语法必配;
+  编译超时 180s → **300s**(Roslyn 冷启动 + ~30 引用 DLL 首次解析慢);
+  csproj 补 System.Configuration 引用。E2E:完整真实插件项目(5 文件,含共享类)
+  编译通过 + DLL 产出。
+
+### 经验沉淀
+
+- **种子 compile_errors.json +3 条(10 → 13)**:CS1056(意外的字符$,Framework csc
+  不认 C# 6+ 插值语法 → 配置 Roslyn CSC_TOOL_PATH)、MSB4067(CscToolPath 写成
+  Project 直接子元素 → 必须包 PropertyGroup)、TimeoutExpired(首次编译冷启动慢 →
+  后端编译超时放宽 ≥300s,仍超时按实际调大);MSB3274/3275 既有条目已含
+  TARGET_FRAMEWORK 修法,无重复。
+- **compile-fixer SKILL.md 新增「编译环境要点」节**(方法论层,不写具体错误码):
+  无 VS 环境 = Framework MSBuild + 旧式 csproj;C# 6+ 语法需要 Roslyn
+  (CSC_TOOL_PATH);目标框架必须 ≥ 金蝶 BOS DLL 框架(否则引用被静默跳过);
+  首次编译冷启动慢(超时放宽 ≥300s);csproj 属性必须包 `<PropertyGroup>`。
+- **windows-deployment.md 故障排查新增 §10.5**(CS1056 → 配置 CSC_TOOL_PATH;
+  MSB4067 → PropertyGroup;编译超时 → 后端 300s + agent 侧 120s 误判提示),
+  原 §10.5 → §10.6;§11 注意事项编译时间同步 300s。
+- **manual.md**:FAQ 新增 Q13(CS1056 → CSC_TOOL_PATH)/ Q14(编译超时 → 300s +
+  agent 侧超时),Q9 后端超时 180s → 300s,§1.2 种子输出「新增 10 条」→「新增 14 条」。
+- tests seed 断言注释同步(10 → 13 条,断言 n1>=10 不变仍通过)。
+
+---
+
 ## v1.17.0 — 2026-08-09(kingdee-plugin-agent:编译服务多文件编译支持)
 
 ### 新增功能

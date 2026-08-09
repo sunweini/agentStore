@@ -8,5 +8,8 @@
   {"code": "CS0115", "file_pattern": "", "message": "找不到合适的方法可重写(override 的方法不在基类)", "fix": "确认事件名与签名与基类完全一致;签名错误是级联源头,先修签名再处理后续错误", "source": "seed"},
   {"code": "MSB3274", "file_pattern": "", "message": "无法解析引用(目标框架低于引用程序集,引用被跳过)", "fix": "TARGET_FRAMEWORK 提到引用程序集的框架版本(金蝶 BOS DLL 为 v4.8);按 warning MSB3274/3275 判定", "source": "seed"},
   {"code": "MSB3275", "file_pattern": "", "message": "主引用引用的程序集与目标框架不兼容(传递引用被跳过)", "fix": "同 MSB3274:提升 TARGET_FRAMEWORK 至 v4.8", "source": "seed"},
-  {"code": "CS0246", "file_pattern": "EventArgs", "message": "EventArgs 找不到(缺 using System)", "fix": "模板已补 using System;若 LLM 生成代码缺 System 命名空间引用,补 using System;", "source": "seed"}
+  {"code": "CS0246", "file_pattern": "EventArgs", "message": "EventArgs 找不到(缺 using System)", "fix": "模板已补 using System;若 LLM 生成代码缺 System 命名空间引用,补 using System;", "source": "seed"},
+  {"code": "CS1056", "file_pattern": "", "message": "意外的字符$ / 意外的字符'@'(字符串插值等 C# 6+ 语法;Framework csc 仅支持 C# 5)", "fix": "配置 Roslyn 编译器:CSC_TOOL_PATH 指向 Roslyn csc 目录(编译服务在 csproj 写入 CscToolPath/CscToolExe=csc.exe),Framework csc 无法编译 C# 6+", "source": "seed"},
+  {"code": "MSB4067", "file_pattern": "", "message": "无法识别元素 <CscToolPath>(CscToolPath 写成 Project 直接子元素,位置错误)", "fix": "CscToolPath/CscToolExe 必须包在 <PropertyGroup> 内再写入 csproj", "source": "seed"},
+  {"code": "TimeoutExpired", "file_pattern": "", "message": "编译超时(Roslyn 冷启动 + 引用 DLL 多时首次解析慢,首编可能超 180s)", "fix": "编译服务后端编译超时放宽到 ≥300s,仍超时按实际调大", "source": "seed"}
 ]

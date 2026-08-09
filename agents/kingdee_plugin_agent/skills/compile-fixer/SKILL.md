@@ -17,6 +17,28 @@ references/errors.md(纯方法论;具体错误映射不在 skill 内,走经验�
   experience 附注,格式 "[错误码] 错误信息 修复:修法")
 - 经验库:按错误码+错误信息语义检索的修复建议
 
+## 编译环境要点
+
+先判断"错误来自语言还是环境" —— 环境层症状常伪装成语法/引用错误,且修法不在代码:
+
+- **无 VS 环境 = Framework MSBuild + 旧式 csproj**:Windows 编译服务用 ToolsVersion
+  4.0 旧式 csproj + .NET Framework 自带 MSBuild,配 Developer Pack 参考程序集即可
+  编译,不需要 Visual Studio。分析环境能力时按"Framework 工具链只有 C# 5"为前提,
+  不要假设 VS 环境。
+- **C# 6+ 语法必须 Roslyn**:真实插件代码常用字符串内插等 C# 6+ 特性,Framework
+  自带编译器只支持 C# 5 —— 代码语法本身没错,是编译器不认。检查方向:写法与模板
+  一致仍报语法错 → 先查编译器版本与 Roslyn(CSC_TOOL_PATH)是否配置,别在代码上
+  空改。
+- **目标框架必须 ≥ 金蝶 BOS DLL 的框架**:BOS 程序集按 .NET 4.8 编译,编译目标
+  低于引用程序集框架时引用被**静默跳过** —— 编译"通过"但缺类型,症状出现在后续
+  错误/运行期而不在编译输出。检查方向:目标框架(TARGET_FRAMEWORK)与 references
+  DLL 框架版本对齐,出现"编过但缺类型"优先怀疑这里。
+- **首次编译冷启动慢**:Roslyn 冷启动 + 引用 DLL 多时首编明显变慢,超时上限要给足
+  (≥300s 量级);编译超时不等于死锁/循环,先看服务日志确认是"慢"还是"卡"。
+- **csproj 结构敏感**:MSBuild 对元素位置严格 —— 属性(如 CscToolPath)必须放
+  `<PropertyGroup>` 内,不能作 Project 直接子元素。手改/生成 csproj 后按结构校验,
+  别只看标签名对不对。
+
 ## 修复流程(每轮)
 
 1. **错误分类**:逐条把错误归入 `references/errors.md` 的分析维度

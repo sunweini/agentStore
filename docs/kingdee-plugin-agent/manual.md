@@ -41,7 +41,7 @@ KINGDEE_API_KEY=sk-demo-key
 
 ```bash
 python -m agents.kingdee_plugin_agent.seed.seed_load
-# 输出:种子灌入完成:新增 10 条(幂等:重复执行新增 0 条)
+# 输出:种子灌入完成:新增 13 条(幂等:重复执行新增 0 条)
 # 可选 --data-dir <dir> 指定数据目录(默认 data/kingdee-rag,与 RAG 客户端一致)
 ```
 
@@ -219,7 +219,7 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 → 需求在确认时冻结(`spec_version=1`),确认后任何输入都不会再改动需求规格 —— 中途问题(ask_user)的回答只作为反馈记录;确认后 answers 端点只接受执行中问题的恢复(其余 409"需求已确认并冻结")。要改需求请**开一个新任务**重跑(设计 §8 需求版本冻结)。
 
 **Q9: 任务跑了很久没结束?**
-→ 全流程时间预算 30min 图级总闸:超时且仍有未交付子任务 → 自动收尾失败(`fail:时间预算耗尽`),剩余子任务标记 failed。单轮编译超时(客户端 httpx 120s / msbuild 后端 180s)、单任务编译阶段 ≤15min(5 轮上限,天然满足)由编译环节内部覆盖。真超时通常是编译服务不可用/LLM 故障,先查 §5 Q2。
+→ 全流程时间预算 30min 图级总闸:超时且仍有未交付子任务 → 自动收尾失败(`fail:时间预算耗尽`),剩余子任务标记 failed。单轮编译超时(客户端 httpx 120s / msbuild 后端 300s,后端超时已放宽应对 Roslyn 冷启动,见 Q14)、单任务编译阶段 ≤15min(5 轮上限,天然满足)由编译环节内部覆盖。真超时通常是编译服务不可用/LLM 故障,先查 §5 Q2。
 
 **Q10: 编译服务端口被金蝶占用了?**
 → 金蝶 WebAPI 常占 8000 端口。换端口:`start_compile.bat` 里 `--port` 改别的端口(如 8088,先确认防火墙放行),agent 侧 `.env` 的 `COMPILE_SERVICE_URL` 同步改为 `http://<windows-机>:8088`。
@@ -229,6 +229,12 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 
 **Q12: 编译报 warning MSB3274/MSB3275(引用被跳过)?**
 → 金蝶 BOS DLL 是 .NET 4.8,编译目标框架低于引用程序集时引用被**静默跳过**(不报 error,编出来缺类型)。把 `TARGET_FRAMEWORK` 提到 `v4.8`(start_compile.bat 已默认设置;改了要重启服务)。经验库有对应种子(MSB3274/MSB3275)。
+
+**Q13: 编译报 CS1056「意外的字符$」?**
+→ Framework 自带 csc 只支持 C# 5,真实插件代码的字符串内插 `$"..."` 等 C# 6+ 语法必须用 Roslyn 编译器:在编译服务配置 `CSC_TOOL_PATH` 指向 Roslyn csc 目录后**重启服务**(详见 windows-deployment.md §10.5)。若报 MSB4067「无法识别元素 <CscToolPath>」,检查 CscToolPath/CscToolExe 是否包在 `<PropertyGroup>` 内。
+
+**Q14: 编译超时 / agent 报「编译服务不可用(超时)」?**
+→ Roslyn 冷启动 + 引用 DLL 多时首次编译慢(可超 180s),后端超时已放宽到 **300s**,仍超时按实际调大(见 windows-deployment.md §10.5)。agent 侧客户端超时默认 120s,首编超过会误判服务不可用 —— 先重试(预热后单次编译数秒级),持续误判再同步调大 agent 侧超时。
 
 ## 6. 交付物解读(zip 内容)
 
