@@ -134,6 +134,56 @@ def test_html_pre_keeps_indentation_and_structure():
     assert "前置说明。" in text and "后置说明。" in text
 
 
+def test_html_paragraph_boundaries_preserved_for_chunking():
+    """minified HTML 两段 <p>(块标签无空行) → 段落空行保留,分块出现段落边界。"""
+    html = "<html><body><p>第一段内容。</p><p>第二段内容。</p></body></html>"
+    text = html_to_text(html)
+    assert text == "第一段内容。\n\n\n第二段内容。" or "第一段内容。" in text.split("\n\n")[0]
+    chunks = code_aware_chunk(text, max_chars=7)
+    assert chunks == ["第一段内容。", "第二段内容。"]
+
+
+def test_unclosed_pre_does_not_poison_following_text():
+    """未闭合 <pre> 后接正常段落:遇到后续块级标签退出 pre 模式,后续文本正常清洗。"""
+    html = (
+        "<html><body><pre>open code block\nno closing fence\n"
+        "<p>后续正常段落,含  多余   空格。</p><p>另一段。</p></body></html>"
+    )
+    text = html_to_text(html)
+    assert "open code block" in text  # pre 内容原样保留
+    assert "后续正常段落,含 多余 空格。" in text  # 后续文本走正常清洗(空白折叠)
+    assert "含  多余   空格" not in text
+    assert "另一段。" in text
+
+
+def test_boilerplate_dynamic_lines_removed():
+    """动态/交互行(裸数字计数、赞/删除/收起、编辑于时间戳)整行剔除。"""
+    html = (
+        "<html><body><p>正文第一段。</p>"
+        "<p>4,457</p><p>赞</p><p>1</p><p>删除</p><p>收起</p>"
+        "<p>编辑于2025年09月26日 15:26:16</p>"
+        "<p>1,042次浏览</p><p>37人赞赏了该文章</p>"
+        "<p>正文第二段。</p></body></html>"
+    )
+    text = html_to_text(html)
+    for noise in ("4,457", "赞", "1", "删除", "收起", "编辑于", "次浏览", "赞赏"):
+        assert noise not in text, f"动态噪音行未剔除: {noise}"
+    assert "正文第一段。" in text and "正文第二段。" in text
+
+
+def test_issue_prefix_stripped_from_body_lines():
+    """站点重发布期数前缀【第N期】从正文与标题剥离(重发布不改变正文文本)。"""
+    html = (
+        "<html><head><title>【第36期】 金蝶云·星空-BOS平台问答精选</title></head>"
+        "<body><h1>【第36期】 金蝶云·星空-BOS平台问答精选</h1>"
+        "<p>【第36期】</p><p>正文内容。</p></body></html>"
+    )
+    text = html_to_text(html)
+    assert "【第36期】" not in text
+    assert "金蝶云·星空-BOS平台问答精选" in text
+    assert normalize_title("http://x/1", html) == "金蝶云·星空-BOS平台问答精选"
+
+
 def test_clean_text_plain_text():
     """clean_text 面向纯文本:折叠空白 + 剔样板行(注意:HTML 路径用
     html_to_text,不再过 clean_text,否则代码缩进被折叠)。"""

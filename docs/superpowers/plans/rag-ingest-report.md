@@ -9,9 +9,11 @@
 
 ```
 URL ──► fetch_html(httpx,30s 超时,浏览器 UA)──► html_to_text(剔除
-        script/style/nav/header/footer,块级标签转段落换行;pre 感知清洗:
-        代码行原样保留缩进,非代码行折叠空白 + 剔样板行[分享/收藏/评论/
-        翻页/导航/浏览计数类])
+        script/style/nav/header/footer;块级标签转段落换行(段落空行保留);
+        pre 感知清洗:代码行原样保留缩进,非代码行折叠空白 + 剔样板行
+        [分享/收藏/评论/翻页/导航/浏览计数/裸数字行/赞删除收起交互行/
+        编辑于时间戳] + 【第N期】重发布前缀剥离;未闭合 pre 遇后续块级
+        标签即退出)
                                              └─► code_aware_chunk(1500)
                                              └─► RagClient.add_documents
                                                    metadata={source,title,collection}
@@ -36,12 +38,15 @@ URL ──► fetch_html(httpx,30s 超时,浏览器 UA)──► html_to_text(�
   --url <URL> [--url ...] | --dir <目录> | --seed-internal | --delete-source <source>
   --collection api_ref|guide|experience [--title X] [--data-dir <dir>]`
 
-## 2. 灌入结果(2026-08-09 实跑,data/kingdee-rag,gitignored;重跑新增 0)
+## 2. 灌入结果(2026-08-09 终态,data/kingdee-rag,gitignored;重跑新增 0)
 
-### guide(71 chunks / 27 源)
+**终态时序纪律**:最后一次重灌必须在**全部代码/文档修改完成后**执行,之后不再
+改动被灌入文件(skills/**/*.md),重跑验证 +0 才有意义(详见 §8.1)。
 
-内部 skill(51 chunks / 21 源;knowledge-steward 的维护文档因本报告同期编辑,
-最终以编辑后内容灌入):
+### guide(72 chunks / 27 源)
+
+内部 skill(53 chunks / 21 源;knowledge-steward 的维护文档以全部修订后的
+最终内容灌入):
 
 | 源 | chunks |
 |---|---|
@@ -49,7 +54,7 @@ URL ──► fetch_html(httpx,30s 超时,浏览器 UA)──► html_to_text(�
 | code-reviewer/SKILL.md + references/{bill,list,service}.md | 3+1+1+1 |
 | compile-fixer/SKILL.md + references/errors.md | 2+2 |
 | design-builder/SKILL.md + references/{bill,list,service}.md | 4+1+1+1 |
-| knowledge-steward/SKILL.md + references/{distillation,maintenance}.md | 4+11+10 |
+| knowledge-steward/SKILL.md + references/{distillation,maintenance}.md | 4+11+12 |
 | requirement-clarify/SKILL.md + {bill,list,service}.md | 1+1+1+1 |
 
 金蝶官方(20 chunks / 6 源):
@@ -72,6 +77,10 @@ URL ──► fetch_html(httpx,30s 超时,浏览器 UA)──► html_to_text(�
 | topics/5 | WebAPI 系统集成主题 | 1 |
 
 9 个官方 URL 全部成功,0 失败。模板类 `templates/*.cs` 未入库(代码模板由 w3 直接使用)。
+
+**活页漂移**:BOS FAQ 精选(685345938776315392)是人工持续策展活页,正文随编辑
+在源侧变化(实测相邻两次抓取 0~3 chunk 差异)—— 非管线缺陷,刷新走
+`--delete-source` + 重灌;其余 8 页 + 内部文档重跑稳定 +0。
 
 ## 3. 检索冒烟验证(实跑)
 
@@ -97,14 +106,15 @@ URL ──► fetch_html(httpx,30s 超时,浏览器 UA)──► html_to_text(�
 
 ## 5. 测试
 
-全套 `pytest tests/ -q`:**237 passed**(212 基线 + 25 新,2 warnings)。新测试覆盖:
+全套 `pytest tests/ -q`:**241 passed**(212 基线 + 29 新,2 warnings)。新测试覆盖:
 围栏跨段落整体保留 / 超长围栏不切分 / 未闭合围栏保留 / 长段落句末切分无内容
-丢失、HTML 噪音(script/nav/分享收藏)剔除 + **&lt;pre&gt; 缩进保留**、
-ingest_dir tmp 目录入库可检索 + frontmatter 剔除 + 去重幂等、**编辑后重跑重复
-→ delete_source 删旧重灌干净**、ingest_url mock HTTP 入库 + HTTP 错误明确消息、
-**fetch_html 真实异常映射(超时/HTTP 状态/网络错误 → IngestError)**、
-CLI --dir 可运行 / 单 URL 失败退出 1 / 多 URL 部分失败继续 / --delete-source /
-无参数退出 2。
+丢失、HTML 噪音(script/nav/分享收藏)剔除 + **&lt;pre&gt; 缩进保留 + 未闭合
+pre 不毒化后续文本 + 段落空行保留(分块段落边界)+ 动态行(裸数字/赞删除收起/
+编辑于)剔除 + 【第N期】前缀剥离**、ingest_dir tmp 目录入库可检索 +
+frontmatter 剔除 + 去重幂等、**编辑后重跑重复 → delete_source 删旧重灌干净**、
+ingest_url mock HTTP 入库 + HTTP 错误明确消息、**fetch_html 真实异常映射
+(超时/HTTP 状态/网络错误 → IngestError)**、CLI --dir 可运行 / 单 URL 失败
+退出 1 / 多 URL 部分失败继续 / --delete-source / 无参数退出 2。
 
 ## 6. 关注点(concerns)
 
@@ -167,3 +177,79 @@ Review 发现 1 Important + 3 Minor,已全部修复:
 - guide 71 chunks / 27 源(内部 51 + 官方 20);api_ref 4 chunks / 3 源;
   experience 10(seed);全部来源重跑 +0;冒烟检索通过(guide"插件开发"含内部
   skill 命中,api_ref"BusinessDataServiceHelper"首位命中开发笔记)。
+- 注:此后的 §8 re-review 又修正了幂等时序与动态格式覆盖,终态计数以 §8.4 为准。
+
+## 8. 修复记录(re-review 第二轮,2026-08-09)
+
+### 8.1 [F1a] 重灌未在最终文档状态后执行,"+0 重跑"声明在 committed tree 上不成立
+
+- **问题**:上一轮先灌后改 —— knowledge-steward 的 SKILL.md/maintenance.md
+  在重灌之后又被修订,committed tree 上重跑 --seed-internal 会 +4 新旧并存。
+- **修复**:确立**终态时序纪律** —— 最后一次 drop data/kingdee-rag + 重灌
+  三集合必须在**全部代码/文档修改完成后**执行,之后不再改动被灌入文件
+  (skills/**/*.md),再重跑验证 +0。本轮按此顺序执行并记录:
+  1. ingest.py 全部修复 + tests 新增(先改代码);
+  2. SKILL.md/maintenance.md 幂等声明最终修订(改文档);
+  3. `pytest tests/ -q` 241 全绿(先测);
+  4. `rm -rf data/kingdee-rag` + seed_load(10)+ --seed-internal(53)+
+     官方 9 URL(guide 19 + api_ref 4)→ guide 72 / api_ref 4(终态重灌);
+  5. 重跑验证:内部 +0、guide 官方页 +0、api_ref 官方页 +0(终态验证);
+  6. 此后不再改动 skills/**/*.md(F4 数据卫生)。
+
+### 8.2 [F1b] 官方动态格式覆盖不全
+
+- **问题**:裸数字浏览量行("4,457")、赞/删除/收起交互行、编辑于时间戳、
+  重发布期数前缀【第N期】未被覆盖,页面文本不稳定。
+- **修复**:
+  - `_BOILERPLATE_RE` 扩展:`[\d,]+(?:\.\d+)?万?`(裸数字/逗号数字行)、
+    `赞|删除|收起|取消|更多`(交互按钮行)、`编辑于/发布于` 时间戳;
+  - 新增 `_ISSUE_PREFIX_RE`(【第N期】):正文行与 &lt;title&gt; 标题均剥离,
+    重发布仅换期数时正文文本保持稳定;
+  - **验证**:9 个官方 URL 双次抓取 diff 全部稳定(ALL STABLE);
+  - **结论记录**:BOS FAQ 精选页(685345938776315392)为人工持续策展**活页**,
+    正文在源侧随时间变化(相邻抓取实测 0~3 chunk 差异),重跑偶发 +1~3 属源侧
+    内容更新而非管线缺陷 —— 刷新该页走 `--delete-source` + 重灌,其余 8 页
+    稳定 +0。同类页面(标题带"精选/问答"的策展合集)导入前需注意此特性。
+  - 顺带修正 `_TITLE_SUFFIX_RE`:`·` 与任意 `-`/`|` 不能作为截断分隔符
+    ("金蝶云·星空-BOS平台" 是合法标题),改为仅剥离已知站点名后缀
+    (金蝶开发者社区/金蝶云社区官网/金蝶云社区/金蝶社区/开发者社区)。
+
+### 8.3 [F1c] SKILL.md 残留旧幂等声明
+
+- **问题**:knowledge-steward/SKILL.md 第 18 行"全部幂等"与第 85 行"均幂等
+  可重跑,不产生重复条目"仍是同步式表述;maintenance.md 第 3 行同病。
+- **修复**:三处均改为"文档导入为**去重式幂等** —— 仅对未变更内容成立,
+  编辑已灌入文档须 --delete-source 删旧重灌,否则新旧版本并存"(种子/propose
+  的签名级幂等是真实幂等,保留原表述)。
+
+### 8.4 [F2] 段落空行丢失(pre-aware 重构副作用)
+
+- **问题**:`_assemble_text` 非 pre 路径丢弃所有空行 → minified HTML 两段
+  `<p>` 合并为一句,分块变粗(段落边界丢失)。
+- **修复**:`_HtmlToText.parts` 改为 (kind, text) 三态流 —— ("n",普通文本)/
+  ("p",pre 文本)/("s",块级标签段落分隔);"s" 在装配时输出空行,段落边界保留;
+  空行连续收敛 ≤2 不变。
+- **测试**:`test_html_paragraph_boundaries_preserved_for_chunking`
+  (minified 两段 `<p>` → 分块出现两个段落边界)。
+- **连带修复**:`code_aware_chunk::flush_para` 原对整段 `.strip()`,会吃掉
+  HTML 提取中行首缩进的代码行首行缩进(非围栏 pre 段落)—— 改为仅判空不裁剪,
+  `test_ingest_url_clean_store_and_noise_absent` 断言 pre 缩进保留进 chunk。
+
+### 8.5 [F3] 未闭合 &lt;pre&gt; 毒化
+
+- **问题**:`<pre>` 缺 `</pre>` 时 `_in_pre` 恒真,后续全部文本按 pre 原样
+  处理(不折叠、不剔样板)。
+- **修复**:遇到后续任何非 pre 块级标签(开始/结束)即退出 pre 模式(合法嵌套
+  `<p><pre>…</pre></p>` 不受影响 —— 退出发生在 pre 闭合之后)。
+- **测试**:`test_unclosed_pre_does_not_poison_following_text`(后续文本仍走
+  正常清洗,空白折叠生效)。
+
+### 8.6 终态数据与验证(§8.1 时序执行后)
+
+- guide **72 chunks / 27 源**(内部 53 + 官方 19);api_ref **4 chunks / 3 源**;
+  experience 10(seed);
+- 重跑验证:内部 --seed-internal **+0**、guide 官方页(8626…)**+0**、
+  FAQ 活页刷新后 **+0**、api_ref 官方页(7583…)**+0**;
+- 冒烟:guide"插件开发"含内部 skill 命中(3-4/5-6/6-7/9-10 位);
+  api_ref"BusinessDataServiceHelper"首位命中星空企业版开发笔记;
+- 全套 241 通过;此后 skills/**/*.md 不再改动(F4)。

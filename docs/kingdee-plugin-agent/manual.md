@@ -61,13 +61,13 @@ python -m agents.kingdee_plugin_agent.tools.ingest --dir <目录> --collection g
 # python -m agents.kingdee_plugin_agent.tools.ingest --delete-source <source> --collection guide|api_ref
 ```
 
-当前已灌入内容(2026-08-09,重跑新增 0):
+当前已灌入内容(2026-08-09 终态,重跑新增 0):
 
-- **guide(71 chunks / 27 源)**:内部 skill 7 份 SKILL.md + 14 份 references
+- **guide(72 chunks / 27 源)**:内部 skill 7 份 SKILL.md + 14 份 references
   (design-builder / code-generator / code-reviewer / compile-fixer /
-  knowledge-steward / requirement-clarify,51 chunks);金蝶官方 6 页
+  knowledge-steward / requirement-clarify,53 chunks);金蝶官方 6 页
   (BOS 平台知识地图、星空 BOS 平台简介、熊说金蝶 BOS 知识库、BOS FAQ 精选、
-  收款单扩展实操、AI 辅助二开,20 chunks);
+  收款单扩展实操、AI 辅助二开,19 chunks);
 - **api_ref(4 chunks / 3 源)**:金蝶官方 3 页(星空企业版开发笔记、WebAPI 多选
   基础资料、WebAPI 系统集成主题)。
 
@@ -75,6 +75,10 @@ python -m agents.kingdee_plugin_agent.tools.ingest --dir <目录> --collection g
 > 灌入后可用 `RagClient().hybrid_search("guide", "插件开发")` 抽查命中(应含
 > 内部 skill 文档);`hybrid_search("api_ref", "BusinessDataServiceHelper")`
 > 应命中星空企业版开发笔记。
+>
+> **活页漂移说明**:BOS FAQ 精选页(685345938776315392)是人工持续策展的活页,
+> 正文会随编辑在源侧变化 —— 重跑偶发 +1~3 属源侧内容更新(非管线缺陷),
+> 刷新该页用 `--delete-source` + 重灌。其余 8 个官方页与内部文档重跑稳定 +0。
 
 ### 1.4 起编译服务(需要时)
 

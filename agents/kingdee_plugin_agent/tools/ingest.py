@@ -57,25 +57,37 @@ _BLOCK_TAGS = {
 #: 直接丢弃的噪音标签(script/nav 导航/页头页脚/表单)
 _SKIP_TAGS = {"script", "style", "noscript", "iframe", "nav", "header", "footer", "form", "template"}
 
-#: 行级样板噪音(分享/收藏/评论/翻页/导航/作者信息等,命中整行即剔除)
-#: 注意:浏览/赞赏计数是**动态内容**(两次抓取数值不同),不剔除会导致
-#: 同 URL 重灌时文本差异、重复入库 —— 必须兜住。
+#: 行级样板噪音(分享/收藏/评论/翻页/导航/作者信息/交互按钮等,命中整行即剔除)
+#: 注意:以下均为**动态或交互内容**,两次抓取/不同用户状态文本不同,不剔除会
+#: 导致同 URL 重灌时文本差异、重复入库 —— 必须兜住:
+#:   - 浏览/赞赏计数(裸数字行 "4,457"、 "N次浏览"、"N人赞赏了该文章");
+#:   - 点赞/删除/收起/取消/更多 交互按钮行;
+#:   - 编辑于/发布于 时间戳(随编辑行为变化)。
 _BOILERPLATE_RE = re.compile(
     r"^\s*(?:分享|收藏|评论|点赞|举报|订阅|关注|转发|下载|复制|打印"
     r"|返回(?:顶部|列表|首页)|上一篇|下一篇|上一页|下一页"
     r"|相关(?:文章|推荐|阅读|内容)|热门(?:文章|推荐|标签)|最新(?:文章|动态)"
     r"|阅读量[:：]?\s*[\d,]*|浏览量[:：]?\s*[\d,]*|[\d,]*次浏览|[\d,]*人(?:赞赏|点赞)了该文章"
-    r"|发布时间[:：][^\n]*|更新时间[:：][^\n]*|未经作者许可[^\n]*"
+    r"|发布时间[:：][^\n]*|更新时间[:：][^\n]*|编辑于[^\n]*|发布于[^\n]*|未经作者许可[^\n]*"
     r"|原创|所属(?:产品|领域|云/领域)[:：][^\n]*"
-    r"|首页|登录|注册|立即下载|扫码(?:关注|下载)|微信|QQ 群)"
+    r"|赞|删除|收起|取消|更多|首页|登录|注册|立即下载|扫码(?:关注|下载)|微信|QQ 群"
+    r"|[\d,]+(?:\.\d+)?万?)"
     r"[\s·•—|]*$"
 )
+
+#: 站点重发布标题前缀(如 "【第36期】 xxx"):剥离前缀使正文不随期数变化
+#: (重发布仅换期数时,正文文本保持稳定,重灌 +0)。
+_ISSUE_PREFIX_RE = re.compile(r"^【第\s*\d+\s*期】\s*")
 
 #: YAML frontmatter(文件首行 --- 到下一个 ---)
 _FRONTMATTER_RE = re.compile(r"^﻿?---\s*\n.*?\n---\s*\n", re.S)
 
-#: 标题里的站点名后缀(取第一段,如 "X - 金蝶开发者社区" → "X")
-_TITLE_SUFFIX_RE = re.compile(r"\s*(?:[-—|_·]\s*).*$")
+#: 标题里的站点名后缀(仅剥离已知站点名,如 "X - 金蝶开发者社区" → "X")
+#: 注意:不能按任意分隔符截断 —— "金蝶云·星空-BOS平台"、"话题详情-财务IT"
+#: 中的 - / · / | 都是合法标题字符,只有已知站点名才是可剥离的后缀。
+_SITE_SUFFIX_RE = re.compile(
+    r"\s*(?:[-—|_]\s*)?(?:金蝶开发者社区|金蝶云社区官网|金蝶云社区|金蝶社区|开发者社区)\s*$"
+)
 
 
 class IngestError(RuntimeError):
@@ -89,54 +101,68 @@ class IngestError(RuntimeError):
 class _HtmlToText(HTMLParser):
     """轻量 HTML→正文提取:丢弃 script/style/nav 等,块级标签转段落换行。
 
-    parts 元素为 (in_pre, text):<pre> 内的数据 in_pre=True,装配时按行
-    原样保留(代码缩进/结构不折叠);非 pre 数据按行折叠空白。
+    parts 元素为 (kind, text):
+      - ("n", data):普通文本(装配时按行折叠空白 + 剔样板行);
+      - ("p", data):<pre> 内数据,装配时按行**原样保留**(代码缩进/结构不折叠);
+      - ("s", ""):块级标签产生的段落分隔(装配时输出一个空行 —— 段落边界)。
+    未闭合 <pre> 的毒化兜底:后续遇到任何非 pre 块级标签(开始/结束)即退出
+    pre 模式,后续文本回归正常清洗。
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._skip_depth = 0
         self._in_pre = False
-        self._parts: list[tuple[bool, str]] = []
+        self._parts: list[tuple[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in _SKIP_TAGS:
             self._skip_depth += 1
         elif tag == "pre":
             if not self._in_pre:
-                self._parts.append((False, "\n"))  # pre 块前后补段落换行
+                self._parts.append(("s", ""))  # pre 块前留段落分隔
             self._in_pre = True
         elif tag in _BLOCK_TAGS:
-            self._parts.append((self._in_pre, "\n"))
+            self._in_pre = False  # 未闭合 <pre> 毒化兜底:新块级标签退出 pre 模式
+            self._parts.append(("s", ""))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP_TAGS and self._skip_depth:
             self._skip_depth -= 1
         elif tag == "pre":
-            self._parts.append((True, "\n"))
+            self._parts.append(("p", "\n"))  # pre 块后留段落分隔(原样空行)
             self._in_pre = False
         elif tag in _BLOCK_TAGS:
-            self._parts.append((self._in_pre, "\n"))
+            self._in_pre = False  # 未闭合 <pre> 毒化兜底
+            self._parts.append(("s", ""))
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth:
             return
-        self._parts.append((self._in_pre, data))
+        self._parts.append(("p", data) if self._in_pre else ("n", data))
 
 
-def _assemble_text(parts: list[tuple[bool, str]]) -> str:
-    """按行装配:非 pre 行折叠空白 + 剔样板行;pre 行原样保留;
-    连续空行收敛到 ≤2(段落分隔,代码块内空行最多留 2 行)。"""
+def _assemble_text(parts: list[tuple[str, str]]) -> str:
+    """按行装配:
+    - ("n") 行:折叠空白 + 剥【第N期】前缀 + 剔样板行;
+    - ("p") 行:原样保留(代码缩进/结构);
+    - ("s") 段落分隔:输出空行(段落边界不丢失,分块粒度正常);
+    - 连续空行收敛到 ≤2(段落分隔,代码块内空行最多留 2 行)。"""
     lines: list[str] = []
-    for in_pre, data in parts:
-        if in_pre:
+    for kind, data in parts:
+        if kind == "p":
             lines.extend(data.split("\n"))
-            continue
-        for raw in data.split("\n"):
-            line = " ".join(raw.split())
-            if not line or _BOILERPLATE_RE.match(line):
-                continue
-            lines.append(line)
+        elif kind == "s":
+            lines.append("")
+        else:  # "n"
+            for raw in data.split("\n"):
+                line = " ".join(raw.split())
+                if not line:
+                    continue
+                line = _ISSUE_PREFIX_RE.sub("", line, count=1)  # 重发布期数前缀剥离
+                if not line or _BOILERPLATE_RE.match(line):
+                    continue
+                lines.append(line)
     out: list[str] = []
     blanks = 0
     for line in lines:
@@ -151,8 +177,9 @@ def _assemble_text(parts: list[tuple[bool, str]]) -> str:
 
 
 def html_to_text(html: str) -> str:
-    """HTML → 正文文本:剔除 script/style/nav 噪音,块级标签转段落换行,
-    <pre> 代码行**原样保留**缩进/结构,非代码行折叠空白并剔样板行。"""
+    """HTML → 正文文本:剔除 script/style/nav 噪音,块级标签转段落换行
+    (段落空行保留),<pre> 代码行**原样保留**缩进/结构,非代码行折叠空白、
+    剥重发布期数前缀并剔样板行。"""
     parser = _HtmlToText()
     try:
         parser.feed(html)
@@ -228,7 +255,9 @@ def code_aware_chunk(text: str, max_chars: int = 1500) -> list[str]:
     def flush_para() -> None:
         nonlocal para
         if para:
-            blocks.append(("\n".join(para).strip(), False))
+            content = "\n".join(para)
+            if content.strip():  # 全空白段落不产出;保留行首缩进(代码行)
+                blocks.append((content, False))
             para = []
 
     def flush_code() -> None:
@@ -292,7 +321,8 @@ def _title_from_html(html: str) -> str:
     m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
     if m:
         title = re.sub(r"<[^>]+>", "", m.group(1))
-        title = _TITLE_SUFFIX_RE.sub("", title).strip()
+        title = _SITE_SUFFIX_RE.sub("", title).strip()  # 站点名后缀剥离
+        title = _ISSUE_PREFIX_RE.sub("", title, count=1)  # 重发布期数前缀剥离
         if title:
             return title
     m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S | re.I)

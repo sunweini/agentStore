@@ -12,49 +12,59 @@
 - **RAG 导入管线 `tools/ingest.py`**(URL/目录双入口 + CLI,零新增依赖):
   - `ingest_url(url, collection, title="")`:httpx 抓取(30s 超时 + 浏览器 UA)→
     stdlib html.parser 提取正文(剔除 script/style/nav/header/footer 噪音)→
-    行级样板剔除(分享/收藏/评论/翻页/导航类)→ 代码感知分块 → RagClient 入库
-    (metadata: source/title/collection),返回新增 chunk 数;
+    代码感知分块 → RagClient 入库(metadata: source/title/collection),
+    返回新增 chunk 数;
   - `ingest_dir(dir, collection)`:递归 *.md,自动去 YAML frontmatter,相对路径
     作 source,单文件失败跳过继续,**全部失败才报错**(不静默全跳过);
-  - `code_aware_chunk(text, max_chars=1500)`:段落边界切块;代码围栏(```)
-    **无论多长整体独占一个 chunk,绝不在围栏内部切分**(未闭合围栏也保留);
-    超长段落按句末标点(。！？!?;；)兜底切分;
+  - `code_aware_chunk(text, max_chars=1500)`:段落边界切块(段落空行保留);
+    代码围栏(```)**无论多长整体独占一个 chunk,绝不在围栏内部切分**(未闭合
+    围栏也保留);超长段落按句末标点(。！？!?;；)兜底切分;行首缩进保留
+    (HTML &lt;pre&gt; 代码行经分块不丢缩进);
   - `normalize_title(url, html=None)`:&lt;title&gt; → 首个 &lt;h1&gt; → URL 尾段
-    三级回退,站点名后缀自动剥离;
+    三级回退;**仅剥离已知站点名后缀**(" - 金蝶开发者社区" 等,不按任意
+    分隔符截断 —— "金蝶云·星空-BOS平台" 中的 - / · / | 是合法标题字符);
   - **幂等是"去重式"而非同步式**:按 source + 文本查重,同 source 且**内容未变**
     重跑新增 0;内容变更后重跑会新增、新旧版本并存 —— 编辑已灌入文档须先删旧
     重灌:`--delete-source <source> --collection <库>`(删除该 source 全部条目)
     再重灌;
   - **&lt;pre&gt; 代码块缩进保留**:HTML 提取按 pre 感知处理 —— 代码行原样
-    保留缩进/结构,非代码行折叠空白;浏览/赞赏计数等**动态行**(两次抓取数值
-    不同)按样板剔除,保证同 URL 重跑文本稳定;
+    保留缩进/结构,非代码行折叠空白;未闭合 &lt;pre&gt; 毒化兜底(后续块级
+    标签即退出 pre 模式,后续文本正常清洗);
+  - **动态行样板覆盖**:裸数字/逗号数字行(浏览计数 "4,457")、赞/删除/收起/
+    取消交互行、编辑于/发布于时间戳、浏览/赞赏计数 —— 全部整行剔除;
+    **重发布期数前缀【第N期】剥离**(正文与标题,重发布不改变正文文本);
+    9 个官方 URL 双次抓取 diff 验证文本稳定;
   - CLI:`--url <URL>`(可重复)/ `--dir <目录>` / `--seed-internal` /
     `--delete-source <source>` + `--collection api_ref|guide|experience`,
     `--data-dir` 可改数据目录;单 URL 失败打印明确原因(HTTP 状态/超时/无正文)、
     全部失败退出码 1。
 
-### 集合灌入(data/kingdee-rag,gitignored;2026-08-09 实跑,重跑新增 0)
+### 集合灌入(data/kingdee-rag,gitignored;2026-08-09 终态实跑,重跑新增 0)
 
-- **guide 71 chunks / 27 源**:内部 skill 7 份 SKILL.md + 14 份 references
+- **guide 72 chunks / 27 源**:内部 skill 7 份 SKILL.md + 14 份 references
   (design-builder / code-generator / code-reviewer / compile-fixer /
-  knowledge-steward / requirement-clarify,51 chunks)+ 金蝶官方 6 页(BOS 平台
+  knowledge-steward / requirement-clarify,53 chunks)+ 金蝶官方 6 页(BOS 平台
   知识地图、星空 BOS 平台简介、熊说金蝶 BOS 知识库、BOS FAQ 精选、收款单扩展
-  实操、AI 辅助二开,20 chunks);
+  实操、AI 辅助二开,19 chunks);
 - **api_ref 4 chunks / 3 源**:金蝶官方 3 页(星空企业版开发笔记 —— 含
   BusinessDataServiceHelper/DBServiceHelper 用法、WebAPI 多选基础资料、WebAPI
   系统集成主题);
-- 模板类(`templates/*.cs`)不入库 —— 代码模板由 w3 直接使用,无需检索。
+- 模板类(`templates/*.cs`)不入库 —— 代码模板由 w3 直接使用,无需检索;
+- **活页漂移结论**:BOS FAQ 精选页(685345938776315392)是人工持续策展活页,
+  正文随编辑在源侧变化,重跑偶发 +1~3 属源侧内容更新(非管线缺陷),
+  刷新用 `--delete-source` + 重灌;其余 8 个官方页与内部文档重跑稳定 +0。
 
 ### 测试
 
-- 新增 `tests/test_ingest.py` 25 项(全套 212 → **237**):代码围栏跨段落整体
+- 新增 `tests/test_ingest.py` 29 项(全套 212 → **241**):代码围栏跨段落整体
   保留/超长围栏不切分/未闭合围栏保留、长段落句末切分无内容丢失、HTML 噪音
-  (script/nav/分享收藏)剔除 + **&lt;pre&gt; 缩进保留**、ingest_dir tmp 目录
-  入库可检索 + frontmatter 剔除 + 去重幂等、**编辑后重跑重复 → delete_source
-  删旧重灌干净**、ingest_url mock HTTP 入库 + HTTP 错误明确消息、
-  **fetch_html 真实异常映射(超时/HTTP 状态/网络错误 → IngestError)**、
-  CLI --dir 可运行 / 单 URL 失败退出 1 / 多 URL 部分失败继续 / --delete-source
-  / 无参数退出 2。
+  (script/nav/分享收藏)剔除 + **&lt;pre&gt; 缩进保留 + 未闭合 pre 不毒化
+  后续文本 + 段落空行保留(分块段落边界)+ 动态行(裸数字/赞删除收起/编辑于)
+  剔除 + 【第N期】前缀剥离**、ingest_dir tmp 目录入库可检索 + frontmatter
+  剔除 + 去重幂等、**编辑后重跑重复 → delete_source 删旧重灌干净**、
+  ingest_url mock HTTP 入库 + HTTP 错误明确消息、**fetch_html 真实异常映射
+  (超时/HTTP 状态/网络错误 → IngestError)**、CLI --dir 可运行 / 单 URL 失败
+  退出 1 / 多 URL 部分失败继续 / --delete-source / 无参数退出 2。
 
 ### 文档
 

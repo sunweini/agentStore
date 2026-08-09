@@ -15,7 +15,9 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 
 - 沉淀侧(w7):踩坑只沉淀可复现的错误模式,proposed 先行、人工验证后 verify,
   失败不阻塞交付;
-- 维护侧(人工):种子增补、文档导入、规范库合并、定期 review,全部幂等;
+- 维护侧(人工):种子增补、文档导入、规范库合并、定期 review,全部幂等
+  (文档导入为**去重式幂等** —— 仅对未变更内容成立,编辑已灌入文档须
+  `--delete-source` 删旧再重灌,否则新旧版本并存);
 - 检索侧(全 worker):路由正确、检索参数语义统一,不让分数方向坑人。
 
 ## 输入
@@ -82,7 +84,9 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 
 - w7(运行时):compile_errors 逐条 propose 成功 → DONE(evidence 沉淀完成);
   失败 → DONE_WITH_CONCERNS(evidence 含错误信息 + 记待沉淀队列)。
-- 人工维护:种子增补/文档导入/规范合并/review 均幂等可重跑,不产生重复条目。
+- 人工维护:种子增补/规范合并/review 均幂等可重跑;文档导入为**去重式幂等**
+  —— 内容未变重跑新增 0,编辑已灌入文档后须 `--delete-source` 删旧重灌,
+  否则新旧版本并存。
 
 ## 踩坑与纪律
 
