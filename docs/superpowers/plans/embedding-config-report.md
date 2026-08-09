@@ -89,3 +89,23 @@ Commit:`feat(rag): embedding 模型配置化(EMBEDDING_* env,支持 openai-compa
 4. **活页漂移**:BOS FAQ 精选页源侧漂移 +2 已入库,后续刷新按既有约定 `--delete-source` 重灌;
 5. `EMBEDDING_API_KEY` 占位符 `not-needed`:若未来接入需鉴权的服务,配真实 key 即可
    (Bearer 透传已测)。
+
+## 7. Review 修复(2026-08-09,commit `fix(rag): embedding provider 校验 + 空模型名回落默认`)
+
+评审 2 项 Minor 健壮性修复,均已落地 + 测试:
+
+1. **未知 EMBEDDING_PROVIDER 静默回退 huggingface** → 改为抛 RagError:
+   provider 白名单校验(`huggingface` / `openai-compatible`),拼写错误如
+   `openaicompatible` 不再被当成本地模型(静默回退会让误配置的检索静默失真,
+   错误只在换库重灌时暴露);
+2. **`EMBEDDING_MODEL=` 空串绕过默认** → `config.get_env("EMBEDDING_MODEL") or
+   默认值` 回落(与 api_key 的 `or "not-needed"` 同一写法):显式置空与未配置
+   等价,不再构造 `model_name=""` 的空模型。
+
+新增测试 3 项(`tests/test_rag.py`):
+- `test_embedding_model_unknown_provider_raises`:bad provider → RagError;
+- `test_embedding_model_empty_model_uses_default_hf`:空模型名 → huggingface 默认;
+- `test_embedding_model_empty_model_uses_default_openai`:空模型名 → Qwen 默认。
+
+全套 **249 passed**(246 基线 + 3 新)。`.env.example` provider 注释与 CHANGELOG
+v1.15.0「修复」节同步更新。

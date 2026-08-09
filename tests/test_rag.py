@@ -73,6 +73,37 @@ def test_embedding_model_openai_compatible_missing_base_url(monkeypatch):
         _embedding_model()
 
 
+def test_embedding_model_unknown_provider_raises(monkeypatch):
+    """未知 EMBEDDING_PROVIDER(拼写错误如 "openaicompatible"):抛 RagError,
+    不静默回退 huggingface(静默回退会把误配置当成本地模型,检索静默失真)。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openaicompatible")
+    with pytest.raises(RagError, match="EMBEDDING_PROVIDER"):
+        _embedding_model()
+
+
+def test_embedding_model_empty_model_uses_default_hf(monkeypatch):
+    """EMBEDDING_MODEL= 空串(非未配置):huggingface 分支回落默认模型。"""
+    from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "huggingface")
+    monkeypatch.setenv("EMBEDDING_MODEL", "")
+    model = _embedding_model()
+    assert isinstance(model, HuggingFaceEmbeddings)
+    assert model.model_name == "BAAI/bge-small-zh-v1.5"
+
+
+def test_embedding_model_empty_model_uses_default_openai(monkeypatch):
+    """EMBEDDING_MODEL= 空串(非未配置):openai-compatible 分支回落默认模型。"""
+    from langchain_openai import OpenAIEmbeddings
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://10.33.17.234:32320")
+    monkeypatch.setenv("EMBEDDING_MODEL", "")
+    model = _embedding_model()
+    assert isinstance(model, OpenAIEmbeddings)
+    assert model.model == "Qwen/Qwen3-Embedding-8B"
+
+
 def test_rag_client_creates_dirs(tmp_path):
     client = RagClient(data_dir=tmp_path)
     assert (tmp_path / "chroma").exists()

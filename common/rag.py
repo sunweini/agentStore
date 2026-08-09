@@ -70,11 +70,19 @@ def _embedding_model():
         "not-needed"(langchain-openai 校验要求非空,服务端免鉴权时
         该占位符不会发送真实密钥)
 
+    未知的 EMBEDDING_PROVIDER(拼写错误等)抛 RagError,不静默回退;
+    EMBEDDING_MODEL 为空串时回落默认(EMBEDDING_MODEL= 不等同于未配置)。
+
     ⚠️ 换嵌入模型 = 向量空间变更:已有向量全部失效、检索结果无意义,
     必须 drop data/kingdee-rag 后全量重灌(seed_load + --seed-internal +
     官方 URL,流程见 knowledge-steward/references/maintenance.md §5)。
     """
     provider = config.get_env("EMBEDDING_PROVIDER", "huggingface").strip().lower()
+    if provider not in ("huggingface", "openai-compatible"):
+        raise RagError(
+            f"未知 EMBEDDING_PROVIDER: {provider!r}(仅支持 "
+            "'huggingface' / 'openai-compatible')"
+        )
     if provider == "openai-compatible":
         base_url = config.get_env("EMBEDDING_BASE_URL").strip()
         if not base_url:
@@ -87,12 +95,12 @@ def _embedding_model():
         from langchain_openai import OpenAIEmbeddings
 
         return OpenAIEmbeddings(
-            model=config.get_env("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B"),
+            model=config.get_env("EMBEDDING_MODEL") or "Qwen/Qwen3-Embedding-8B",
             base_url=base_url,
             api_key=config.get_env("EMBEDDING_API_KEY") or "not-needed",
         )
     return HuggingFaceEmbeddings(
-        model_name=config.get_env("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5"),
+        model_name=config.get_env("EMBEDDING_MODEL") or "BAAI/bge-small-zh-v1.5",
         encode_kwargs={"normalize_embeddings": True},
     )
 

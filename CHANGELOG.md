@@ -48,9 +48,18 @@
 - 新增 `tests/conftest.py`:autouse 夹具清除 `EMBEDDING_*` env + 清
   `_embedding_model` 缓存 —— 测试环境隔离(真实 .env 配远程服务时,
   RagClient 测试仍确定性走 huggingface 本地默认,不依赖网络);
-- `tests/test_rag.py` 新增 5 项 env 分支测试:huggingface 默认/自定义模型、
+- `tests/test_rag.py` 新增 8 项 env 分支测试:huggingface 默认/自定义模型、
   openai-compatible 默认模型+base_url、自定义 model+api_key 透传、缺
-  `EMBEDDING_BASE_URL` 抛错;全套 **246 passed**(241 基线 + 5 新)。
+  `EMBEDDING_BASE_URL` 抛错、未知 provider 抛错、空模型名回落默认
+  (huggingface/openai-compatible 两分支);全套 **249 passed**(241 基线 + 8 新)。
+
+### 修复
+
+- **未知 `EMBEDDING_PROVIDER` 不再静默回退 huggingface**:拼写错误(如
+  `openaicompatible`)直接抛 RagError,点名支持值 —— 静默回退会把误配置
+  当成本地模型,检索静默失真;
+- **`EMBEDDING_MODEL=` 空串回落默认**:空串(显式置空)与未配置等价,
+  不再产生 `model_name=""` 的空模型构造(与 api_key 的 `or 占位符` 同一写法)。
 
 ---
 
