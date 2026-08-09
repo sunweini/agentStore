@@ -157,6 +157,11 @@ def test_seed_load_idempotent(tmp_path):
     # 种子文本与 ExperienceStore.propose 格式统一(设计 §6.2:种子即 w7 格式样本)
     hits = client.search("experience", "CS0246", k=5, filter={"signature": "CS0246|"})
     assert hits[0]["text"] == "[CS0246] 命名空间或类型找不到(缺 Kingdee.BOS 引用) 修复:csproj 加 Reference 到 Kingdee.BOS.dll"
+    # category 随元数据入库(设计:env 类命中 → w5 升级 BLOCKED 不修代码;代码类默认 code)
+    env_hits = client.search("experience", "CS1056", k=1, filter={"signature": "CS1056|"})
+    assert env_hits[0]["metadata"].get("category") == "env"
+    code_hits = client.search("experience", "CS0246", k=1, filter={"signature": "CS0246|"})
+    assert code_hits[0]["metadata"].get("category") == "code"
 
 
 from common.rag import StandardsLoader
@@ -287,6 +292,16 @@ def test_experience_verify_unknown_signature_raises(tmp_path):
     store = ExperienceStore(client)
     with pytest.raises(RagError):
         store.verify("CS9999|None.cs")
+
+
+def test_propose_carries_category(tmp_path):
+    """propose 默认 category="code";显式 category="env" 随元数据入库并经
+    search_related 透传(w5 据此判别环境类错误升级 BLOCKED)。"""
+    store = ExperienceStore(RagClient(data_dir=tmp_path))
+    store.propose("CS1056", "", "插值语法", "配置 Roslyn", category="env")
+    store.propose("CS0103", "", "名称不存在", "核对字段名")  # 默认 code
+    assert store.search_related("CS1056", "插值")[0]["metadata"].get("category") == "env"
+    assert store.search_related("CS0103", "名称")[0]["metadata"].get("category") == "code"
 
 
 def test_experience_confidence_marking(tmp_path):

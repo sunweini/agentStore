@@ -6,6 +6,9 @@
      失败 → 错误记入 subtask.compile_errors,按错误码检索经验库(ExperienceStore)
      取修复建议附注,再让 LLM 依 w5_compile.md prompt + 错误(含 experience 附注)
      改写代码后 store.write 写回重编(终审 C8:必须真实改写,禁止原样重提交)。
+     检索命中 category="env" 的环境类错误(C# 6 语法需 Roslyn / MSBuild 配置 /
+     框架不匹配 / 超时)→ 立即 BLOCKED 附运维提示,**不进修复轮次、不计轮次
+     不扣预算**(环境问题修代码是空转,见 compile-fixer SKILL.md)。
   3. 5 轮仍失败 → 扣全局返工预算 rework_budget_left 后 BLOCKED(退回 w3/w4 或问用户)。
 
 经验库故障(终审 C8):_retrieve_fix 整体 try/except,不阻断编译循环。
@@ -23,6 +26,15 @@ from common.otel import get_tracer
 
 MAX_COMPILE_ROUNDS = 5
 
+#: compile-fixer 方法论摘要(load_skill 兜底:LLM 不主动调 load_skill 时系统提示
+#: 也持有核心方法论 —— 尤其是环境类错误不修代码、报告 BLOCKED 提示运维)
+COMPILE_FIXER_SUMMARY = (
+    "编译修复方法论在 compile-fixer skill(需要时调 load_skill('compile-fixer') "
+    "获取完整版)。遇环境类错误(C# 6 语法需 Roslyn / MSBuild 配置 / 目标框架不匹配 "
+    "/ 编译超时)不要修代码 —— 环境问题代码修不了,报告 BLOCKED 并提示运维"
+    "配置编译服务后重试。"
+)
+
 
 class CompileWorker(WorkerBase):
     name = "w5"
@@ -32,21 +44,38 @@ class CompileWorker(WorkerBase):
         self.client = compile_client
         self.experience = experience
 
-    def _retrieve_fix(self, subtask, errors) -> None:
+    def _retrieve_fix(self, subtask, errors) -> str | None:
         """按编译错误检索经验库,命中附注到 compile_errors 条目。
 
         只做检索附注(不改代码);改写由 _llm_fix 完成。经验库故障
         (chroma 不可用等)不阻断编译循环。
+
+        返回 None → 正常修复路径;命中 category="env" 的环境类错误(C# 6 语法需
+        Roslyn / MSBuild 配置 / 框架不匹配 / 超时 —— 根因在编译服务配置而非代码)
+        → 返回聚合的运维提示串(首 2-3 条),调用方立即 BLOCKED,不进修复轮次、
+        不计轮次不扣预算(见 compile-fixer SKILL.md「环境类 vs 代码类」)。
         """
         if self.experience is None:
-            return
+            return None
+        env_hints: list[str] = []
         try:
             for entry, err in zip(subtask.compile_errors, errors):
                 hits = self.experience.search_related(err.code, err.message, k=2)
-                if hits:
-                    entry["experience"] = [h["text"] for h in hits]
+                if not hits:
+                    continue
+                entry["experience"] = [h["text"] for h in hits]
+                for h in hits:  # 聚合环境类命中(首 2-3 条),代码类命中不进
+                    if h["metadata"].get("category") == "env":
+                        env_hints.append(h["text"])
+                        if len(env_hints) >= 3:
+                            break
         except Exception:
-            pass  # 经验库故障 → 无附注继续,不阻断
+            return None  # 经验库故障 → 无附注继续,不阻断
+        if not env_hints:
+            return None
+        return ("编译环境问题(非代码问题,修代码无效,不计编译轮次):"
+                + " | ".join(env_hints)
+                + " —— 请运维配置编译服务(如 CSC_TOOL_PATH / 目标框架 / 超时 / 端口)后重试")
 
     def _llm_fix(self, subtask, code: str) -> str | None:
         """LLM 依 w5_compile.md + compile_errors(含 experience 附注)改写代码。
@@ -60,7 +89,8 @@ class CompileWorker(WorkerBase):
             context = json.dumps({"code": code, "compile_errors": subtask.compile_errors},
                                  ensure_ascii=False)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", prompt + SKILL_HINT),
+                # 摘要兜底:LLM 不主动调 load_skill 也持有核心方法论(环境类不修码)
+                ("system", prompt + "\n\n" + COMPILE_FIXER_SUMMARY + SKILL_HINT),
                 ("human", "当前代码与错误列表:\n{context}"),  # JSON 走占位符,防 f-string 花括号冲突(dev-standards §7.2)
             ])
             out = structured_with_skill(self.llm, CodeOutput,
@@ -108,7 +138,12 @@ class CompileWorker(WorkerBase):
                         "concerns": ""}
             subtask.compile_errors = [{"code": e.code, "message": e.message}
                                       for e in result.errors]
-            self._retrieve_fix(subtask, result.errors)
+            env_msg = self._retrieve_fix(subtask, result.errors)
+            if env_msg:
+                # 环境类错误升级:根因在编译服务配置不在代码,不进入修复轮次
+                # (不计轮次、不扣预算、LLM 不参与 —— 修代码只会空转烧轮次)
+                return {"status": "BLOCKED", "artifact_key": "", "evidence": "编译环境问题",
+                        "concerns": env_msg}
             fixed = self._llm_fix(subtask, code)
             if fixed is not None:
                 code = fixed

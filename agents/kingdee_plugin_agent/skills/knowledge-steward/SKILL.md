@@ -53,7 +53,7 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 |---|---|---|---|
 | api_ref | 金蝶 BOS API 参考片段 | hybrid_search(bm25_weight=0.7 约定,精确 API 名优先) | w2 设计(按子任务标题) |
 | guide | 团队开发向导/指南 | hybrid_search + filter={plugin_type} 类型过滤 | w2 设计、w3 生成 |
-| experience | 编译错误经验(seed + w7 沉淀) | search_related(错误码+消息语义向量检索;w2 用标题语义,title 同时充当 code/message 双信号) | w2 设计(标题检索历史坑,命中注入设计上下文"历史踩坑参考",verified 优先、作规避参考非必须满足)、w5 修复(命中附注 experience,自核后采用) |
+| experience | 编译错误经验(seed + w7 沉淀) | search_related(错误码+消息语义向量检索;w2 用标题语义,title 同时充当 code/message 双信号) | w2 设计(标题检索历史坑,命中注入设计上下文"历史踩坑参考",verified 优先、作规避参考非必须满足)、w5 修复(命中附注 experience,自核后采用;**category="env" 的环境类命中 → 升级 BLOCKED 附运维提示,不进修复轮次、不计轮次不扣预算**) |
 | standards | 规范库(markdown 整库注入,不建向量索引) | StandardsLoader.inject_text(8k token 预算) | w4 审查(整库逐条对照) |
 
 - 分数方向警示:`search()`/`search_related()` 返回 Chroma L2 距离,**越小越

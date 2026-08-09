@@ -98,7 +98,7 @@ START → <node1> ──<条件>──→ <node2>
 
 ## 7. 通用开发经验(踩坑记录,开发 agent 前必读)
 
-以下经验来自 sentiment-query-agent(海外舆情方案生成)实际开发,均验证过。
+以下经验来自 sentiment-query-agent(海外舆情方案生成)与 kingdee-plugin-agent(Windows 远程部署)实际开发,均验证过。
 
 ### 7.1 LangGraph / checkpointer
 
@@ -136,3 +136,15 @@ START → <node1> ──<条件>──→ <node2>
 - 后端必须加 CORS middleware,否则浏览器页跨域被拦。
 - 前端轮询 progress 时,404 是"还没数据"的正常态,不要当错误处理;但要确认后端在生成中能返回实时进度(见 7.1)。
 - 提交按钮要禁用 + loading 态,失败用 alert 醒目提示(小字错误提示用户注意不到,看起来像"没反应")。
+
+### 7.6 Windows 远程部署与运维(kingdee 编译服务实测)
+
+- **scp 多文件必须逐个指定目标路径**:`scp a b user@host:dir/` 会把 `b` 当目标路径、`a` 复制成 `dir/b`(不是并排放两个文件)。对策:每个文件单独 `scp a user@host:dir/`、`scp b user@host:dir/`,或先 scp 到临时目录再在远端 `mv`。
+- **ssh 传参经 cmd/PowerShell 三层转义,引号易错**:本地 shell → ssh → 远端 cmd/PowerShell,每层吞一层引号,嵌套 `'""...'` 极易写错还难排查。对策:改用 PowerShell `-EncodedCommand`(命令转 UTF-16LE 再 base64,单串参数无引号地狱),如 `powershell -EncodedCommand <base64>`。
+- **远端中文输出乱码**:PowerShell 默认输出编码非 UTF-8,中文路径/日志乱码难排查。对策:执行前先设 `[Console]::OutputEncoding = [Text.Encoding]::UTF8`。
+- **Windows Server 2016 无 Add-WindowsCapability**:该 cmdlet 2019+ 才有,Server 2016 上先试 capability 必然失败。对策:OpenSSH 用 MSI 安装包(或按官方手动解包),不要纠结 capability。
+- **uvicorn factory 必须显式 `--factory`**:自动检测在 Server 2016 上报 `create_factory() takes 0 args`(探测不认该形态)。对策:显式 `uvicorn "mod:create_app" --factory`。
+- **schtasks 保活后台服务**:SSH 会话断开即杀子进程,远程服务必须用 schtasks 计划任务拉起保活。注意 schtasks 上下文**不继承 SSH 会话的环境变量** —— 环境变量经 bat 文件传递(`set VAR=...` 后启动命令写在 bat 里),不要依赖 SSH env。
+- **改代码后必须 taskkill 全杀再重启**:Windows 端口被旧进程占用时新进程起不来,旧进程继续服务(改了像没改)。对策:改完代码 `taskkill /F /IM python.exe`(或按 PID 树)全杀 → 重启 → 验证端口监听。
+- **PowerShell 5.1 无 BOM UTF-8 文件读乱码**:5.1 按 ANSI 读无 BOM UTF-8,脚本里中文注释/字符串乱码(有 BOM 才按 UTF-8)。对策:脚本注释用英文,或文件存带 BOM。
+- **金蝶服务器 8000 端口被占用**:金蝶默认 WebSite 占用 8000,编译服务默认端口撞车。对策:编译服务换端口(如 8001),.env 的 `COMPILE_SERVICE_URL` 同步。

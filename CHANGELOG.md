@@ -5,6 +5,44 @@
 
 ---
 
+## v1.19.0 — 2026-08-10(kingdee-plugin-agent:环境类错误升级 BLOCKED + w5 方法论摘要兜底)
+
+### 行为变更
+
+- **环境类编译错误不再空转修复轮次**(Gap A):经验库条目新增 `category`
+  元数据(code=代码可修 / env=编译环境配置问题)。种子中 CS1056(C# 6 语法需
+  Roslyn)/ MSB4067 / MSB3274 / MSB3275(框架不匹配)/ TimeoutExpired 标记
+  `env`,其余代码类条目显式 `code`;`ExperienceStore.propose` 新增可选
+  `category="code"` 参数(向后兼容,w7/DEPLOY/ARTIFACT 通道默认 code),
+  `seed_load` 灌入时随元数据入库并透传检索。
+- **w5 升级语义**:`_retrieve_fix` 命中 `category="env"` 时不再进入正常修复
+  循环 —— 立即返回 BLOCKED,concerns 附运维提示(聚合首 2-3 条 env 命中,
+  如"CSC_TOOL_PATH 指向 Roslyn / 提升 TARGET_FRAMEWORK / 放宽超时 / 换端口")。
+  环境问题修代码无意义:不计编译轮次、不扣返工预算、LLM 不参与
+  (编译客户端只调 1 次即停)。
+- **w5 修复 LLM 方法论摘要兜底**(Gap B):`_llm_fix` 系统提示注入
+  `COMPILE_FIXER_SUMMARY`(方法论在 compile-fixer skill + 环境类错误不修码
+  报告 BLOCKED 提示运维),LLM 不主动调 load_skill 也持有核心方法论;
+  loader 的 compile-fixer 摘要同步补充环境类说明。
+
+### 文档
+
+- **dev-standards.md §7.6「Windows 远程部署与运维」**(kingdee 编译服务实测 9 条):
+  scp 多文件必须逐个指定目标路径;ssh 传参三层转义用 PowerShell
+  `-EncodedCommand`(base64 UTF-16LE)规避;PowerShell 输出设
+  `[Console]::OutputEncoding=UTF8`;Server 2016 无 Add-WindowsCapability
+  (OpenSSH 用 MSI);uvicorn factory 必须显式 `--factory`;schtasks 保活 +
+  环境变量经 bat 传递;改代码后 taskkill 全杀再重启;PowerShell 5.1 无 BOM
+  UTF-8 乱码(注释用英文或带 BOM);金蝶服务器 8000 端口被占(编译服务换端口)。
+- **compile-fixer SKILL.md 新增「环境类 vs 代码类(判别与升级)」**:判别线索 +
+  升级路径(BLOCKED 附运维提示,不进修复轮次);errors.md 修复纪律补第 7 条
+  (环境类升级不修码);knowledge-steward 检索路由表 experience 行补 env 升级注。
+- 全量测试:新增 5 个测试(w5 环境类 BLOCKED 不空转 / 多命中聚合 / 代码类
+  路径不变 / 系统提示含摘要;propose 携带 category;seed 断言补 category
+  元数据),267 → 272 全绿。
+
+---
+
 ## v1.18.0 — 2026-08-10(kingdee-plugin-agent:Windows 编译经验沉淀 —— Roslyn/编译环境方法论)
 
 ### 新增功能

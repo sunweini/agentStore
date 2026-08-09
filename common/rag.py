@@ -315,13 +315,22 @@ class ExperienceStore:
     def __init__(self, client: RagClient):
         self.client = client
 
-    def propose(self, code: str, file_pattern: str, message: str, fix: str) -> str:
+    def propose(self, code: str, file_pattern: str, message: str, fix: str,
+                category: str = "code") -> str:
+        """写入 proposed 条目;category 标注错误归属(code=代码可修 / env=编译环境
+        配置问题,如 C# 6 语法需 Roslyn、框架不匹配、超时 —— 修代码无效)。
+
+        category 随元数据入库、经 search_related 透传给 w5:w5 检索命中
+        category="env" 时升级 BLOCKED 提示运维,不进修复轮次(见
+        compile-fixer SKILL.md「环境类 vs 代码类」判别与升级)。
+        """
         sig = f"{code}|{file_pattern}"
         existing = self.client.search("experience", sig, k=1, filter={"signature": sig})
         if existing and existing[0]["metadata"].get("signature") == sig:
             return sig
         self.client.add_documents("experience", [f"[{code}] {message} 修复:{fix}"], [{
             "signature": sig, "code": code, "status": "proposed", "source": "w7",
+            "category": category,
         }])
         return sig
 

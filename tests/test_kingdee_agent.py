@@ -648,6 +648,157 @@ def test_compile_experience_hits_reach_llm_fix_context(tmp_path):
         assert "[CS0103] 名称不存在" in human            # 经验库命中随 context 注入修复 prompt
 
 
+def test_compile_env_error_blocked_no_budget(tmp_path):
+    """环境类错误升级:经验库命中 category="env"(如 CS1056 需 Roslyn)→ 立即
+    BLOCKED + 运维提示,不进修复轮次 —— 编译客户端不再被调、LLM 不参与、
+    不扣返工预算、compile_fail_count 不增(修代码无法修环境,见 compile-fixer)。"""
+    from agents.kingdee_plugin_agent.graph.workers.w3_generate import CodeOutput
+
+    class EnvFail:
+        """恒返回 CS1056(C# 6 插值语法,Framework csc 不认)。"""
+
+        def __init__(self):
+            self.calls = 0
+
+        def health(self):
+            return True
+
+        def compile(self, code, project_name):
+            self.calls += 1
+            return CompileResult(success=False, raw_output="", duration_ms=0,
+                                 errors=[CompileError("P.cs", 1, "CS1056", "意外的字符'$'", True)])
+
+    class FakeEnvExperience:
+        def search_related(self, error_code, message, k=3):
+            return [{"text": "[CS1056] 意外的字符'$'(C# 6 插值语法) 修复:配置 Roslyn 编译器 CSC_TOOL_PATH",
+                     "score": 0.9, "metadata": {"category": "env"}}]
+
+    class _CaptureLLM:
+        """捕获是否被调用:环境类升级路径 LLM 不应参与。"""
+
+        def __init__(self):
+            self.seen = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            return CodeOutput(code="class X { /* never */ }")
+
+    llm = _CaptureLLM()
+    client = EnvFail()
+    w = CompileWorker(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=client, experience=FakeEnvExperience())
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "BLOCKED" in msg and "编译环境问题" in msg   # 升级 BLOCKED + 运维提示
+    assert "CSC_TOOL_PATH" in msg                      # 运维修复提示随附
+    assert client.calls == 1                           # 编译客户端不再被调(不空转)
+    assert llm.seen == []                              # LLM 不参与修复
+    assert st.rework_budget_left == 3                  # 不扣返工预算
+    assert st.metrics["compile_fail_count"] == 0       # 不计编译轮次
+    assert sub.compile_errors[0]["experience"][0].startswith("[CS1056]")
+
+
+def test_compile_env_error_multiple_hits_aggregated(tmp_path):
+    """多环境类命中聚合(首 2-3 条):CS1056(env 双命中)+ CS0103(代码类)混批 →
+    BLOCKED 提示含前 2 条 env 提示;代码类命中仍附注 compile_errors。"""
+
+    class TwoErrors:
+        def __init__(self):
+            self.calls = 0
+
+        def health(self):
+            return True
+
+        def compile(self, code, project_name):
+            self.calls += 1
+            return CompileResult(success=False, raw_output="", duration_ms=0, errors=[
+                CompileError("P.cs", 1, "CS1056", "意外的字符'$'", True),
+                CompileError("P.cs", 2, "CS0103", "xxx()", True),
+            ])
+
+    class MixedExperience:
+        def search_related(self, error_code, message, k=3):
+            if error_code == "CS1056":
+                return [
+                    {"text": "[CS1056] 意外的字符'$' 修复:配置 Roslyn CSC_TOOL_PATH",
+                     "score": 0.9, "metadata": {"category": "env"}},
+                    {"text": "[CS1056] C# 6 插值语法 修复:CSC_TOOL_PATH 指向 Roslyn csc",
+                     "score": 0.8, "metadata": {"category": "env"}},
+                ]
+            return [{"text": "[CS0103] 名称不存在 修复:核对字段名",
+                     "score": 0.9, "metadata": {"category": "code"}}]
+
+    client = TwoErrors()
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=client, experience=MixedExperience())
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert "BLOCKED" in msg and "编译环境问题" in msg
+    assert "CSC_TOOL_PATH" in msg                        # env 命中 1 进提示
+    assert "Roslyn csc" in msg                           # env 命中 2 进提示(聚合)
+    assert client.calls == 1                             # 混批也短路,不空转
+    assert st.rework_budget_left == 3
+    assert sub.compile_errors[0]["experience"][0].startswith("[CS1056]")
+    assert sub.compile_errors[1]["experience"][0].startswith("[CS0103]")  # 代码类仍附注
+
+
+def test_compile_code_category_hit_normal_path(tmp_path):
+    """代码类命中(category="code")→ 正常修复路径不变:照常循环编译至上限并扣预算。"""
+    class FakeCodeExperience:
+        def search_related(self, error_code, message, k=3):
+            return [{"text": "[CS0103] 名称不存在 修复:核对字段名",
+                     "score": 0.9, "metadata": {"category": "code"}}]
+
+    w = CompileWorker(llm=None, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=99),
+                      experience=FakeCodeExperience())
+    st = TaskState(requirement_spec={}, todo=[], rework_budget_left=3)
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert w.client.calls == MAX_COMPILE_ROUNDS          # 正常修复循环 5 轮
+    assert "BLOCKED" in msg and "编译环境问题" not in msg
+    assert st.rework_budget_left == 2                    # 编译超限照扣 1 预算
+
+
+def test_w5_system_prompt_contains_compile_fixer_summary(tmp_path):
+    """load_skill 兜底:修复 LLM 系统提示恒含 compile-fixer 摘要(方法论所在 +
+    环境类错误不修码报告 BLOCKED),LLM 不主动调 load_skill 也持有核心方法论。"""
+    from agents.kingdee_plugin_agent.graph.workers.w3_generate import CodeOutput
+
+    class _CodeLLM:
+        def __init__(self):
+            self.seen = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            self.seen.append(messages)
+            return CodeOutput(code="class X { /* w5 fixed */ }")
+
+    llm = _CodeLLM()
+    w = CompileWorker(llm=llm, store=ArtifactStore(root=tmp_path),
+                      compile_client=FakeCompileClient(fail_first=99))
+    st = TaskState(requirement_spec={}, todo=[])
+    sub = Subtask("A1", "bill", "x", [], "compile_done")
+    _write_code(tmp_path, sub)
+    sub, msg = w.run(st, sub)
+    assert llm.seen
+    for messages in llm.seen:
+        system = next(m.content for m in messages if getattr(m, "type", "") == "system")
+        assert "compile-fixer" in system                 # 方法论在 skill(摘要兜底)
+        assert "环境类错误" in system and "BLOCKED" in system  # 环境类不修码、报告 BLOCKED
+        assert "C# 6 语法需 Roslyn" in system
+
+
 def test_smoke_ok_no_budget_change(tmp_path):
     class FakeSmoke:
         def deploy_and_verify(self, dll_path, form_id):
