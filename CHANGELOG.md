@@ -21,17 +21,25 @@
     超长段落按句末标点(。！？!?;；)兜底切分;
   - `normalize_title(url, html=None)`:&lt;title&gt; → 首个 &lt;h1&gt; → URL 尾段
     三级回退,站点名后缀自动剥离;
-  - **幂等**:按 metadata.source 查重,同 source 重跑新增 0;
-  - CLI:`--url <URL>`(可重复)/ `--dir <目录>` / `--seed-internal` +
-    `--collection api_ref|guide|experience`,`--data-dir` 可改数据目录;单 URL
-    失败打印明确原因(HTTP 状态/超时/无正文)、全部失败退出码 1。
+  - **幂等是"去重式"而非同步式**:按 source + 文本查重,同 source 且**内容未变**
+    重跑新增 0;内容变更后重跑会新增、新旧版本并存 —— 编辑已灌入文档须先删旧
+    重灌:`--delete-source <source> --collection <库>`(删除该 source 全部条目)
+    再重灌;
+  - **&lt;pre&gt; 代码块缩进保留**:HTML 提取按 pre 感知处理 —— 代码行原样
+    保留缩进/结构,非代码行折叠空白;浏览/赞赏计数等**动态行**(两次抓取数值
+    不同)按样板剔除,保证同 URL 重跑文本稳定;
+  - CLI:`--url <URL>`(可重复)/ `--dir <目录>` / `--seed-internal` /
+    `--delete-source <source>` + `--collection api_ref|guide|experience`,
+    `--data-dir` 可改数据目录;单 URL 失败打印明确原因(HTTP 状态/超时/无正文)、
+    全部失败退出码 1。
 
-### 集合灌入(data/kingdee-rag,gitignored;2026-08-09 实跑,幂等重跑新增 0)
+### 集合灌入(data/kingdee-rag,gitignored;2026-08-09 实跑,重跑新增 0)
 
-- **guide 65 chunks / 27 源**:内部 skill 7 份 SKILL.md + 14 份 references
+- **guide 71 chunks / 27 源**:内部 skill 7 份 SKILL.md + 14 份 references
   (design-builder / code-generator / code-reviewer / compile-fixer /
-  knowledge-steward / requirement-clarify)+ 金蝶官方 6 页(BOS 平台知识地图、
-  星空 BOS 平台简介、熊说金蝶 BOS 知识库、BOS FAQ 精选、收款单扩展实操、AI 辅助二开);
+  knowledge-steward / requirement-clarify,51 chunks)+ 金蝶官方 6 页(BOS 平台
+  知识地图、星空 BOS 平台简介、熊说金蝶 BOS 知识库、BOS FAQ 精选、收款单扩展
+  实操、AI 辅助二开,20 chunks);
 - **api_ref 4 chunks / 3 源**:金蝶官方 3 页(星空企业版开发笔记 —— 含
   BusinessDataServiceHelper/DBServiceHelper 用法、WebAPI 多选基础资料、WebAPI
   系统集成主题);
@@ -39,18 +47,22 @@
 
 ### 测试
 
-- 新增 `tests/test_ingest.py` 17 项(全套 212 → **229**):代码围栏跨段落整体
+- 新增 `tests/test_ingest.py` 25 项(全套 212 → **237**):代码围栏跨段落整体
   保留/超长围栏不切分/未闭合围栏保留、长段落句末切分无内容丢失、HTML 噪音
-  (script/nav/分享收藏)剔除、ingest_dir tmp 目录入库可检索 + frontmatter 剔除
-  + 幂等、ingest_url mock HTTP 入库 + 幂等 + HTTP 错误明确消息、CLI --dir 可
-  运行 / 单 URL 失败退出 1 / 多 URL 部分失败继续 / 无参数退出 2。
+  (script/nav/分享收藏)剔除 + **&lt;pre&gt; 缩进保留**、ingest_dir tmp 目录
+  入库可检索 + frontmatter 剔除 + 去重幂等、**编辑后重跑重复 → delete_source
+  删旧重灌干净**、ingest_url mock HTTP 入库 + HTTP 错误明确消息、
+  **fetch_html 真实异常映射(超时/HTTP 状态/网络错误 → IngestError)**、
+  CLI --dir 可运行 / 单 URL 失败退出 1 / 多 URL 部分失败继续 / --delete-source
+  / 无参数退出 2。
 
 ### 文档
 
 - **knowledge-steward SKILL.md 维护手册**:文档导入步骤改走 RAG 导入管线
-  (命令示例 + 幂等语义)。
+  (命令示例 + 去重式幂等语义)。
 - **knowledge-steward references/maintenance.md §2**:文档导入分步重写为
-  ingest CLI(单页/批量目录/--seed-internal 三形态 + --data-dir),注明
+  ingest CLI(单页/批量目录/--seed-internal/--delete-source 形态 +
+  --data-dir),明确"编辑已灌入文档 = 静默重复,须删旧重灌"纪律;注明
   plugin_type 元数据缺口(外部导入文档暂不支持类型过滤检索,待办)。
 - **manual.md**:新增 §1.3 灌入 RAG 知识库(命令 + 已灌内容清单 + 抽查方法),
   后续小节顺延编号。

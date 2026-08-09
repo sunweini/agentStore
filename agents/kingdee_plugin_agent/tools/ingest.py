@@ -15,8 +15,10 @@
   - 分块:代码感知 —— 段落边界切分,max_chars 超限才切,代码围栏(```)无论
     多长整体独占一个 chunk,绝不在围栏内部切分;
   - 存储:common/rag.py RagClient(api_ref/guide/experience 三库)。
-  - 幂等:按 metadata.source 查重,已导入的 source 重跑新增 0(不产生重复条目,
-    对齐 knowledge-steward 维护手册"文档导入幂等"约定)。
+  - 幂等为**去重式**:按 metadata.source + 文本查重,同 source 且内容未变的
+    重跑新增 0;内容变更后重跑会新增(新旧版本并存),须先
+    `--delete-source <source>` 删旧再重灌(对齐 knowledge-steward 维护手册
+    "文档导入幂等"约定 —— 幂等仅对未变更内容成立)。
 
 错误语义:
   - 单 URL 失败(HTTP 错误/超时/无正文)→ IngestError(CLI 打印明确信息,
@@ -46,21 +48,25 @@ logger = logging.getLogger(__name__)
 FETCH_TIMEOUT = 30
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 agentStore-rag-ingest/1.0"
 
-#: 正文按块换行分隔的标签(HTML→文本时在其前后加换行,保留段落结构)
+#: 正文按块换行分隔的标签(HTML→文本时在其前后加换行,保留段落结构;pre 单独处理)
 _BLOCK_TAGS = {
     "p", "div", "section", "article", "li", "ul", "ol", "dl", "dt", "dd",
     "h1", "h2", "h3", "h4", "h5", "h6", "tr", "table", "blockquote",
-    "br", "hr", "pre", "figure", "figcaption", "summary", "details",
+    "br", "hr", "figure", "figcaption", "summary", "details",
 }
 #: 直接丢弃的噪音标签(script/nav 导航/页头页脚/表单)
 _SKIP_TAGS = {"script", "style", "noscript", "iframe", "nav", "header", "footer", "form", "template"}
 
-#: 行级样板噪音(分享/收藏/评论/翻页/导航等,命中整行即剔除)
+#: 行级样板噪音(分享/收藏/评论/翻页/导航/作者信息等,命中整行即剔除)
+#: 注意:浏览/赞赏计数是**动态内容**(两次抓取数值不同),不剔除会导致
+#: 同 URL 重灌时文本差异、重复入库 —— 必须兜住。
 _BOILERPLATE_RE = re.compile(
     r"^\s*(?:分享|收藏|评论|点赞|举报|订阅|关注|转发|下载|复制|打印"
     r"|返回(?:顶部|列表|首页)|上一篇|下一篇|上一页|下一页"
     r"|相关(?:文章|推荐|阅读|内容)|热门(?:文章|推荐|标签)|最新(?:文章|动态)"
-    r"|阅读量[:：]?\s*\d*|浏览量[:：]?\s*\d*|发布时间[:：][^\n]*|更新时间[:：][^\n]*"
+    r"|阅读量[:：]?\s*[\d,]*|浏览量[:：]?\s*[\d,]*|[\d,]*次浏览|[\d,]*人(?:赞赏|点赞)了该文章"
+    r"|发布时间[:：][^\n]*|更新时间[:：][^\n]*|未经作者许可[^\n]*"
+    r"|原创|所属(?:产品|领域|云/领域)[:：][^\n]*"
     r"|首页|登录|注册|立即下载|扫码(?:关注|下载)|微信|QQ 群)"
     r"[\s·•—|]*$"
 )
@@ -81,51 +87,87 @@ class IngestError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 class _HtmlToText(HTMLParser):
-    """轻量 HTML→正文提取:丢弃 script/style/nav 等,块级标签转段落换行。"""
+    """轻量 HTML→正文提取:丢弃 script/style/nav 等,块级标签转段落换行。
+
+    parts 元素为 (in_pre, text):<pre> 内的数据 in_pre=True,装配时按行
+    原样保留(代码缩进/结构不折叠);非 pre 数据按行折叠空白。
+    """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._skip_depth = 0
         self._in_pre = False
-        self._parts: list[str] = []
+        self._parts: list[tuple[bool, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in _SKIP_TAGS:
             self._skip_depth += 1
         elif tag == "pre":
+            if not self._in_pre:
+                self._parts.append((False, "\n"))  # pre 块前后补段落换行
             self._in_pre = True
         elif tag in _BLOCK_TAGS:
-            self._parts.append("\n")
+            self._parts.append((self._in_pre, "\n"))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP_TAGS and self._skip_depth:
             self._skip_depth -= 1
         elif tag == "pre":
+            self._parts.append((True, "\n"))
             self._in_pre = False
         elif tag in _BLOCK_TAGS:
-            self._parts.append("\n")
+            self._parts.append((self._in_pre, "\n"))
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth:
             return
-        self._parts.append(data)
+        self._parts.append((self._in_pre, data))
 
-    def text(self) -> str:
-        return "".join(self._parts)
+
+def _assemble_text(parts: list[tuple[bool, str]]) -> str:
+    """按行装配:非 pre 行折叠空白 + 剔样板行;pre 行原样保留;
+    连续空行收敛到 ≤2(段落分隔,代码块内空行最多留 2 行)。"""
+    lines: list[str] = []
+    for in_pre, data in parts:
+        if in_pre:
+            lines.extend(data.split("\n"))
+            continue
+        for raw in data.split("\n"):
+            line = " ".join(raw.split())
+            if not line or _BOILERPLATE_RE.match(line):
+                continue
+            lines.append(line)
+    out: list[str] = []
+    blanks = 0
+    for line in lines:
+        if not line.strip():
+            blanks += 1
+            if blanks > 2:
+                continue
+        else:
+            blanks = 0
+        out.append(line)
+    return "\n".join(out).strip()
 
 
 def html_to_text(html: str) -> str:
-    """HTML → 粗略正文文本(标签层级转段落换行,脚本/样式/导航已剔除)。"""
+    """HTML → 正文文本:剔除 script/style/nav 噪音,块级标签转段落换行,
+    <pre> 代码行**原样保留**缩进/结构,非代码行折叠空白并剔样板行。"""
     parser = _HtmlToText()
     try:
         parser.feed(html)
     except Exception as exc:  # 解析容错:个别畸形 HTML 不阻塞导入
         logger.warning("HTML 解析异常(已忽略,尽量保留已提取文本): %s", exc)
-    return parser.text()
+    return _assemble_text(parser._parts)
 
 
 def clean_text(text: str) -> str:
-    """清洗:行内空白折叠、整行样板噪音剔除、连续空行收敛。"""
+    """通用文本清洗:行内空白折叠、整行样板噪音剔除、连续空行收敛。
+
+    注意:html_to_text 已按 <pre> 感知完成等价清洗(代码行原样保留),
+    HTML 导入路径直接用 html_to_text 输出、**不要再过 clean_text**,否则
+    代码缩进会被折叠;本函数面向纯文本/非代码场景。
+    """
     lines = []
     for raw in text.split("\n"):
         line = " ".join(raw.split())
@@ -328,11 +370,26 @@ def _client(data_dir: Path | None) -> RagClient:
     return RagClient(data_dir=data_dir) if data_dir else RagClient()
 
 
+def delete_source(collection: str, source: str, data_dir: Path | None = None) -> int:
+    """删除某 source 的全部条目(内容变更后"删旧重灌"的前置操作,防新旧版本并存)。
+
+    返回删除条数;source 不存在返回 0。
+    """
+    client = _client(data_dir)
+    store = client._store(collection)
+    found = store.get(where={"source": source})
+    ids = found.get("ids") or []
+    if ids:
+        store._collection.delete(ids=ids)
+    return len(ids)
+
+
 def ingest_url(url: str, collection: str, title: str = "", data_dir: Path | None = None) -> int:
     """单页导入:抓取 → 清洗 → 代码感知分块 → 入库(metadata: source/title/collection)。
 
-    返回新增 chunk 数(同 source 重跑返回 0 —— 幂等)。HTTP 错误/超时/无正文
-    抛 IngestError。
+    返回新增 chunk 数。**去重式幂等**:同 source 且文本未变的重跑返回 0;
+    内容变更后需先 delete_source 再重灌(否则新旧版本并存)。HTTP 错误/超时/
+    无正文抛 IngestError。
     """
     if collection not in RAG_COLLECTIONS:
         raise IngestError(f"未知库: {collection}(可选 {', '.join(RAG_COLLECTIONS)})")
@@ -340,7 +397,7 @@ def ingest_url(url: str, collection: str, title: str = "", data_dir: Path | None
     html = fetch_html(url)
     if not title:
         title = _title_from_html(html) or _title_from_url(url)
-    text = clean_text(html_to_text(html))
+    text = html_to_text(html)  # 已按 <pre> 感知清洗,勿再过 clean_text(会折叠代码缩进)
     if not text:
         raise IngestError(f"页面无正文可提取: {url}")
     chunks = code_aware_chunk(text)
@@ -377,7 +434,11 @@ def _ingest_md_file(path: Path, collection: str, root: Path, data_dir: Path | No
 
 def ingest_dir(dir: Path, collection: str, data_dir: Path | None = None) -> int:
     """目录批量导入:递归 *.md,逐文件处理;单文件失败 log + 继续,
-    全部失败才抛 IngestError(不静默全跳过)。返回总新增 chunk 数。"""
+    全部失败才抛 IngestError(不静默全跳过)。返回总新增 chunk 数。
+
+    幂等为**去重式**:文件未变重跑新增 0;编辑已灌入的文件后重跑会新增
+    (旧版+新版并存),需先 delete_source(source=相对路径) 再重灌。
+    """
     if collection not in RAG_COLLECTIONS:
         raise IngestError(f"未知库: {collection}(可选 {', '.join(RAG_COLLECTIONS)})")
     files = sorted(Path(dir).rglob("*.md"))
@@ -409,7 +470,8 @@ _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="python -m agents.kingdee_plugin_agent.tools.ingest",
-        description="RAG 导入管线:URL/目录/内部 skill → api_ref|guide|experience 库(代码感知分块,幂等)",
+        description="RAG 导入管线:URL/目录/内部 skill → api_ref|guide|experience 库"
+                    "(代码感知分块,去重式幂等:内容变更需 --delete-source 删旧后重灌)",
     )
     ap.add_argument("--url", action="append", default=[], metavar="URL",
                     help="要导入的页面 URL(可重复,逐条失败继续)")
@@ -417,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="批量导入目录下所有 *.md(相对路径作 source)")
     ap.add_argument("--seed-internal", action="store_true",
                     help="导入内部 skill 文档(skills/**/*.md,SKILL.md + references)到 guide")
+    ap.add_argument("--delete-source", metavar="SOURCE",
+                    help="删除该 source 的全部条目后退出(--collection 指定库);编辑重灌前先删旧")
     ap.add_argument("--collection", required=True, choices=RAG_COLLECTIONS,
                     help="目标库: api_ref / guide / experience")
     ap.add_argument("--title", default="", help="URL 模式的标题(缺省从页面 <title>/<h1> 提取)")
@@ -424,6 +488,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     try:
+        if args.delete_source:
+            n = delete_source(args.collection, args.delete_source, data_dir=args.data_dir)
+            print(f"[ingest] 删除 {args.collection}/{args.delete_source}: {n} 条")
+            return 0
         if args.seed_internal:
             if args.collection != "guide":
                 print("[ingest] --seed-internal 仅支持 --collection guide", file=sys.stderr)

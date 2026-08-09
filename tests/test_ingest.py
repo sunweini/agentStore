@@ -12,12 +12,16 @@
 
 import pytest
 
+import httpx
+
 from common.rag import RagClient
 from agents.kingdee_plugin_agent.tools import ingest as mod
 from agents.kingdee_plugin_agent.tools.ingest import (
     IngestError,
     code_aware_chunk,
     clean_text,
+    delete_source,
+    fetch_html,
     html_to_text,
     ingest_dir,
     ingest_url,
@@ -94,18 +98,47 @@ _FAKE_HTML = """<html><head><title>收款单插件扩展实操 - 金蝶开发者
 <p>通过 AfterDoOperationEventArgs 事件实现。</p>
 <p>事件参数携带操作信息,插件可在操作前后拦截。</p>
 <p>硬拦截时通过 e.Cancel 阻止操作继续执行。</p>
-<pre><code>public class MyPlugIn : AbstractOperationServicePlugIn
-{
-}</code></pre></div>
+<pre><code>    public class MyPlugIn : AbstractOperationServicePlugIn
+    {
+        // 插件主体逻辑
+    }</code></pre></div>
 <footer>分享 收藏 评论</footer></body></html>"""
 
 
 def test_html_to_text_strips_noise_keeps_body():
-    text = clean_text(html_to_text(_FAKE_HTML))
+    text = html_to_text(_FAKE_HTML)
     assert "noise" not in text and "首页" not in text  # script/nav 剔除
     assert "分享" not in text and "收藏" not in text  # 样板行剔除
     assert "AfterDoOperationEventArgs" in text
-    assert "public class MyPlugIn" in text  # pre 代码保留
+    assert "    public class MyPlugIn" in text  # pre 代码保留,缩进不折叠
+
+
+def test_html_pre_keeps_indentation_and_structure():
+    """<pre> 内代码行原样保留缩进/结构(不得被空白折叠)。"""
+    html = (
+        "<html><body><p>前置说明。</p>\n"
+        "<pre><code>    public void Do()\n"
+        "    {\n"
+        "        if (x)\n"
+        "        {\n"
+        "            y();\n"
+        "        }\n"
+        "    }\n"
+        "</code></pre>\n"
+        "<p>后置说明。</p></body></html>"
+    )
+    text = html_to_text(html)
+    assert "    public void Do()" in text
+    assert "        if (x)" in text
+    assert "            y();" in text
+    assert "前置说明。" in text and "后置说明。" in text
+
+
+def test_clean_text_plain_text():
+    """clean_text 面向纯文本:折叠空白 + 剔样板行(注意:HTML 路径用
+    html_to_text,不再过 clean_text,否则代码缩进被折叠)。"""
+    text = "  你好   世界  \n\n分享\n收藏\n\n\n下一段。"
+    assert clean_text(text) == "你好 世界\n下一段。"
 
 
 def test_normalize_title_priority_and_fallback():
@@ -190,6 +223,7 @@ def test_ingest_url_clean_store_and_noise_absent(tmp_path, monkeypatch):
     assert "noise" not in all_text and "首页" not in all_text
     assert "分享" not in all_text and "收藏" not in all_text
     assert "AfterDoOperationEventArgs" in all_text
+    assert "    public class MyPlugIn" in all_text  # pre 缩进保留进 chunk
     assert all(m["source"] == url for m in metas)
     assert all("收款单插件扩展实操" in m["title"] for m in metas)
 
@@ -210,6 +244,64 @@ def test_ingest_url_unknown_collection(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "fetch_html", lambda u: _FAKE_HTML)
     with pytest.raises(IngestError, match="未知库"):
         ingest_url("https://example.com/a", "not_a_lib", data_dir=tmp_path / "rag")
+
+
+# ---------------------------------------------------------------------------
+# fetch_html 错误映射(直接测真实异常 → IngestError)
+# ---------------------------------------------------------------------------
+
+def test_fetch_html_timeout_maps_to_ingest_error(monkeypatch):
+    def boom(*a, **k):
+        raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(mod.httpx, "get", boom)
+    with pytest.raises(IngestError, match="请求超时"):
+        fetch_html("https://example.com/slow")
+
+
+def test_fetch_html_http_status_maps_to_ingest_error(monkeypatch):
+    resp = httpx.Response(404, request=httpx.Request("GET", "https://example.com/missing"))
+    monkeypatch.setattr(mod.httpx, "get", lambda *a, **k: resp)
+    with pytest.raises(IngestError, match="HTTP 404"):
+        fetch_html("https://example.com/missing")
+
+
+def test_fetch_html_transport_error_maps_to_ingest_error(monkeypatch):
+    def boom(*a, **k):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(mod.httpx, "get", boom)
+    with pytest.raises(IngestError, match="网络错误"):
+        fetch_html("https://example.com/down")
+
+
+# ---------------------------------------------------------------------------
+# 去重式幂等:内容变更 → delete_source → 重灌
+# ---------------------------------------------------------------------------
+
+def test_edit_rerun_adds_new_chunks_then_delete_source_clean(tmp_path):
+    """编辑已灌入文档后重跑会新增(旧版+新版并存);delete_source 删旧后
+    重灌才干净 —— 幂等仅对未变更内容成立。"""
+    src = tmp_path / "docs"
+    src.mkdir()
+    f = src / "a.md"
+    f.write_text("# 主题甲\n\n第一版内容。\n", encoding="utf-8")
+    data_dir = tmp_path / "rag"
+    assert ingest_dir(src, "guide", data_dir=data_dir) == 1
+    # 内容变更后重跑:新增 1 —— 旧版+新版并存,即"静默重复"
+    f.write_text("# 主题乙\n\n第二版内容。\n", encoding="utf-8")
+    assert ingest_dir(src, "guide", data_dir=data_dir) == 1
+    docs = RagClient(data_dir=data_dir)._store("guide").get().get("documents") or []
+    assert len(docs) == 2 and sum("第一版" in d for d in docs) == 1 and sum("第二版" in d for d in docs) == 1
+    # 删除旧 source 全部条目 → 重灌 → 干净(仅剩新版)
+    assert delete_source("guide", "a.md", data_dir=data_dir) == 2
+    assert ingest_dir(src, "guide", data_dir=data_dir) == 1
+    docs = RagClient(data_dir=data_dir)._store("guide").get().get("documents") or []
+    assert len(docs) == 1 and "第二版" in docs[0]
+
+
+def test_delete_source_unknown_returns_zero(tmp_path):
+    assert delete_source("guide", "no-such-source", data_dir=tmp_path / "rag") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +341,19 @@ def test_cli_multi_url_partial_failure_continues(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "https://example.com/ok" in out
     assert "+" in out
+
+
+def test_cli_delete_source(tmp_path, capsys):
+    src = tmp_path / "docs"
+    src.mkdir()
+    (src / "x.md").write_text("# X\n\n内容\n", encoding="utf-8")
+    data_dir = tmp_path / "rag"
+    assert main(["--dir", str(src), "--collection", "guide", "--data-dir", str(data_dir)]) == 0
+    rc = main(["--delete-source", "x.md", "--collection", "guide", "--data-dir", str(data_dir)])
+    assert rc == 0
+    assert "删除" in capsys.readouterr().out
+    docs = RagClient(data_dir=data_dir)._store("guide").get().get("documents") or []
+    assert docs == []
 
 
 def test_cli_no_args_prints_help_and_exit2(capsys):

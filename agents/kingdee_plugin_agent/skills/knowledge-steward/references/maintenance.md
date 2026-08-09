@@ -54,15 +54,29 @@
      python -m agents.kingdee_plugin_agent.tools.ingest --seed-internal --collection guide
      ```
    - 数据目录默认 `data/kingdee-rag`,`--data-dir <dir>` 可改(与 RagClient 一致);
-3. 幂等:按 metadata.source 查重,同 source 重跑新增 0(不产生重复条目);
-   **批量模式全部失败才报错**,部分失败打印警告继续;
-4. 验证:对每页取 1~2 个关键词查询 `hybrid_search`(api_ref 用 bm25_weight=0.7),
+3. **幂等是去重式,不是同步式**:按 source + 文本查重,**同 source 且内容未变**
+   的重跑新增 0;**内容变更后重跑会新增,新旧版本并存** —— 编辑已灌入的文档
+   后必须"删旧重灌":
+   ```bash
+   python -m agents.kingdee_plugin_agent.tools.ingest \
+     --delete-source <source> --collection guide|api_ref   # 先删旧
+   python -m agents.kingdee_plugin_agent.tools.ingest \
+     --dir <目录>|--url <URL> --collection guide|api_ref   # 再重灌
+   ```
+   (URL 导入的 source 就是完整 URL;目录导入的 source 是相对路径,如
+   `knowledge-steward/SKILL.md`;官方页面的浏览/赞赏计数等动态行已按样板剔除,
+   重跑稳定 +0)
+4. **批量模式全部失败才报错**,部分失败打印警告继续;
+5. 验证:对每页取 1~2 个关键词查询 `hybrid_search`(api_ref 用 bm25_weight=0.7),
    确认正确命中且排序合理;再跑全套测试。
 
-**注意**:guide 库按 plugin_type 过滤检索是 w2/w3 的既有契约,当前导入管线
-元数据仅 source/title/collection,无 plugin_type —— 类型过滤检索会漏召回
-外部导入的文档(内部 skill 文档已在各 skill 自身注入链,不受影响);
-如需类型过滤,后续扩展 `--metadata key=value` 导入口令(待办)。
+**注意**:
+- **编辑已灌入文档 = 静默重复**:去重只认文本,改了内容重跑就会并存旧版 ——
+  维护纪律:任何对已灌入文档的编辑,都按上面"删旧重灌"执行;
+- guide 库按 plugin_type 过滤检索是 w2/w3 的既有契约,当前导入管线元数据仅
+  source/title/collection,无 plugin_type —— 类型过滤检索会漏召回外部导入的
+  文档(内部 skill 文档已在各 skill 自身注入链,不受影响);如需类型过滤,
+  后续扩展 `--metadata key=value` 导入口令(待办)。
 
 ## 3. 规范库合并(standards)
 

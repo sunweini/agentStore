@@ -69,8 +69,9 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 - **文档导入**:官方文档爬取/内部资料 → api_ref/guide 分库入库 —— 走 RAG 导入
   管线 `python -m agents.kingdee_plugin_agent.tools.ingest`(`--url <URL>`
   / `--dir <目录>` / `--seed-internal` + `--collection api_ref|guide`;代码感知
-  分块、按 source 幂等重跑新增 0),导入后 hybrid_search 抽查验证命中,
-  分步见 references/maintenance.md §2。
+  分块;幂等是**去重式** —— 内容未变重跑新增 0,**编辑已灌入文档后必须
+  `--delete-source` 删旧再重灌**,否则新旧版本并存),导入后 hybrid_search
+  抽查验证命中,分步见 references/maintenance.md §2。
 - **规范库合并**:规范以 markdown 整库注入,新增文件放入 standards 目录即可;
   超 8k token 预算自动截断并标注转 guide 检索兜底 —— **只提议人工合并,不自动
   改写规范**;w7 只建议,合并不在 w7 职责内。
