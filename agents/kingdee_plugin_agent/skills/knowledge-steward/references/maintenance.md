@@ -36,15 +36,33 @@
    - 官方 API 参考/接口签名/事件参数 → `api_ref`;
    - 团队开发向导/操作流程/约定 → `guide`;
    - 错误修复经验 → 走 `experience`(propose → verify,不走直接导入);
-2. 分块:按文档小节切块(建议 500~1000 字/块,保留标题行做锚点);
-3. 元数据:至少带 `source`(文档名/URL)与类型区分字段(如 `plugin_type`),
-   供 hybrid_search 的 filter 使用(如 w2/w3 按 plugin_type 过滤 guide);
-4. 入库:`RagClient().add_documents(collection, docs, metadatas)`;
-5. 验证:对每块取 1~2 个关键词查询 `hybrid_search`(api_ref 用 bm25_weight=0.7),
+2. 导入(RAG 导入管线 `tools/ingest.py`;代码感知分块 —— 代码围栏 ``` 整体
+   保留,段落边界切块,元数据带 source/title/collection):
+   - 单页(标题缺省从页面 `<title>`/`<h1>` 提取,失败打印明确原因、退出码非零):
+     ```bash
+     python -m agents.kingdee_plugin_agent.tools.ingest \
+       --url <URL> --collection api_ref|guide [--title 可选]
+     ```
+   - 批量目录(递归 *.md,自动去 YAML frontmatter,相对路径作 source,
+     单文件失败跳过继续):
+     ```bash
+     python -m agents.kingdee_plugin_agent.tools.ingest \
+       --dir <目录> --collection guide
+     ```
+   - 内部 skill 文档(SKILL.md + references/*.md;模板类代码不入库):
+     ```bash
+     python -m agents.kingdee_plugin_agent.tools.ingest --seed-internal --collection guide
+     ```
+   - 数据目录默认 `data/kingdee-rag`,`--data-dir <dir>` 可改(与 RagClient 一致);
+3. 幂等:按 metadata.source 查重,同 source 重跑新增 0(不产生重复条目);
+   **批量模式全部失败才报错**,部分失败打印警告继续;
+4. 验证:对每页取 1~2 个关键词查询 `hybrid_search`(api_ref 用 bm25_weight=0.7),
    确认正确命中且排序合理;再跑全套测试。
 
-**注意**:guide 库按 plugin_type 过滤检索是 w2/w3 的既有契约,导入时
-plugin_type 元数据缺失会导致该类型检索漏召回。
+**注意**:guide 库按 plugin_type 过滤检索是 w2/w3 的既有契约,当前导入管线
+元数据仅 source/title/collection,无 plugin_type —— 类型过滤检索会漏召回
+外部导入的文档(内部 skill 文档已在各 skill 自身注入链,不受影响);
+如需类型过滤,后续扩展 `--metadata key=value` 导入口令(待办)。
 
 ## 3. 规范库合并(standards)
 

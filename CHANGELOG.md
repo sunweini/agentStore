@@ -5,6 +5,61 @@
 
 ---
 
+## v1.14.0 — 2026-08-09(kingdee-plugin-agent:RAG 导入管线 + guide/api_ref 集合灌入)
+
+### 新增功能
+
+- **RAG 导入管线 `tools/ingest.py`**(URL/目录双入口 + CLI,零新增依赖):
+  - `ingest_url(url, collection, title="")`:httpx 抓取(30s 超时 + 浏览器 UA)→
+    stdlib html.parser 提取正文(剔除 script/style/nav/header/footer 噪音)→
+    行级样板剔除(分享/收藏/评论/翻页/导航类)→ 代码感知分块 → RagClient 入库
+    (metadata: source/title/collection),返回新增 chunk 数;
+  - `ingest_dir(dir, collection)`:递归 *.md,自动去 YAML frontmatter,相对路径
+    作 source,单文件失败跳过继续,**全部失败才报错**(不静默全跳过);
+  - `code_aware_chunk(text, max_chars=1500)`:段落边界切块;代码围栏(```)
+    **无论多长整体独占一个 chunk,绝不在围栏内部切分**(未闭合围栏也保留);
+    超长段落按句末标点(。！？!?;；)兜底切分;
+  - `normalize_title(url, html=None)`:&lt;title&gt; → 首个 &lt;h1&gt; → URL 尾段
+    三级回退,站点名后缀自动剥离;
+  - **幂等**:按 metadata.source 查重,同 source 重跑新增 0;
+  - CLI:`--url <URL>`(可重复)/ `--dir <目录>` / `--seed-internal` +
+    `--collection api_ref|guide|experience`,`--data-dir` 可改数据目录;单 URL
+    失败打印明确原因(HTTP 状态/超时/无正文)、全部失败退出码 1。
+
+### 集合灌入(data/kingdee-rag,gitignored;2026-08-09 实跑,幂等重跑新增 0)
+
+- **guide 65 chunks / 27 源**:内部 skill 7 份 SKILL.md + 14 份 references
+  (design-builder / code-generator / code-reviewer / compile-fixer /
+  knowledge-steward / requirement-clarify)+ 金蝶官方 6 页(BOS 平台知识地图、
+  星空 BOS 平台简介、熊说金蝶 BOS 知识库、BOS FAQ 精选、收款单扩展实操、AI 辅助二开);
+- **api_ref 4 chunks / 3 源**:金蝶官方 3 页(星空企业版开发笔记 —— 含
+  BusinessDataServiceHelper/DBServiceHelper 用法、WebAPI 多选基础资料、WebAPI
+  系统集成主题);
+- 模板类(`templates/*.cs`)不入库 —— 代码模板由 w3 直接使用,无需检索。
+
+### 测试
+
+- 新增 `tests/test_ingest.py` 17 项(全套 212 → **229**):代码围栏跨段落整体
+  保留/超长围栏不切分/未闭合围栏保留、长段落句末切分无内容丢失、HTML 噪音
+  (script/nav/分享收藏)剔除、ingest_dir tmp 目录入库可检索 + frontmatter 剔除
+  + 幂等、ingest_url mock HTTP 入库 + 幂等 + HTTP 错误明确消息、CLI --dir 可
+  运行 / 单 URL 失败退出 1 / 多 URL 部分失败继续 / 无参数退出 2。
+
+### 文档
+
+- **knowledge-steward SKILL.md 维护手册**:文档导入步骤改走 RAG 导入管线
+  (命令示例 + 幂等语义)。
+- **knowledge-steward references/maintenance.md §2**:文档导入分步重写为
+  ingest CLI(单页/批量目录/--seed-internal 三形态 + --data-dir),注明
+  plugin_type 元数据缺口(外部导入文档暂不支持类型过滤检索,待办)。
+- **manual.md**:新增 §1.3 灌入 RAG 知识库(命令 + 已灌内容清单 + 抽查方法),
+  后续小节顺延编号。
+- **project.md**:§5.2 待办"RAG 内容"更新 —— guide/api_ref 已接真实资料
+  (内部 skill + 官方 9 页,检索冒烟通过);剩余 standards 规范库目录与
+  plugin_type 元数据扩展。
+
+---
+
 ## v1.13.0 — 2026-08-09(kingdee-plugin-agent:E2E 门达成 —— 真实金蝶环境编译全通,部署/种子/文档同步)
 
 ### 新增功能

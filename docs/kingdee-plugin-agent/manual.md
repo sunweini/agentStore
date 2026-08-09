@@ -47,7 +47,33 @@ python -m agents.kingdee_plugin_agent.seed.seed_load
 
 种子提供编译错误的基础经验,后续任务的踩坑会由 w7 持续沉淀(proposed 态,人工核验后转 verified)。
 
-### 1.3 起编译服务(需要时)
+### 1.3 灌入 RAG 知识库(guide/api_ref,首次必做)
+
+```bash
+# 内部 skill 文档(SKILL.md + references)→ guide
+python -m agents.kingdee_plugin_agent.tools.ingest --seed-internal --collection guide
+# 官方文档单页 → guide / api_ref(标题缺省从页面 <title>/<h1> 提取)
+python -m agents.kingdee_plugin_agent.tools.ingest --url <URL> --collection guide|api_ref
+# 目录批量导入 *.md(递归,自动去 YAML frontmatter)
+python -m agents.kingdee_plugin_agent.tools.ingest --dir <目录> --collection guide
+# 可选 --data-dir <dir>(默认 data/kingdee-rag);导入幂等:同 source 重跑新增 0
+```
+
+当前已灌入内容(2026-08-09,幂等重跑新增 0):
+
+- **guide(65 chunks / 27 源)**:内部 skill 7 份 SKILL.md + 14 份 references
+  (design-builder / code-generator / code-reviewer / compile-fixer /
+  knowledge-steward / requirement-clarify);金蝶官方 6 页(BOS 平台知识地图、
+  星空 BOS 平台简介、熊说金蝶 BOS 知识库、BOS FAQ 精选、收款单扩展实操、AI 辅助二开);
+- **api_ref(4 chunks / 3 源)**:金蝶官方 3 页(星空企业版开发笔记、WebAPI 多选
+  基础资料、WebAPI 系统集成主题)。
+
+> 模板类文件(`templates/*.cs`)不入库 —— 它们是代码模板,w3 直接使用,无需检索。
+> 灌入后可用 `RagClient().hybrid_search("guide", "插件开发")` 抽查命中(应含
+> 内部 skill 文档);`hybrid_search("api_ref", "BusinessDataServiceHelper")`
+> 应命中星空企业版开发笔记。
+
+### 1.4 起编译服务(需要时)
 
 编译环节(w5)依赖编译服务;服务不可用时该环节报 BLOCKED(不计编译轮次)并最终标记失败。真实 msbuild 后端需要金蝶 BOS DLL 放入 `compile_service/build/references/`。
 
@@ -68,7 +94,7 @@ curl http://<windows-机>:8000/health   # {"status":"ok"}
 
 Docker 方式(Linux 容器,备选,未验证):`docker-compose up -d`(8000 端口;镜像 Dockerfile **无条件**设置 `COMPILE_SERVICE_REQUIRES_DLLS=1` 固定走真实后端分支,references 目录为空时容器**启动即失败** —— 未提供金蝶 BOS DLL 前不要依赖 docker-compose 起编译服务;Linux 容器内 BOS 编译兼容性未验证,Windows 原生部署为实际采用方案)。mock 后端仅在**本机不带该环境变量**直接运行 `uvicorn compile_service.server:create_factory`(开发/测试)时生效,不当质量门;测试环境(w5)在无编译服务时按 BLOCKED → 标记失败处理。
 
-### 1.4 校验环境
+### 1.5 校验环境
 
 ```bash
 python -m agents.kingdee_plugin_agent.cli "测试需求" --env test   # 未配 KD_BASE_URL 会提示错误并退出 1

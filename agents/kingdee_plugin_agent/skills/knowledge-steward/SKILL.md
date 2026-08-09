@@ -66,8 +66,11 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 
 - **种子增补**:改 seed/compile_errors.json 加条目(格式见蒸馏标准),
   seed_load 幂等灌入(按签名查重跳过),跑测试确认断言 n>=7。
-- **文档导入**:官方文档爬取/内部资料 → api_ref/guide 分库入库(分块 + 元数据
-  如 plugin_type/source),导入后 hybrid_search 抽查验证命中。
+- **文档导入**:官方文档爬取/内部资料 → api_ref/guide 分库入库 —— 走 RAG 导入
+  管线 `python -m agents.kingdee_plugin_agent.tools.ingest`(`--url <URL>`
+  / `--dir <目录>` / `--seed-internal` + `--collection api_ref|guide`;代码感知
+  分块、按 source 幂等重跑新增 0),导入后 hybrid_search 抽查验证命中,
+  分步见 references/maintenance.md §2。
 - **规范库合并**:规范以 markdown 整库注入,新增文件放入 standards 目录即可;
   超 8k token 预算自动截断并标注转 guide 检索兜底 —— **只提议人工合并,不自动
   改写规范**;w7 只建议,合并不在 w7 职责内。

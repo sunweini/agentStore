@@ -72,7 +72,7 @@
 以下均为**未验证/未达成**项,上线前需推进:
 
 - **真实金蝶 WebAPI 联调**:编译侧 E2E 门已达成(Windows 原生部署,见 [windows-deployment.md](windows-deployment.md));但 WebAPI 客户端(FormId/字段/操作查询)与冒烟客户端的端点路径、响应结构目前是**文档化初始契约(占位)**,需在真实实例上对照金蝶文档验证调整 —— 需要真实金蝶环境的 **WebAPI 登录凭证**(KD_* 4 项)。
-- **RAG 内容**:规范库(standards)目录与文档导入尚未接真实资料(官方文档/内部资料),guide/api_ref 库目前以模板与要点为主。
+- **RAG 内容**:guide/api_ref 已接真实资料 —— 内部 skill 文档 + 金蝶官方 9 页已灌入(RAG 导入管线 `tools/ingest.py`,2026-08-09,guide 65 chunks / api_ref 4 chunks,检索冒烟通过,见 CHANGELOG v1.14.0);剩余:**standards 规范库目录**仍以模板要点为主,待接真实编码规范;外部导入文档暂无 plugin_type 元数据,类型过滤检索需扩展导入口令。
 - **线上 DeepSeek 验证 load_skill 绑定**:w1-w5 的 `structured_with_skill`(tools + json_schema 组合)未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 smoke,被 API 拒绝则回退 JSON Mode 模式(见 `agents/kingdee_plugin_agent/CLAUDE.md` 约束)。
 - **v1 已知债务**(见 tech.md §11):API 内存任务存储重启即丢、线程无并发上限、apikey 非 timing-safe、`--env` 部分消费(v1.11:记录进 requirement_spec + `state.environment["env_name"]`,节点可感知;未做环境级差异化,单环境 v1)、CLI 门控仅查 KD_BASE_URL。
 
