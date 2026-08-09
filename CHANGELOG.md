@@ -5,6 +5,39 @@
 
 ---
 
+## v1.17.0 — 2026-08-09(kingdee-plugin-agent:编译服务多文件编译支持)
+
+### 新增功能
+
+- **`POST /compile` 支持多文件编译**(向后兼容,单文件形态不变):
+  - 请求形态二选一:`{"code": ..., "project_name": ...}`(旧,等价
+    `files=[{name: "Plugin.cs", code}]`)或 `{"files": [{name, code}, ...], "project_name": ...}`(新)。
+  - 文件名校验:`^[A-Za-z0-9_][A-Za-z0-9_.-]*\.cs$` 白名单(仅叶子名,防路径穿越
+    写 tmp 之外 / `-` 开头开关注入 / 非 .cs 覆盖 csproj)+ 重复名拒绝 + 至少一个文件;
+    校验在 backend.compile 之前(非法请求不触达后端)。
+  - `compile_service/models.py`:新增 `CompileFile(name, code)` dataclass + `resolved_files(req)`
+    助手(files 显式给出则用之,否则退回单文件 Plugin.cs)。
+  - `compile_service/server.py`:CompileRequest 新增 `files` 字段(code 变可选),`_FILE_NAME_RE` 白名单。
+  - `compile_service/backends/msbuild.py`:`compile(files, project_name)` 每文件写入 tmp +
+    csproj `<Compile Include="X.cs" />` 每文件一条(单文件 = 原行为);名称纵深防御
+    (直调后端也不能逃逸 tmp)。
+  - `compile_service/backends/mock.py`:`compile(files, project_name)` 规则对**全部文件源码拼接**
+    命中(跨文件命中,file 字段仍来自规则);`protocol.py` 签名同步。
+  - `agents/kingdee_plugin_agent/tools/compile_client.py`:新增 `compile_files(files, project_name)`;
+    `compile(code, project_name)` 保留并委托之(单文件路径 w5 无感)。
+  - `tests/eval/run_eval.py`:`_compile()` 双契约分发(CompileClient.compile_files / 后端 compile(files)),
+    评估级 MockCompiler 直调路径适配新协议。
+
+### 测试
+
+- 新增 11 个多文件单测:resolved_files 两态、mock 规则跨文件命中(坏代码放第二个文件)、
+  文件名校验 5 种非法名 → 400(后端不被调用)、重复名 → 400、files/code 皆空 → 400、
+  server files 载荷往返(错误来自第二个文件)、client compile_files 往返、msbuild 多文件
+  写盘 + csproj 多 Compile Include(单文件仍一条)、直调后端路径穿越名 → ValueError;
+  全量回归 268 passed(含既有单文件全部用例原样通过)。
+
+---
+
 ## v1.16.0 — 2026-08-09(kingdee-plugin-agent:编译服务 Windows 部署全配置化 —— 零硬编码路径)
 
 ### 变更

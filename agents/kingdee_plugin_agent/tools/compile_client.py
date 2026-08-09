@@ -44,9 +44,14 @@ class CompileClient:
             # "无 DLL"跳过验证(优雅降级,不把 w5 节点打崩)
             return ""
 
-    def compile(self, code: str, project_name: str) -> CompileResult:
+    def compile_files(self, files: list[tuple[str, str]], project_name: str) -> CompileResult:
+        """多文件编译:files = [(文件名, 源码), ...] → POST /compile(files 载荷)。
+
+        服务端响应形态不变(仍 success/errors/dll_path/raw_output)。
+        """
         r = self.session.post(f"{self.base_url}/compile",
-                              json={"code": code, "project_name": project_name})
+                              json={"files": [{"name": n, "code": c} for n, c in files],
+                                    "project_name": project_name})
         if r.status_code == 503:
             raise CompileUnavailableError(r.json().get("detail", "compiler unavailable"))
         data = r.json()
@@ -57,6 +62,10 @@ class CompileClient:
         if result.success and data.get("dll_path"):
             result.dll_path = self._fetch_dll(project_name)
         return result
+
+    def compile(self, code: str, project_name: str) -> CompileResult:
+        """单文件编译(旧形态,等价 files=[("Plugin.cs", code)])。"""
+        return self.compile_files([("Plugin.cs", code)], project_name)
 
 
 def compile_client_from_env() -> CompileClient:

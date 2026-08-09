@@ -1,8 +1,12 @@
-"""mock 编译后端:按预设规则表命中错误签名(开发/CI 用,不当质量门)。"""
+"""mock 编译后端:按预设规则表命中错误签名(开发/CI 用,不当质量门)。
+
+规则匹配对象 = **全部文件源码拼接**(多文件项目任一文件命中规则即报错,
+行为与单文件一致);错误条目的 file 字段来自规则本身(不追实际命中文件)。
+"""
 import re
 from pathlib import Path
 from compile_service.backends.protocol import CompilerBackend
-from compile_service.models import CompileError, CompileResult
+from compile_service.models import CompileFile, CompileError, CompileResult
 
 DEFAULT_MOCK_RULES = [
     {"code": "CS0103", "pattern": r"xxx\s*\(", "file": "Plugin.cs", "line": 1, "message": "The name 'xxx' does not exist in the current context"},
@@ -18,7 +22,8 @@ class MockCompiler(CompilerBackend):
             import json
             self.rules = json.loads(rule_file.read_text())
 
-    def compile(self, code: str, project_name: str) -> CompileResult:
+    def compile(self, files: list[CompileFile], project_name: str) -> CompileResult:
+        code = "\n".join(f.code for f in files)  # 拼接全部文件源码,规则跨文件命中
         errors = []
         for rule in self.rules:
             if re.search(rule["pattern"], code):

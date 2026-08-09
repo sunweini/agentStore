@@ -21,16 +21,27 @@ from pydantic import BaseModel
 from compile_service.backends.mock import MockCompiler
 from compile_service.backends.msbuild import MsbuildCompiler
 from compile_service.backends.protocol import CompilerBackend
-from compile_service.models import CompileUnavailableError
+from compile_service.models import CompileFile, CompileUnavailableError, resolved_files
 
 
 class CompileRequest(BaseModel):
-    code: str
+    """编译请求:files(多文件,新)与 code(单文件,旧)二选一。
+
+    - files: [{name, code}, ...] 多文件项目编译(每个 name 需过 _FILE_NAME_RE 白名单)
+    - code:  旧单文件形态,等价 files=[{name: "Plugin.cs", code}]
+    两者都空 → 400;files 存在时 code 可缺省。
+    """
+    files: list[CompileFile] | None = None
+    code: str | None = None
     project_name: str
 
 
 #: project_name 白名单(与 ArtifactStore 同源,防 DLL 下载路径穿越)
 _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+#: 源文件名白名单:仅叶子名(无目录分隔符 → 防路径穿越写 tmp 之外/覆盖 csproj),
+#: 首字符字母数字下划线(防 - 开头被当 msbuild 开关),仅 .cs 扩展(防 csproj 注入)
+_FILE_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.cs$")
 
 #: REFS_DIR 缺省:代码相对 compile_service/build/references(Windows 原生部署与容器内 /app 挂载均可用;
 #: 容器镜像 Dockerfile 显式 ENV REFS_DIR=/app/references 保持容器布局不变)
@@ -51,8 +62,19 @@ def create_app(backend) -> FastAPI:
         # 不校验 = 写侧路径穿越(如 ../../references 可往任意目录写文件)。
         if not _PROJECT_NAME_RE.match(req.project_name):
             raise HTTPException(400, f"非法 project_name: {req.project_name!r}")
+        if not req.files and not req.code:
+            raise HTTPException(400, "files 与 code 至少提供一个")
+        files = resolved_files(req)
+        # 文件名校验:白名单(防 ../ 路径穿越、防 - 开头开关注入、防非 .cs 覆盖 csproj)+ 去重
+        seen: set[str] = set()
+        for f in files:
+            if not _FILE_NAME_RE.match(f.name):
+                raise HTTPException(400, f"非法文件名: {f.name!r}")
+            if f.name in seen:
+                raise HTTPException(400, f"重复文件名: {f.name!r}")
+            seen.add(f.name)
         try:
-            result = backend.compile(code=req.code, project_name=req.project_name)
+            result = backend.compile(files=files, project_name=req.project_name)
         except CompileUnavailableError as e:
             return JSONResponse(status_code=503, content={"detail": str(e)})
         return {

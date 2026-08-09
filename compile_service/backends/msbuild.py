@@ -17,10 +17,11 @@ mock 后端无产出 → dll_path 为空。
 """
 import subprocess
 import tempfile
+import xml.sax.saxutils
 from pathlib import Path
 from compile_service.backends.protocol import CompilerBackend
 from compile_service.error_parser import parse_compile_output
-from compile_service.models import CompileResult, CompileUnavailableError
+from compile_service.models import CompileFile, CompileResult, CompileUnavailableError
 
 # .NET Framework 自带 MSBuild 探测路径(无 VS 环境的**最后兜底**;可用 FRAMEWORK_MSBUILD_PATH 环境变量覆盖)
 _FRAMEWORK_MSBUILD = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe"
@@ -53,7 +54,7 @@ _CSPROJ_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
 {references}
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Plugin.cs" />
+{compiles}
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\\Microsoft.CSharp.targets" />
 </Project>
@@ -93,16 +94,27 @@ class MsbuildCompiler(CompilerBackend):
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else _DEFAULT_ARTIFACT_DIR
         self.target_framework = target_framework
 
-    def compile(self, code: str, project_name: str) -> CompileResult:
+    def compile(self, files: list[CompileFile], project_name: str) -> CompileResult:
+        if not files:
+            raise ValueError("至少需要一个源文件")
         with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "Plugin.cs"
-            src.write_text(code, encoding="utf-8")
-            csproj = Path(tmp) / "Plugin.csproj"
+            root = Path(tmp)
+            for f in files:
+                # 纵深防御:名称必须落在 tmp 内(server 层白名单已挡,直调后端也不能逃逸)
+                if Path(f.name).name != f.name or not f.name.endswith(".cs"):
+                    raise ValueError(f"非法文件名: {f.name!r}")
+                (root / f.name).write_text(f.code, encoding="utf-8")
+            csproj = root / "Plugin.csproj"
             refs = "".join(
                 f'    <Reference Include="{d.stem}"><HintPath>{d}</HintPath></Reference>'
                 for d in self.reference_dlls)
+            # csproj <Compile Include> 每文件一条(单文件 = 原行为)
+            compiles = "".join(
+                f'    <Compile Include="{xml.sax.saxutils.escape(f.name)}" />\n'
+                for f in files).rstrip("\n")
             csproj.write_text(
-                _CSPROJ_TEMPLATE.format(target_framework=self.target_framework, references=refs),
+                _CSPROJ_TEMPLATE.format(target_framework=self.target_framework,
+                                        references=refs, compiles=compiles),
                 encoding="utf-8")
             proc = subprocess.run(
                 [self.msbuild_path, str(csproj), "/nologo", "/v:minimal"],

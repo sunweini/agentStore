@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from compile_service.backends.mock import MockCompiler
+from compile_service.models import CompileFile
 
 from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState
 from agents.kingdee_plugin_agent.graph.workers.w3_generate import GenerateWorker
@@ -48,6 +49,18 @@ def _design_doc(case: dict) -> str:
         f"- 字段: {case['field']}\n"
         f"- 预期触发: {case['expected_trigger']}\n"
     )
+
+
+def _compile(compile_client, code: str, project_name: str):
+    """兼容两种编译客户端契约(多文件协议后统一):
+
+    - CompileClient(agent 侧):有 compile_files → 走单文件委托 compile(code, project_name)
+    - CompilerBackend(评估级 MockCompiler):compile(files, project_name) 新协议
+    """
+    if hasattr(compile_client, "compile_files"):
+        return compile_client.compile(code, project_name)
+    return compile_client.compile(files=[CompileFile(name="Plugin.cs", code=code)],
+                                  project_name=project_name)
 
 
 def _trigger_ok(case: dict, code: str) -> bool:
@@ -92,7 +105,7 @@ def run_eval(llm, store: ArtifactStore, cases_dir: Path, compile_client, rag=Non
             if not code.strip():
                 compiled, errors = False, ["CS9991: 生成代码为空"]
             else:
-                cr = compile_client.compile(code=code, project_name=case_id)
+                cr = _compile(compile_client, code, case_id)
                 compiled, errors = cr.success, [e.code for e in cr.errors]
             trigger_ok = _trigger_ok(case, code)
         except Exception as e:  # 单个 case 异常按失败记录,不中断整个 eval

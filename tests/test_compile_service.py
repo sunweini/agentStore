@@ -55,17 +55,19 @@ def test_parse_localized_mixed():
     assert result.errors[1].code == "CS0234"
 
 from compile_service.backends.mock import MockCompiler
+from compile_service.models import CompileFile
 
 def test_mock_compiler_hits_rule():
     mc = MockCompiler(rule_file=None)
     code = "public class P { public void M() { xxx(); } }"  # 命中 CS0103 规则
-    result = mc.compile(code=code, project_name="Test")
+    result = mc.compile(files=[CompileFile(name="Plugin.cs", code=code)], project_name="Test")
     assert result.success is False
     assert result.errors[0].code == "CS0103"
 
 def test_mock_compiler_clean_code_passes():
     mc = MockCompiler(rule_file=None)
-    result = mc.compile(code="// 无规则命中", project_name="Test")
+    result = mc.compile(files=[CompileFile(name="Plugin.cs", code="// 无规则命中")],
+                        project_name="Test")
     assert result.success is True
 
 from fastapi.testclient import TestClient
@@ -88,7 +90,7 @@ def test_compile_endpoint():
 def test_compile_endpoint_reports_dll_path():
     """/compile 响应带 dll_path(后端产出);mock 后端无产出 → 空串。"""
     class WithDll:
-        def compile(self, code, project_name):
+        def compile(self, files, project_name):
             return CompileResult(success=True, raw_output="", duration_ms=0,
                                  errors=[], dll_path="/artifacts/T/Plugin.dll")
     client = TestClient(create_app(backend=WithDll()))
@@ -134,7 +136,7 @@ def test_dll_project_name_whitelist():
 
 def test_compile_unavailable_returns_503():
     class DownBackend:
-        def compile(self, code, project_name):
+        def compile(self, files, project_name):
             raise CompileUnavailableError("compiler down")
     client = TestClient(create_app(backend=DownBackend()))
     r = client.post("/compile", json={"code": "x", "project_name": "T"})
@@ -245,7 +247,8 @@ def test_msbuild_nonzero_returncode_is_failure(monkeypatch):
         stderr = ""
     monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", lambda *a, **k: FakeProc())
     mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
-    result = mc.compile(code="public class P {}", project_name="T")
+    result = mc.compile(files=[CompileFile(name="Plugin.cs", code="public class P {}")],
+                        project_name="T")
     assert result.success is False
 
 def test_msbuild_zero_returncode_success_passes(monkeypatch):
@@ -255,7 +258,8 @@ def test_msbuild_zero_returncode_success_passes(monkeypatch):
         stderr = ""
     monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", lambda *a, **k: FakeProc())
     mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
-    result = mc.compile(code="public class P {}", project_name="T")
+    result = mc.compile(files=[CompileFile(name="Plugin.cs", code="public class P {}")],
+                        project_name="T")
     assert result.success is True
 
 def test_msbuild_zero_returncode_with_errors_still_fails(monkeypatch):
@@ -266,7 +270,7 @@ def test_msbuild_zero_returncode_with_errors_still_fails(monkeypatch):
         stderr = ""
     monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", lambda *a, **k: FakeProc())
     mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
-    result = mc.compile(code="x", project_name="T")
+    result = mc.compile(files=[CompileFile(name="Plugin.cs", code="x")], project_name="T")
     assert result.success is False
     assert result.errors[0].code == "CS0103"
 
@@ -314,7 +318,7 @@ def test_round_trip_clean_code_succeeds():
 
 def test_round_trip_unavailable_raises():
     class DownBackend:
-        def compile(self, code, project_name):
+        def compile(self, files, project_name):
             raise CompileUnavailableError("compiler down")
     client = _round_trip_client(DownBackend())
     with pytest.raises(CompileUnavailableError):
@@ -387,3 +391,146 @@ def test_backend_from_env_artifact_dir_env(monkeypatch, tmp_path):
     backend = _backend_from_env()
     assert isinstance(backend, MsbuildCompiler)
     assert backend.artifact_dir == (tmp_path / "artifacts")
+
+# --- 多文件编译(CompileFile + resolved_files + 名称白名单 + 客户端 compile_files) ---
+from compile_service.models import CompileFile, resolved_files
+
+def test_resolved_files_defaults_to_single_plugin_cs():
+    """files 缺省 → 退回单文件 Plugin.cs(code 兼容旧请求)。"""
+    class Req:
+        files = None
+        code = "class X {}"
+    files = resolved_files(Req())
+    assert len(files) == 1
+    assert files[0].name == "Plugin.cs"
+    assert files[0].code == "class X {}"
+
+def test_resolved_files_uses_explicit_files():
+    class Req:
+        files = [CompileFile(name="A.cs", code="1"), CompileFile(name="B.cs", code="2")]
+        code = None
+    files = resolved_files(Req())
+    assert [f.name for f in files] == ["A.cs", "B.cs"]
+
+def test_mock_multi_file_rule_hits_across_files():
+    """规则命中对象 = 全部文件源码拼接:坏代码放第二个文件也要报错(file 字段来自规则)。"""
+    mc = MockCompiler()
+    result = mc.compile(files=[
+        CompileFile(name="Plugin.cs", code="public class Main { public void Run() { Helper.H(); } }"),
+        CompileFile(name="Helper.cs", code="public class Helper { public static void H() { xxx(); } }"),
+    ], project_name="T")
+    assert result.success is False
+    assert result.errors[0].code == "CS0103"
+    assert result.errors[0].file == "Plugin.cs"  # 规则 file 字段,不追实际命中文件
+
+def test_mock_multi_file_clean_passes():
+    mc = MockCompiler()
+    result = mc.compile(files=[
+        CompileFile(name="Plugin.cs", code="public class Main { public void Run() {} }"),
+        CompileFile(name="Helper.cs", code="public class Helper {}"),
+    ], project_name="T")
+    assert result.success is True
+    assert result.errors == []
+
+def test_compile_rejects_bad_file_names():
+    """文件名校验:../ 穿越 / 子目录 / 非 .cs → 400,后端不被调用。"""
+    from compile_service.server import _FILE_NAME_RE
+    assert _FILE_NAME_RE.match("Plugin.cs") and _FILE_NAME_RE.match("A1_b.Cs2.cs")
+    for bad in ("../evil.cs", "sub/Plugin.cs", "Plugin.csproj", "plugin", "-x.cs"):
+        assert not _FILE_NAME_RE.match(bad), bad
+    calls = []
+    class Recorder:
+        def compile(self, files, project_name):
+            calls.append(files)
+            return CompileResult(success=True, raw_output="", duration_ms=0)
+    client = TestClient(create_app(backend=Recorder()))
+    for bad in ("../evil.cs", "sub/Plugin.cs", "Plugin.csproj", "-x.cs"):
+        r = client.post("/compile", json={"files": [{"name": bad, "code": "x"}],
+                                          "project_name": "T"})
+        assert r.status_code == 400, bad
+    assert calls == []  # 校验在 backend.compile 之前
+
+def test_compile_rejects_duplicate_file_names():
+    client = TestClient(create_app(backend=MockCompiler()))
+    r = client.post("/compile", json={"files": [
+        {"name": "Plugin.cs", "code": "a"}, {"name": "Plugin.cs", "code": "b"}],
+        "project_name": "T"})
+    assert r.status_code == 400
+    assert "重复" in r.json()["detail"]
+
+def test_compile_rejects_missing_code_and_files():
+    client = TestClient(create_app(backend=MockCompiler()))
+    r = client.post("/compile", json={"project_name": "T"})
+    assert r.status_code == 400  # 两态皆空
+
+def test_compile_endpoint_multi_file_round_trip():
+    """server 往返:files 载荷 → 200,错误来自第二个文件内容(规则跨文件命中)。"""
+    client = TestClient(create_app(backend=MockCompiler()))
+    r = client.post("/compile", json={"files": [
+        {"name": "Plugin.cs", "code": "public class Main { public void Run() { Helper.H(); } }"},
+        {"name": "Helper.cs", "code": "public class Helper { public static void H() { xxx(); } }"},
+    ], "project_name": "T"})
+    assert r.status_code == 200
+    assert r.json()["success"] is False
+    assert r.json()["errors"][0]["code"] == "CS0103"
+
+def test_client_compile_files_round_trip():
+    """client compile_files → server(files 载荷)→ 解析为 CompileResult。"""
+    client = _round_trip_client(MockCompiler())
+    result = client.compile_files([
+        ("Plugin.cs", "public class Main { public void Run() { Helper.H(); } }"),
+        ("Helper.cs", "public class Helper { public static void H() { xxx(); } }"),
+    ], project_name="T")
+    assert result.success is False
+    assert isinstance(result.errors[0], CompileError)
+    assert result.errors[0].code == "CS0103"
+
+def test_client_compile_files_multi_clean_succeeds():
+    client = _round_trip_client(MockCompiler())
+    result = client.compile_files([("Plugin.cs", "class P {}"), ("Helper.cs", "class H {}")],
+                                  project_name="T")
+    assert result.success is True
+    assert result.errors == []
+
+def test_msbuild_multi_file_writes_all_and_csproj_includes_each(monkeypatch):
+    """真实后端(fake proc):每文件写入 tmp + csproj 每文件一条 Compile Include;单文件行为不变。"""
+    captured = {}
+    class FakeProc:
+        returncode = 0
+        stdout = "Build succeeded.\n0 Warning(s)\n0 Error(s)"
+        stderr = ""
+    def fake_run(args, **kw):
+        from pathlib import Path as P
+        csproj = P(args[1])
+        captured["csproj"] = csproj.read_text(encoding="utf-8")
+        captured["tmp_files"] = sorted(p.name for p in csproj.parent.iterdir())
+        return FakeProc()
+    monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", fake_run)
+    mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")],
+                         artifact_dir=Path("data/kingdee-compiled-test-mf"))
+    result = mc.compile(files=[
+        CompileFile(name="Plugin.cs", code="public class P {}"),
+        CompileFile(name="Helper.cs", code="public class Helper {}"),
+    ], project_name="T")
+    assert result.success is True
+    assert captured["tmp_files"] == ["Helper.cs", "Plugin.cs", "Plugin.csproj"]
+    assert '    <Compile Include="Plugin.cs" />' in captured["csproj"]
+    assert '    <Compile Include="Helper.cs" />' in captured["csproj"]
+    # 单文件(旧形态)→ 仍只有一条 Include
+    captured.clear()
+    result2 = mc.compile(files=[CompileFile(name="Plugin.cs", code="public class P {}")],
+                         project_name="T")
+    assert result2.success is True
+    assert captured["csproj"].count('<Compile Include=') == 1
+    assert '<Compile Include="Plugin.cs" />' in captured["csproj"]
+
+def test_msbuild_rejects_path_traversal_name_on_direct_call(monkeypatch):
+    """纵深防御:绕过 server 直调后端,../ 名 → ValueError,不落盘 tmp 之外。"""
+    def fake_run(args, **kw):
+        raise AssertionError("不应走到 msbuild")
+    monkeypatch.setattr("compile_service.backends.msbuild.subprocess.run", fake_run)
+    mc = MsbuildCompiler(msbuild_path="msbuild", reference_dlls=[Path("a.dll")])
+    with pytest.raises(ValueError):
+        mc.compile(files=[CompileFile(name="../evil.cs", code="x")], project_name="T")
+    with pytest.raises(ValueError):
+        mc.compile(files=[], project_name="T")  # 空列表也拒绝
