@@ -120,7 +120,7 @@ rem set FRAMEWORK_MSBUILD_PATH=D:\Windows\Microsoft.NET\Framework64\v4.0.30319\M
 rem COMPILE_ARTIFACT_DIR 可选:编译产物 DLL 留存目录(缺省 仓库根\data\kingdee-compiled,代码相对)
 rem set COMPILE_ARTIFACT_DIR=%~dp0..\data\kingdee-compiled
 
-python -m uvicorn compile_service.server:create_factory --host 0.0.0.0 --port 8000 >> "%~dp0..\uv.log" 2>&1
+python -m uvicorn compile_service.server:create_factory --factory --host 0.0.0.0 --port 8000 >> "%~dp0..\uv.log" 2>&1
 ```
 
 启动:
