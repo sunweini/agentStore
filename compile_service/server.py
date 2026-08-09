@@ -79,15 +79,20 @@ def create_app(backend) -> FastAPI:
 
 
 def _backend_from_env() -> CompilerBackend:
-    """按环境变量选后端:COMPILE_SERVICE_REQUIRES_DLLS=1 → 真实 msbuild(缺 DLL 构造即抛),否则 mock。"""
+    """按环境变量选后端:COMPILE_SERVICE_REQUIRES_DLLS=1 → 真实 msbuild(缺 DLL 构造即抛),否则 mock。
+
+    MSBUILD_PATH 缺省走 default_msbuild_path() 探测(PATH 的 msbuild → Framework 自带兜底,
+    兼容无 VS 环境);TARGET_FRAMEWORK 可配编译目标(默认 v4.8,需 Developer Pack 参考程序集)。
+    """
     if os.getenv("COMPILE_SERVICE_REQUIRES_DLLS") == "1":
         # 从 REFS_DIR 目录 glob *.dll(此前只读 REFERENCE_DLLS 环境变量,容器内从未设置 → 真实后端永远无法启动)。
         # 目录缺失/为空 → glob 得空列表 → MsbuildCompiler 构造抛 CompileUnavailableError(设计行为,标记"DLL 未到位")。
         refs_dir = Path(os.getenv("REFS_DIR", "/app/references"))
         reference_dlls = [p for p in refs_dir.glob("*.dll")]
         return MsbuildCompiler(
-            msbuild_path=os.getenv("MSBUILD_PATH", "msbuild"),
+            msbuild_path=os.getenv("MSBUILD_PATH") or None,
             reference_dlls=reference_dlls,
+            target_framework=os.getenv("TARGET_FRAMEWORK", "v4.8"),
         )
     return MockCompiler()
 
