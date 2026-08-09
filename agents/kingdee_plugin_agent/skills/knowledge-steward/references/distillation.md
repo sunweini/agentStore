@@ -17,11 +17,24 @@
 - `修法`:可复现的修复配方 —— 改哪个文件、加什么引用、对齐什么签名,
   **"待验证"不是修法**。
 
+### 验证字段(proposed 态必填)
+
+proposed 条目追加 `验证:` 字段:
+
+- **复现方式**:如"真实编译环境复现 CS0246 后按修法修复通过";
+- 或**人工确认人**:如"由 XX 工程师审阅确认";
+
+种子条目为 verified 基线,无需携带;verify 翻转后字段保留,作为追溯记录。
+
+**想不出验证路径 → 这条不沉淀**:无法复现、无人能确认的观察(一次性错误、
+无法归因的现象)永远停在 proposed,检索只添噪音 —— 沉淀了就是污染。
+
 ### 好例
 
 ```
 [CS0246] 命名空间或类型找不到(缺 Kingdee.BOS 引用) 修复:csproj 加 Reference 到 Kingdee.BOS.dll
 [CS0506] 不是重写,基类中不存在该成员(事件签名不匹配基类) 修复:核对基类事件签名并完全匹配(如 OnLoad(EventArgs e) / AfterDoOperation(AfterDoOperationEventArgs e)),模板 templates/<type>/template.cs 有基准
+[CS0246] 命名空间或类型找不到(缺 K3 Core 引用) 修复:引用 Kingdee.K3.Core.dll 验证:真实编译环境复现 CS0246 后补 K3 Core 引用,重编译通过
 ```
 
 可复现判据:错误码 + message 稳定特征 + 修法三要素齐全;同场景重犯时能命中。
@@ -47,6 +60,13 @@
 ```
 
 - 一次性错误 → 不沉淀(无根因链,沉淀了只污染检索)。
+
+```
+[CS0234] 命名空间中不存在该类型 修复:可能是命名空间写错,待确认 验证:无
+```
+
+- 无验证路径 → 不沉淀:无法复现、无人确认,永远停在 proposed,检索只添噪音;
+  想不出验证字段填什么,这条就先不要沉淀。
 
 ## 去重边界
 
@@ -77,6 +97,9 @@ proposed 可翻转 verified 的任一条件(满足其一即可):
 1. **复现验证**:真实编译环境复现同 code+message,按条目修法修复成功;
 2. **人工确认**:工程师审阅后确认根因链与修法正确;
 3. 不确定 → 保持 proposed(检索时标注 unverified,仅供参照)。
+
+propose 时填的验证字段 = review 对照的作业清单:翻转前照字段复现或找字段
+写明的确认人确认;验证字段对不上 → 该条目还不到 verify 时候。
 
 verify 只翻转元数据 status(文档与向量不动);归档(rejected/archived)条目
 不进 search_related 检索(ExperienceStore 只返回 proposed/verified)。

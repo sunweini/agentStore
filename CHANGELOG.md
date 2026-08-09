@@ -5,6 +5,34 @@
 
 ---
 
+## v1.20.0 — 2026-08-10(kingdee-plugin-agent:skill 评估改进 —— 禁编造纪律强化 + verify 建议必填)
+
+### 文档
+
+- **code-generator 强化「禁止编造 API(签名必须有来源)」**(skill-creator 评估
+  发现:无 skill 时 LLM 编造 InvServiceHelper.QueryInvQty / InvQueryParam /
+  InvQueryResult.AvailableQty 等看似真实的 API,编译必挂):
+  - 新增坏例/好例对比:坏例 = 编造的 API 调用(带看似真实的参数/返回类型
+    注释);好例 = 显式 TODO 骨架 + return 默认值 + 注释"签名未在元数据/
+    guide 确认,禁止编造";
+  - 明确标准:库存查询/服务调用等外部 API,签名必须有来源(guide 检索命中/
+    元数据确认/模板);无来源一律 TODO 占位,禁止凭记忆补全;
+  - 说明为什么:编造 API 编译必挂,烧掉整条编译-修复循环(吃 w5 轮次与返工
+    预算);TODO 占位编译通过,由后续元数据接线补全;
+  - references/bill.md 补「服务调用不编造」要点与自检项;loader 摘要同步
+    强化(无来源外部 API 一律 TODO 占位,禁止编造)。
+- **knowledge-steward 强化 verify 建议必填**(评估发现:无 skill 蒸馏无
+  proposed/verified 两态纪律):
+  - 沉淀条目格式增加验证字段:proposed 态必填 —— 复现方式或人工确认人;
+  - 明确无 verify 路径的沉淀不要写(一次性/无法复现的观察不沉淀);
+  - 解释为什么:proposed 无 verify 路径 = 污染风险(幻觉修复被当知识),
+    验证建议是防污染的收口(propose 时填的验证字段 = 后续 review 的作业清单);
+  - references/distillation.md 条目模板/好例坏例/判据同步;loader 摘要补
+    "proposed 必带验证建议"。
+- 全量测试:272 全绿(契约断言短语未变,仅内容增强)。
+
+---
+
 ## v1.19.0 — 2026-08-10(kingdee-plugin-agent:环境类错误升级 BLOCKED + w5 方法论摘要兜底)
 
 ### 行为变更

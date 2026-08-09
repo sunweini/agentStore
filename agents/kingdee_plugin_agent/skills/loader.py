@@ -46,7 +46,8 @@ _AVAILABLE_SKILLS = {
     "code-generator": (
         "金蝶插件 C# 代码生成方法论(w3):模板优先(templates/<type>/template.cs"
         "骨架不变,业务只填 {{BUSINESS_LOGIC}})、指南参数化(字段/操作/API 签名"
-        "必须真实)、冲突以模板为准(注释标注)、占位符清零,输出可编译 Plugin.cs"
+        "必须真实,无来源外部 API 一律 TODO 占位,禁止编造)、冲突以模板为准"
+        "(注释标注)、占位符清零,输出可编译 Plugin.cs"
     ),
     "code-reviewer": (
         "金蝶插件代码审查方法论(w4):规范库整库逐条对照 + API 抽查(事件签名/"
@@ -62,7 +63,8 @@ _AVAILABLE_SKILLS = {
     ),
     "knowledge-steward": (
         "金蝶知识库全生命周期方法论(w7 沉淀 + 人工维护 + 检索路由):沉淀标准"
-        "(可复现错误模式/条目格式/签名去重/proposed→verified/不阻塞纪律)+"
+        "(可复现错误模式/条目格式/proposed 必带验证建议/签名去重/"
+        "proposed→verified/不阻塞纪律)+"
         "维护手册(种子增补幂等/文档导入/规范库合并 8k 预算超限转检索/定期 review)"
         "+ 检索路由速查表(api_ref/guide/experience × w2-w5,bm25_weight 0.7 约定、"
         "L2 低=好 vs RRF 高=好的分数方向);w7 为确定性代码,本文供人工/未来 LLM 化参照"

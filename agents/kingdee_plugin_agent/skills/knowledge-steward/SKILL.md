@@ -32,18 +32,23 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 1. **判断什么值得沉淀**(标准,当前由人工/未来 LLM 执行;w7 代码暂全量 proposed):
    - **沉淀**:可复现的错误模式 —— 有明确 code+message 特征、根因链清晰、
      修复配方可复用(如 CS0246 缺 Kingdee.BOS 引用 → csproj 加 Reference);
-   - **不沉淀**:一次性错误(环境抽风、网络抖动、纯上下文偶发)与无法归因的
-     错误 —— 沉淀了只会污染检索;
+   - **不沉淀**:一次性错误(环境抽风、网络抖动、纯上下文偶发)、无法归因的
+     错误、想不出验证路径的观察 —— 沉淀了只会污染检索(无法验证 = 永远停在
+     proposed = 检索噪音);
    - 编译错误类判据:有明确错误码(CSxxxx)且 message 呈现稳定特征 → 可沉淀;
      错误码 + 根因 = 修复配方的核心索引。
-2. **条目格式**:`[code] message 修复:fix`(与种子/w7 现有格式统一,
-   见 references/distillation.md 条目模板与好例/坏例对比)。
+2. **条目格式**:`[code] message 修复:fix`,proposed 态**追加 `验证:` 字段且
+   必填** —— 复现方式("真实编译环境复现 CS0246 后按修法修复通过")或人工
+   确认人("由 XX 工程师审阅确认")。种子条目为 verified 基线,无需携带;
+   完整条目模板与好例/坏例对比见 references/distillation.md。
 3. **签名去重**:signature = `code|file_pattern`。同签名已存在 → 不重复入库
    (propose 幂等,直接返回既有签名);同 code 不同 file_pattern 是两条独立条目;
    验收拒绝走同通道且 file_pattern 必须含 sha256 摘要(防全部拒绝共享同一签名)。
 4. **proposed → verified**:沉淀一律先 proposed 态(带 source="w7"),**人工或
    复现验证**后才 verify(仅翻转元数据 status,文档与向量不动)。proposed 条目
-   检索时标注 confidence="unverified",仅供参考、自核后采用。
+   检索时标注 confidence="unverified",仅供参考、自核后采用。propose 时填的
+   **验证字段 = 后续 review 的作业清单**:翻转前照字段复现,或找字段写明的
+   确认人确认;验证字段对不上 → 该条目还不到 verify 时候。
 5. **不阻塞纪律**:沉淀失败(经验库不可用/写入异常)不得阻塞交付 —— 上报
    DONE_WITH_CONCERNS 并记待沉淀队列,后续人工补录。
 
@@ -92,6 +97,10 @@ references/(distillation.md 沉淀质量标准 + maintenance.md 维护操作手�
 
 - **proposed 不是终点**:只 propose 不 verify,经验库会积累大量 unverified 噪音;
   定期 review 把验证过的条目翻转 verified。
+- **proposed 无验证路径 = 污染源**:没有复现方式或确认人的条目永远无法翻转
+  verified,却仍以 unverified 姿态进检索、被自核后采用 —— 幻觉修复/未验证
+  观察被当知识用,是经验库最大的污染风险。propose 时就写清"怎么证明它是对的"
+  (验证字段必填),验证建议就是防污染的收口。
 - **fix 占位不是修法**:w7 沉淀的 fix 是占位文案("w7 沉淀,待人工验证"),
   verify 时补全真实修法,否则条目只有"症状"没有"配方"。
 - **去重吞并风险**:恒空 file_pattern 会让同 code 所有条目共享同一签名
