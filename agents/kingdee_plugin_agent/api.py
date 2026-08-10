@@ -14,8 +14,10 @@ v1 约定:
   - 任务存储 = 内存 dict(app.state.tasks,进程内有效;重启丢失,后续换持久化存储)
   - 每任务独立 build_graph + MemorySaver checkpointer(thread_id 唯一)
   - 图在后台线程执行(与 C11 CLI 同一交互模型):interrupt 挂起 → SSE 推送 → answers 恢复
-  - 环境硬门槛:KD_BASE_URL + KD_USERNAME + KD_PASSWORD + KD_DATA_CENTER 4 项全校验,
-    任一缺失 → 503 并点明缺项(C11 复审 carry-over,不只查 KD_BASE_URL)
+  - 并发闸门:同时运行任务 ≤ KINGDEE_MAX_CONCURRENT(默认 4),占满 → 429「并发任务数已达上限」
+  - 环境硬门槛:按 payload["env"] 分套取凭证(KD_*_<ENV>,空 = 默认 KD_*),
+    KD_BASE_URL + KD_USERNAME + KD_PASSWORD + KD_DATA_CENTER 4 项全校验,
+    任一缺失 → 503 并点明带后缀缺项(C11 复审 carry-over,不只查 KD_BASE_URL)
 
 apikey 来源(优先级):create_app(api_key=...) 显式参数 > 环境 KINGDEE_API_KEY >
 API_KEYS_JSON 首个 key(与 sentiment auth.py 同源);未配置有效 key 时默认拒绝(401)。
@@ -39,12 +41,18 @@ from sse_starlette.sse import EventSourceResponse
 
 from agents.kingdee_plugin_agent.agent import build_graph, default_recursion_limit
 from common import config
+from common.config import kingdee_env_vars
 from common.otel import init_otel
 
 logger = logging.getLogger(__name__)
 
-#: 环境硬门槛:金蝶环境 4 项全齐才放行建任务(缺任一项 → 503)
+#: 环境硬门槛:金蝶环境 4 项全齐才放行建任务(缺任一项 → 503);
+#: 仅查 4 项(KD_LCID 可选,不设门槛)。按 env 分套取(KD_*_<ENV>,空回落 KD_*)。
 _KD_ENV_VARS = ("KD_BASE_URL", "KD_USERNAME", "KD_PASSWORD", "KD_DATA_CENTER")
+#: 并发闸门:同时运行的任务数上限(默认 4,KINGDEE_MAX_CONCURRENT 可配)。
+#: acquire 发生在 create_task 请求处理线程(429 即时响应,不进后台线程)。
+MAX_CONCURRENT_TASKS = int(config.get_env("KINGDEE_MAX_CONCURRENT", "4"))
+_sem = threading.Semaphore(MAX_CONCURRENT_TASKS)
 #: answers 端点等待图进入 interrupt 挂起态的上限(秒);超时说明图仍在执行,409 让客户端重试
 _ANSWER_WAIT_S = 30
 #: 任务 id 长度(12 hex 可读,够 v1 单进程规模)
@@ -248,31 +256,35 @@ def _run_loop(handle: TaskHandle) -> None:
     注意:恢复命令只作为下一次 invoke 的局部输入,绝不写进 handle.state ——
     state 始终是 dict(全量快照 /state 与 SSE 随时可读,Command 瞬时态不可见)。
     """
-    invoke_input = handle.state           # 初始为需求 dict;挂起恢复后为 Command(resume=...)
-    while not handle.cancelled:
-        try:
-            result = handle.graph.invoke(invoke_input, handle.cfg)
-        except Exception as exc:
-            logger.exception("service=kingdee-plugin-agent event=graph_failed task_id=%s",
-                             handle.task_id)
-            handle._set_error(f"图执行失败: {exc}")
-            return
-        with handle._cond:
-            handle.state = result
-        handle._emit("todo", _todo_list(result))
-        interrupts = result.get("__interrupt__") or []
-        if not interrupts:
-            handle._set_done()
-            return
-        handle._set_interrupt(interrupts[0].value)
-        with handle._cond:
-            handle._cond.wait_for(lambda: handle._resume is not None or handle.cancelled)
-            if handle.cancelled:
+    try:
+        invoke_input = handle.state   # 初始为需求 dict;挂起恢复后为 Command(resume=...)
+        while not handle.cancelled:
+            try:
+                result = handle.graph.invoke(invoke_input, handle.cfg)
+            except Exception as exc:
+                logger.exception("service=kingdee-plugin-agent event=graph_failed task_id=%s",
+                                 handle.task_id)
+                handle._set_error(f"图执行失败: {exc}")
                 return
-            resume = handle._resume
-            handle._resume = None
-            handle.waiting = False
-        invoke_input = Command(resume=resume)
+            with handle._cond:
+                handle.state = result
+            handle._emit("todo", _todo_list(result))
+            interrupts = result.get("__interrupt__") or []
+            if not interrupts:
+                handle._set_done()
+                return
+            handle._set_interrupt(interrupts[0].value)
+            with handle._cond:
+                handle._cond.wait_for(lambda: handle._resume is not None or handle.cancelled)
+                if handle.cancelled:
+                    return
+                resume = handle._resume
+                handle._resume = None
+                handle.waiting = False
+            invoke_input = Command(resume=resume)
+    finally:
+        # 归还并发闸门配额(任务结束/失败/取消统一走这里,不泄漏信号量)
+        _sem.release()
 
 
 def create_app(api_key: str | None = None, *, graph_factory=None,
@@ -317,38 +329,52 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
 
     @app.post("/tasks")
     def create_task(payload: dict, x_api_key: str = Header(default="")):
-        """建任务:apikey 鉴权 → 环境硬门槛(KD_* 4 项)→ 后台线程启动图。"""
+        """建任务:apikey 鉴权 → 并发闸门(429)→ 环境硬门槛(KD_* 4 项按 env 分套,503)→ 后台线程启动图。
+
+        并发闸门:Semaphore 在这里 acquire(请求线程),占满立即 429,
+        不进后台线程(线程内 raise 到不了 FastAPI)。
+        """
         _check(x_api_key)
-        missing = [name for name in _KD_ENV_VARS if not config.get_env(name)]
-        if missing:
-            raise HTTPException(
-                503,
-                f"金蝶环境未配置完整,缺少: {', '.join(missing)};"
-                f"请配置全部 4 项({', '.join(_KD_ENV_VARS)})后再创建任务",
-            )
-        requirement = str(payload.get("requirement") or "").strip()
-        if not requirement:
-            raise HTTPException(400, "requirement 必填")
-        env_name = str(payload.get("env") or "test")
-        task_id = uuid.uuid4().hex[:_TASK_ID_LEN]
-        graph = graph_factory()
-        # thread_id 每任务唯一(隔离 checkpointer 会话);recursion_limit 按子任务
-        # 数预算(与 CLI 同:澄清期未知子任务数,按上限 10 给足)
-        cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
-               "recursion_limit": default_recursion_limit(10)}
-        # started_at: 任务创建时间戳,驱动全流程时间预算总闸(设计 §8)。
-        # 存于 state 而非 thread_id:挂起 resume 后 checkpointer 恢复同一份值,不重置。
-        state = {"requirement_spec": {"requirement": requirement,
-                                      "environment": env_name},
-                 "todo": [],
-                 # 目标环境名记录进 state.environment(冒烟/打包等节点可感知;
-                 # v1 单环境只记录,不做环境级差异化,见 agent CLAUDE.md 债务)
-                 "environment": {"env_name": env_name},
-                 "started_at": time.time()}
-        handle = TaskHandle(task_id, graph, cfg, state, experience=experience)
-        app.state.tasks[task_id] = handle
-        threading.Thread(target=_run_loop, args=(handle,), daemon=True).start()
-        return {"task_id": task_id, "status": "created"}
+        env_name = str(payload.get("env") or "")   # 空 = 默认环境(KD_* 5 项)
+        if not _sem.acquire(blocking=False):
+            raise HTTPException(429, "并发任务数已达上限,稍后重试")
+        try:
+            vars_ = kingdee_env_vars(env_name)
+            missing = [name for name in _KD_ENV_VARS if not vars_.get(name)]
+            if missing:
+                suffix = f"_{env_name.upper()}" if env_name else ""
+                raise HTTPException(
+                    503,
+                    f"金蝶环境未配置完整,缺少: "
+                    f"{', '.join(m + suffix for m in missing)};"
+                    f"请配置后再创建任务",
+                )
+            requirement = str(payload.get("requirement") or "").strip()
+            if not requirement:
+                raise HTTPException(400, "requirement 必填")
+            task_id = uuid.uuid4().hex[:_TASK_ID_LEN]
+            graph = graph_factory() if graph_factory else build_graph(env=env_name)
+            # thread_id 每任务唯一(隔离 checkpointer 会话);recursion_limit 按子任务
+            # 数预算(与 CLI 同:澄清期未知子任务数,按上限 10 给足)
+            cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
+                   "recursion_limit": default_recursion_limit(10)}
+            # started_at: 任务创建时间戳,驱动全流程时间预算总闸(设计 §8)。
+            # 存于 state 而非 thread_id:挂起 resume 后 checkpointer 恢复同一份值,不重置。
+            state = {"requirement_spec": {"requirement": requirement,
+                                          "environment": env_name},
+                     "todo": [],
+                     # 目标环境名记录进 state.environment(冒烟/打包等节点可感知;
+                     # v1 单环境只记录,不做环境级差异化,见 agent CLAUDE.md 债务)
+                     "environment": {"env_name": env_name},
+                     "started_at": time.time()}
+            handle = TaskHandle(task_id, graph, cfg, state, experience=experience)
+            app.state.tasks[task_id] = handle
+            threading.Thread(target=_run_loop, args=(handle,), daemon=True).start()
+            return {"task_id": task_id, "status": "created"}
+        except HTTPException:
+            # 校验失败(503/400):线程未启动,归还配额(成功路径由 _run_loop finally 释放)
+            _sem.release()
+            raise
 
     @app.get("/tasks/{task_id}/events")
     async def events(task_id: str, x_api_key: str = Header(default="")):

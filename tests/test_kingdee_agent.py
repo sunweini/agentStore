@@ -1842,6 +1842,35 @@ def test_cli_requires_env(monkeypatch, capsys):
     assert "环境" in out
 
 
+def test_cli_requires_env_per_env_suffix(monkeypatch, capsys):
+    """按 --env 分套校验:默认套齐但目标套缺 → 报错带 KD_BASE_URL_<ENV> 后缀(exit 1)。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")     # 默认套配了
+    code = run_cli(["给采购单审核加库存校验", "--env", "prod"])
+    assert code == 1                                             # 目标套未配 = 硬门槛退出
+    out = capsys.readouterr().out
+    assert "KD_BASE_URL_PROD" in out                             # 点明带后缀的缺项
+
+
+def test_cli_env_suffix_passes_and_builds_with_env(tmp_path, monkeypatch, capsys):
+    """目标套齐备(KD_*_<ENV>)→ 通过硬门槛;build_graph 收到 env=prod(注入图记录参数)。"""
+    from agents.kingdee_plugin_agent.cli import kingdee_env_vars
+    monkeypatch.setenv("KD_BASE_URL_PROD", "http://kd-prod:8080")
+    captured = {}
+
+    def _fake_build_graph(env=""):
+        captured["env"] = env
+        return build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                           compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                           output_dir=tmp_path)
+
+    monkeypatch.setattr(_cli, "build_graph", _fake_build_graph)
+    answers = iter(["SAL_SaleOrder", "确认"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert run_cli(["给采购单审核加库存校验", "--env", "prod"]) == 0
+    assert captured["env"] == "prod"                             # env 透传到 build_graph
+    assert kingdee_env_vars("prod")["KD_BASE_URL"] == "http://kd-prod:8080"
+
+
 def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
     """有环境(KD_BASE_URL)→ 交互澄清循环 → 确定性流水线跑完 → TodoList + 交付包,返回 0。
 
@@ -1849,14 +1878,14 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
     与 C10 图测试同一注入思路(只注入 LLM/外部服务,不 mock LangGraph 本身)。
     stdin 逐次喂澄清答案(1 个问题 + 1 次确认),capsys 校验各阶段输出。
     """
-    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")
+    monkeypatch.setenv("KD_BASE_URL_TEST", "http://kd-test:8080")   # 目标套(test)配齐
     answers = iter(["SAL_SaleOrder", "确认"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(
         _cli, "build_graph",
-        lambda: build_graph(llm=None, store=ArtifactStore(root=tmp_path),
-                            compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
-                            output_dir=tmp_path))
+        lambda env="": build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                                   compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                                   output_dir=tmp_path))
     code = run_cli(["给采购单审核加库存校验", "--env", "test"])
     out = capsys.readouterr().out
     assert code == 0                                  # 全流程跑完返回 0
@@ -1869,7 +1898,7 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
 
 def test_cli_env_recorded_in_initial_state(tmp_path, monkeypatch):
     """--env 消费(最小化):env 值进初始 state.environment["env_name"](节点可感知)。"""
-    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")
+    monkeypatch.setenv("KD_BASE_URL_PROD", "http://kd-prod:8080")   # 目标套(prod)配齐
     captured = {}
     real = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
                        compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
@@ -1883,13 +1912,14 @@ def test_cli_env_recorded_in_initial_state(tmp_path, monkeypatch):
                 captured["state"] = state
             return real.invoke(state, cfg)
 
-    monkeypatch.setattr(_cli, "build_graph", lambda: _SpyGraph())
+    monkeypatch.setattr(_cli, "build_graph", lambda env="": _SpyGraph())
     answers = iter(["SAL_SaleOrder", "确认"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     assert run_cli(["给采购单审核加库存校验", "--env", "prod"]) == 0
     assert captured["state"]["environment"] == {"env_name": "prod"}
 
 # ═══════════════════════════ C12 Web API(apikey + SSE + 澄清/验收)═══════════════════════════
+import threading
 import time as _time
 
 from fastapi import HTTPException
@@ -1902,10 +1932,15 @@ _KD_ENV = {"KD_BASE_URL": "http://kd-test:8080", "KD_USERNAME": "u",
 _HEADERS = {"X-API-Key": "k"}
 
 
-def _set_kd_env(monkeypatch):
-    """KD_* 4 项环境齐备(环境硬门槛需全量校验,C11 复审 carry-over)。"""
+def _set_kd_env(monkeypatch, env=""):
+    """KD_* 4 项环境齐备(环境硬门槛需全量校验,C11 复审 carry-over)。
+
+    env 空 = 默认环境(KD_*);非空 = 分套(KD_*_<ENV>),默认套不配 ——
+    Task 4 起硬门槛按 payload["env"] 分套取,默认套不回落。
+    """
+    suffix = f"_{env.upper()}" if env else ""
     for name, value in _KD_ENV.items():
-        monkeypatch.setenv(name, value)
+        monkeypatch.setenv(f"{name}{suffix}", value)
 
 
 def _det_graph_factory(tmp_path):
@@ -1915,10 +1950,11 @@ def _det_graph_factory(tmp_path):
                        output_dir=tmp_path)
 
 
-def _create_task(client, tmp_path, requirement="给采购单审核加库存校验"):
+def _create_task(client, tmp_path, requirement="给采购单审核加库存校验",
+                 env="test", headers=_HEADERS):
     """建任务(环境齐备 + 确定性图)→ 返回 task_id。"""
-    r = client.post("/tasks", json={"requirement": requirement, "env": "test"},
-                    headers=_HEADERS)
+    r = client.post("/tasks", json={"requirement": requirement, "env": env},
+                    headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["task_id"]
 
@@ -2027,20 +2063,60 @@ def test_acceptance_feed(monkeypatch):
 
 
 def test_api_env_gate_lists_all_missing_vars(monkeypatch):
-    """环境硬门槛:缺 KD_USERNAME/PASSWORD/DATA_CENTER 也要 503 并点明(C11 复审 carry-over)。"""
-    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")   # 只给 1 项
+    """环境硬门槛:缺 KD_* 任意一项 → 503 并点明全部缺项(只给 KD_BASE_URL 时 4 项缺 3)。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")   # 只给 1 项(默认套)
     client = TestClient(create_app(api_key="k"))
-    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+    r = client.post("/tasks", json={"requirement": "x"},        # env 空 = 默认套
                     headers=_HEADERS)
     assert r.status_code == 503
     detail = r.json()["detail"]
     for missing in ("KD_USERNAME", "KD_PASSWORD", "KD_DATA_CENTER"):
         assert missing in detail
+    assert "KD_BASE_URL" not in detail                          # 已配置项不点名
+
+
+def test_api_env_missing_503_points_suffix(monkeypatch):
+    """env 分套缺失 → 503 点明带后缀缺项(KD_*_PROD 未配,默认套不回落)。"""
+    import agents.kingdee_plugin_agent.api as api_mod
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")    # 默认套配全 4 项
+    monkeypatch.setenv("KD_USERNAME", "u")
+    monkeypatch.setenv("KD_PASSWORD", "p")
+    monkeypatch.setenv("KD_DATA_CENTER", "dc")
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: object()))
+    r = client.post("/tasks", json={"requirement": "x", "env": "prod"},
+                    headers=_HEADERS)
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    for missing in ("KD_BASE_URL_PROD", "KD_USERNAME_PROD",
+                    "KD_PASSWORD_PROD", "KD_DATA_CENTER_PROD"):
+        assert missing in detail
+    assert "KD_LCID_PROD" not in detail                          # LCID 可选,不设门槛
+
+
+def test_api_concurrency_limit_429(tmp_path, monkeypatch):
+    """并发任务数达上限 → 429「并发任务数已达上限」;释放配额后恢复可建。"""
+    import agents.kingdee_plugin_agent.api as api_mod
+    _set_kd_env(monkeypatch, env="test")
+    sem = threading.Semaphore(1)
+    sem.acquire()                                                # 占满配额
+    monkeypatch.setattr(api_mod, "_sem", sem)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code == 429
+    assert "并发任务数已达上限" in r.json()["detail"]
+    assert client.app.state.tasks == {}                          # 429 不建任务
+    sem.release()                                                # 配额释放 → 可建
+    tid = _create_task(client, tmp_path, requirement="x")
+    assert tid
+    _run_to_done(client, tid)                                    # 后台线程结束释放配额(防泄漏)
 
 
 def test_api_create_state_and_answers(tmp_path, monkeypatch):
     """建任务 → /state 可见澄清 interrupt → answers 恢复 → 全流程 done(确定性图)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2063,7 +2139,7 @@ def test_api_state_rejects_unknown_task():
 
 def test_api_answers_conflict_when_task_done(tmp_path, monkeypatch):
     """任务已结束再答题 → 409(不阻塞、不静默丢答案)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2075,7 +2151,7 @@ def test_api_answers_conflict_when_task_done(tmp_path, monkeypatch):
 
 def test_api_task_creation_sets_started_at(tmp_path, monkeypatch):
     """建任务即打时间戳:started_at 入初始 state,驱动全流程时间预算总闸(设计 §8)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2085,7 +2161,7 @@ def test_api_task_creation_sets_started_at(tmp_path, monkeypatch):
 
 def test_api_initial_state_environment_has_env_name(tmp_path, monkeypatch):
     """--env 消费(API):env 值进初始 state.environment["env_name"](节点可感知)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path, requirement="x")
@@ -2124,7 +2200,7 @@ def test_api_answers_ask_user_ok_after_confirmation():
 
 def test_api_sse_streams_progress(tmp_path, monkeypatch):
     """SSE:todo/interrupt/done 事件流 + 重放;任务结束后流自动关闭(可读到 EOF)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2169,7 +2245,7 @@ def _artifacts(rag) -> list[dict]:
 
 def test_api_acceptance_reject_feeds_w7(tmp_path, monkeypatch):
     """拒绝 + 原因 → 真实 w7 经验库入库(proposed 态);接受不新增;验收结论可查。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     from common.rag import ExperienceStore, RagClient
     rag = RagClient(data_dir=tmp_path / "rag")
     exp = ExperienceStore(rag)
@@ -2199,7 +2275,7 @@ def test_api_acceptance_reject_distinct_reasons_accumulate(tmp_path, monkeypatch
     旧实现签名恒为 "ARTIFACT|"(file_pattern 空),ExperienceStore 按签名去重会
     吞掉不同拒绝原因 —— 本测试用真实 ExperienceStore 验证累计与去重。
     """
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     from common.rag import ExperienceStore, RagClient
     rag = RagClient(data_dir=tmp_path / "rag")
     exp = ExperienceStore(rag)
@@ -2253,7 +2329,7 @@ def test_api_feedback_unknown_task_404():
 def test_api_feedback_feeds_experience(tmp_path, monkeypatch):
     """部署后行为错误上报 → 真实经验库 DEPLOY 通道入库(proposed 态);两个不同
     原因各自累计、相同原因去重;沉淀失败不阻塞反馈(never blocks)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     from common.rag import ExperienceStore, RagClient
     rag = RagClient(data_dir=tmp_path / "rag")
     exp = ExperienceStore(rag)

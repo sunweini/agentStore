@@ -22,7 +22,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 | 文件 | 职责 |
 |---|---|
 | [agent.py](agent.py) | 图构建入口:`build_graph()`(依赖全可注入,测试传 fake;缺省 MemorySaver checkpointer)+ `default_recursion_limit()`(100+20×子任务数) |
-| [cli.py](cli.py) | CLI 入口 `run_cli`:环境硬门槛(KD_BASE_URL)→ stdin 交互澄清循环 → TodoList 摘要 + 交付包路径 |
+| [cli.py](cli.py) | CLI 入口 `run_cli`:环境硬门槛(按 --env 分套查 KD_BASE_URL)→ stdin 交互澄清循环 → TodoList 摘要 + 交付包路径 |
 | [api.py](api.py) | Web 入口 `create_app()`:apikey 鉴权 + KD_* 4 项硬门槛(503)+ SSE 实时流 + 澄清应答 + 验收 + **反馈端点** `POST /tasks/{id}/feedback`(部署后行为错误手动上报 → 经验库 DEPLOY 通道,沉淀失败不阻塞反馈) |
 | [graph/state.py](graph/state.py) | 任务契约 TaskState/Subtask + 常量(GLOBAL_REWORK_BUDGET=3 / MAX_PARALLEL=3,todo 按 id reducer 合并) |
 | [graph/supervisor.py](graph/supervisor.py) | 主管节点:依赖拓扑/就绪批派发/返工预算唯一写者/终态判定(finish/fail) |
@@ -53,11 +53,11 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 
 - **langchain MCP 铁律**:开发前必须查 docs-langchain / reference-langchain MCP 确认 API 用法,禁止凭记忆写 API(见根 CLAUDE.md)。
 - **返工预算**:`GLOBAL_REWORK_BUDGET = 3`(总重新生成 ≤3 轮),超限 → fail,剩余子任务标记 failed;失败收尾(设计 §8)由 `w6_fail` 节点产出"未完成"包 `deliverable-failed-<ts>.zip`(部分产物 + compile_errors + 退回意见 + 原因,route 里 fail → w6_fail → END),CLI 输出 TodoList 摘要 + 该包路径;预算由主管统一扣减(worker 只上报 rework_events,不直写,防并行覆盖)。**子任务级上限(设计 §5.1)**:`Subtask.max_rework`(0 = 全局默认)与 `rework_count` —— 返工事件时 `agent.py::_advance_status` 先 rework_count+1,超过 max_rework(>0)→ 该子任务 failed 而非 needs_rework(环节级更早触发的闸门);返工轮次已实际发生仍照扣全局预算,两者叠加不抵消(全局 ≤3 轮是任务级最终防线)。
-- **并发上限**:`MAX_PARALLEL = 3`(send() 并行子任务 ≤3,防 DeepSeek 限流/超时风暴)。
+- **并发上限**:`MAX_PARALLEL = 3`(send() 并行子任务 ≤3,防 DeepSeek 限流/超时风暴);API 任务级并发闸门 `_sem`(默认 4,KINGDEE_MAX_CONCURRENT 可配)—— create_task 请求线程 acquire(占满 429「并发任务数已达上限,稍后重试」),校验失败(503/400)归还配额,后台线程 `_run_loop` finally release。
 - **编译轮次**:w5 循环编译至多 `MAX_COMPILE_ROUNDS = 5` 轮;编译服务不可用 → 报 BLOCKED,不算轮次不扣预算。
 - **时间预算(设计 §8)**:单轮编译 ≤120s(CompileClient timeout)、单任务编译阶段 ≤15min(5 轮 × 120s 天然 ≤10min,由 w5 内部覆盖);全流程 ≤30min 图级总闸(`PIPELINE_TIME_BUDGET=1800.0`):`started_at` 距今超限且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`;`started_at` 由 CLI/API 建任务时写入初始 state(存于 state 而非 thread_id,挂起 resume 不重置);0.0 = 未设置(旧状态兼容不判定)。
 - **需求版本冻结(设计 §8)**:spec 确认(`spec_confirmed`)即冻结,`spec_version=1` 盖章,requirement_spec 此后无任何写路径 —— w1 只在未确认时构建/修改 spec,确认后中途问题(ask_user)的回答只记 user_feedback;API answers 确认后仅接受 ask_user 类型 interrupt 的恢复(其余 409「需求已确认并冻结」,防回归);修改需求须开新任务;w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json`(可审计)。
-- **环境硬门槛**:无金蝶环境不进图 —— CLI 未配 KD_BASE_URL 直接退出;API 4 项缺失 503 并点明缺项;冒烟客户端未配置 → BLOCKED → failed(防无限重试循环)。
+- **环境硬门槛**:无金蝶环境不进图 —— CLI 按 `--env` 分套查(KD_*_<ENV>,空回落 KD_*)缺 KD_BASE_URL 直接退出;API 按 `payload["env"]` 分套查 4 项,缺失 503 并点明带后缀缺项;冒烟客户端未配置 → BLOCKED → failed(防无限重试循环)。
 - **知识沉淀两态**:w7 写入经验库走 proposed/verified 两态 + "code|file_pattern" 签名去重(防幻觉污染);验收拒绝原因同通道(proposed 态,sha256 摘要入签名,失败不阻塞验收)。
 - **interrupt 语义**:挂起节点 resume 时整体重跑,payload 必须由 state 确定性得出(不依赖 LLM 重算);恢复用 `Command(resume=answer)`。
 - **recursion_limit 是运行时 config 参数**,不是 compile 参数;按子任务数给足(100+20×n,澄清期按上限 10 算 —— 旧 50+10×n 在 n=10 时 150<实际需求 ~160,复合任务触发 GraphRecursionError)。
@@ -69,8 +69,6 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 ## v1 已知债务(上线前需决策)
 
 - **内存任务存储**:API 任务存于 `app.state.tasks`(进程内),重启即丢,无持久化/恢复。
-- **API 线程无并发上限**:每任务一个后台线程,无线程池/并发闸门,流量大时需限流。
 - **apikey 非 timing-safe**:`x_api_key != effective_key` 直接字符串比较,未用 `secrets.compare_digest`。
 - **msgpack 反序列化警告**:TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本时 dataclass 字段/嵌套 dict 需验证兼容(api.py `_subtask_dict` 已兼容 Subtask 实例/dict 两种形态)。
-- **`--env` 部分消费**:CLI/API 的 env 值进 `requirement_spec` + `state.environment["env_name"]`(节点可感知),未做环境级差异化处理(单环境 v1)。
-- **CLI 门控仅 KD_BASE_URL**:CLI 只校验 KD_BASE_URL(API 已全校验 4 项),单环境 v1 约定。
+- **`--env` 部分消费**:CLI/API 的 env 值进 `requirement_spec` + `state.environment["env_name"]` + 凭证分套取(`KD_*_<ENV>` 回落 `KD_*`),未做节点级环境差异化处理(单环境 v1)。
