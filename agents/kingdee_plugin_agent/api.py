@@ -11,16 +11,27 @@
   POST /tasks/{id}/feedback      部署后行为错误手动上报 → 原因喂经验库(DEPLOY 通道,设计 §12)
 
 v1 约定:
-  - 任务存储 = 内存 dict(app.state.tasks,进程内有效;重启丢失,后续换持久化存储)
-  - 每任务独立 build_graph + MemorySaver checkpointer(thread_id 唯一)
+  - 任务存储 = SQLite 持久化(重启恢复):checkpointer 用同步 SqliteSaver(共享连接,
+    check_same_thread=False + 内部锁,官方 docstring 确认线程安全 —— 同步版贴合
+    后台线程 graph.invoke 架构,AsyncSqliteSaver 需 ainvoke + asyncio.run 包装,不用);
+    tasks 元数据表(任务 id/env/status/created_at/requirement)驱动启动恢复
+  - 每任务独立 build_graph + 共享 SqliteSaver checkpointer(thread_id 每任务唯一)
   - 图在后台线程执行(与 C11 CLI 同一交互模型):interrupt 挂起 → SSE 推送 → answers 恢复
-  - 并发闸门:同时运行任务 ≤ KINGDEE_MAX_CONCURRENT(默认 4),占满 → 429「并发任务数已达上限」
+  - 并发闸门:同时运行任务 ≤ KINGDEE_MAX_CONCURRENT(默认 4),占满 → 429「并发任务数已达上限」;
+    恢复的任务阻塞 acquire(重启场景等待配额),_run_loop finally 统一 release 配对
   - 环境硬门槛:按 payload["env"] 分套取凭证(KD_*_<ENV>,空 = 默认 KD_*),
     KD_BASE_URL + KD_USERNAME + KD_PASSWORD + KD_DATA_CENTER 4 项全校验,
     任一缺失 → 503 并点明带后缀缺项(C11 复审 carry-over,不只查 KD_BASE_URL)
 
 apikey 来源(优先级):create_app(api_key=...) 显式参数 > 环境 KINGDEE_API_KEY >
 API_KEYS_JSON 首个 key(与 sentiment auth.py 同源);未配置有效 key 时默认拒绝(401)。
+
+持久化(本文件):TaskState/Subtask dataclass 经 JsonPlusSerializer(msgpack)序列化,
+Task 5 实测兼容;显式 allowlist(msgpack 白名单)消除「unregistered type」反序列化警告
+(默认宽松模式未来版本会收紧,提前显式登记)。恢复语义:启动扫描 tasks 表 status='created'
+的任务,按 env 重建图 + checkpoint 读挂起态,后台线程续跑 —— checkpoint 已落盘的任务
+invoke 重放挂起 interrupt(挂起等用户回答),checkpoint 缺失(建任务后线程未跑即崩溃)的
+任务用元数据表重建初始 state 从头跑。
 """
 from __future__ import annotations
 
@@ -29,17 +40,23 @@ import hashlib
 import json
 import secrets
 import logging
+import sqlite3
 import threading
 import time
 import uuid
+from contextlib import closing
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from sse_starlette.sse import EventSourceResponse
 
 from agents.kingdee_plugin_agent.agent import build_graph, default_recursion_limit
+from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState
 from common import config
 from common.config import kingdee_env_vars
 from common.otel import init_otel
@@ -57,6 +74,80 @@ _sem = threading.Semaphore(MAX_CONCURRENT_TASKS)
 _ANSWER_WAIT_S = 30
 #: 任务 id 长度(12 hex 可读,够 v1 单进程规模)
 _TASK_ID_LEN = 12
+#: 任务元数据库默认路径(相对 CWD,与 data/kingdee-deliverables 同惯例;KINGDEE_TASKS_DB 可覆盖)
+_TASKS_DB_DEFAULT = "data/kingdee-tasks.db"
+#: 任务元数据表:驱动启动恢复(status='created' 未完成任务)。created_at 为 ISO 时间串。
+_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    env TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'created',
+    created_at TEXT NOT NULL,
+    requirement TEXT NOT NULL
+)
+"""
+#: 共享 msgpack 白名单 serde:TaskState/Subtask dataclass 显式登记,
+#: 消除反序列化 unregistered 警告(LANGGRAPH_STRICT_MSGPACK 未来默认开启的兼容准备)。
+_TASK_SERDE = JsonPlusSerializer(allowed_msgpack_modules=[Subtask, TaskState])
+
+
+def _db_path(db_path: str | None) -> str:
+    """任务库路径:显式参数 > KINGDEE_TASKS_DB 环境 > 默认 data/kingdee-tasks.db。"""
+    return db_path or config.get_env("KINGDEE_TASKS_DB", _TASKS_DB_DEFAULT)
+
+
+def _make_saver(db_path: str) -> SqliteSaver:
+    """共享 SQLite checkpointer:多线程(graph 后台线程 + 恢复扫描)同一连接写入。
+
+    SqliteSaver 内部持 threading.Lock 保证线程安全,连接必须 check_same_thread=False
+    (官方 docstring 明确该组合安全);setup() 幂等建表。与 AsyncSqliteSaver 的区别:
+    本文件用同步 graph.invoke(后台线程架构),同步版无需 ainvoke/asyncio.run 包装。
+    """
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    saver = SqliteSaver(sqlite3.connect(db_path, check_same_thread=False),
+                        serde=_TASK_SERDE)
+    saver.setup()
+    return saver
+
+
+def _task_conn(db_path: str) -> sqlite3.Connection:
+    """元数据表连接(短生命周期,每次操作独立 open/close)。
+
+    低频操作(建任务/任务结束置位/启动扫描),独立连接避免与 checkpointer 共享
+    连接时的锁竞争;DDL 幂等随连接执行(表已存在不重建)。
+    """
+    conn = sqlite3.connect(db_path)
+    conn.execute(_TASKS_DDL)
+    return conn
+
+
+def _insert_task(db_path: str, task_id: str, env: str, requirement: str) -> None:
+    """建任务记录(默认 status='created'):启动恢复据此扫描未完成任务。
+
+    用 INSERT OR IGNORE:恢复路径重建 handle 时行已存在(读取自同一表),
+    幂等保留原记录(created_at/env/requirement 以首次创建为准)。
+    """
+    with closing(_task_conn(db_path)) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO tasks (id, env, status, created_at, requirement) "
+            "VALUES (?, ?, 'created', ?, ?)",
+            (task_id, env, datetime.now().isoformat(timespec="seconds"), requirement))
+        conn.commit()
+
+
+def _update_task_status(db_path: str, task_id: str, status: str) -> None:
+    """任务终态置位(done/error):终止重启恢复误扫已结束任务。"""
+    with closing(_task_conn(db_path)) as conn:
+        conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+        conn.commit()
+
+
+def _pending_task_rows(db_path: str) -> list[tuple[str, str, str]]:
+    """启动恢复扫描:未完成任务 (id, env, requirement)。"""
+    with closing(_task_conn(db_path)) as conn:
+        return conn.execute(
+            "SELECT id, env, requirement FROM tasks WHERE status='created'"
+        ).fetchall()
 
 
 def _apikey_from_json() -> str | None:
@@ -98,12 +189,13 @@ class TaskHandle:
     """
 
     def __init__(self, task_id: str, graph, cfg: dict, initial_state: dict,
-                 experience=None):
+                 experience=None, db_path: str | None = None):
         self.task_id = task_id
         self.graph = graph
         self.cfg = cfg
         self.state = initial_state        # 最新图结果(dict,始终是 dict;恢复命令不进 state)
         self.experience = experience      # w7 经验库(验收拒绝原因喂入;None = 跳过)
+        self.db_path = db_path            # 任务元数据库路径(终态置位用;None = 不落盘)
         self.done = False
         self.error: str | None = None
         self.interrupt = None             # 当前挂起 interrupt payload(waiting 时非 None)
@@ -255,6 +347,11 @@ def _run_loop(handle: TaskHandle) -> None:
 
     注意:恢复命令只作为下一次 invoke 的局部输入,绝不写进 handle.state ——
     state 始终是 dict(全量快照 /state 与 SSE 随时可读,Command 瞬时态不可见)。
+
+    配额模型(Task 5 持久化后):create_task 在请求线程 acquire(占满 429);
+    恢复的任务在恢复线程 acquire(阻塞等待,重启场景容量 4 不再 429 拒绝)。
+    统一由本函数 finally release 配对,不泄漏;结束/失败写元数据表终态,
+    防止重启误恢复已结束任务。
     """
     try:
         invoke_input = handle.state   # 初始为需求 dict;挂起恢复后为 Command(resume=...)
@@ -285,10 +382,19 @@ def _run_loop(handle: TaskHandle) -> None:
     finally:
         # 归还并发闸门配额(任务结束/失败/取消统一走这里,不泄漏信号量)
         _sem.release()
+        # 终态落盘:重启恢复只扫 status='created'(建任务记录);写入失败不阻塞
+        # 线程退出(任务本体已完成,元数据缺失仅影响恢复语义,记日志待排查)
+        try:
+            _update_task_status(handle.db_path, handle.task_id,
+                                "done" if handle.done else "error")
+        except Exception as exc:
+            logger.warning("service=kingdee-plugin-agent event=task_status_persist_failed "
+                           "task_id=%s status=%s error=%s", handle.task_id,
+                           "done" if handle.done else "error", exc)
 
 
 def create_app(api_key: str | None = None, *, graph_factory=None,
-               experience=None) -> FastAPI:
+               experience=None, db_path: str | None = None) -> FastAPI:
     """构建 Web API。
 
     Args:
@@ -298,6 +404,8 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
             fake 编译/冒烟,与 C11 CLI 同思路);None = 生产缺省 build_graph(env=env_name),
             env 由 create_task 按 payload["env"] 透传(空 = 默认凭证套)。
         experience: w7 经验库(验收拒绝原因喂入;None = 跳过沉淀,验收仍记录)。
+        db_path: 任务元数据库路径;None = KINGDEE_TASKS_DB 环境 > 默认 data/kingdee-tasks.db。
+            启动时扫描未完成任务重建 handle 续跑(持久化恢复)。
     """
     app = FastAPI(title="kingdee-plugin-agent")
     # OTel 初始化(与 sentiment api.py 同款):OTEL_ENDPOINT 配置了才上报;
@@ -310,7 +418,13 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.tasks = {}  # task_id → TaskHandle(内存任务存储,v1)
+    app.state.tasks = {}  # task_id → TaskHandle(进程内运行期任务表;重启由 DB 恢复重建)
+
+    path = _db_path(db_path)
+    # 共享 checkpointer:连接在 create_app 生命周期常驻(setup 建表幂等)。
+    # 单例语义 = 所有任务同一 thread_id 隔离会话(checkpointer 表按 thread_id 分);
+    # graph_factory 注入的图若自带 checkpointer(测试图),覆盖共享实例。
+    app.state.saver = _make_saver(path)
 
     effective_key = api_key if api_key is not None else (
         config.get_env("KINGDEE_API_KEY") or _apikey_from_json())
@@ -329,6 +443,65 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         if handle is None:
             raise HTTPException(404, f"任务不存在: {task_id}")
         return handle
+
+    def _make_handle(task_id: str, graph, env_name: str,
+                     requirement: str, initial_state: dict) -> TaskHandle:
+        """构造 TaskHandle + 落盘元数据(建任务与恢复共用同一入口)。
+
+        生产图调用方已用共享 checkpointer 编译(build_graph(checkpointer=
+        app.state.saver),MemorySaver 默认换掉,重启可见同一 checkpoint 会话);
+        注入图(graph_factory,测试)自带 checkpointer 原样使用 —— 已编译图
+        (CompiledStateGraph)没有 .compile,任何二次 compile 都会挂。
+        """
+        cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
+               "recursion_limit": default_recursion_limit(10)}
+        handle = TaskHandle(task_id, graph, cfg, initial_state,
+                            experience=experience, db_path=path)
+        app.state.tasks[task_id] = handle
+        _insert_task(path, task_id, env_name, requirement)
+        return handle
+
+    def _run_thread(handle: TaskHandle) -> None:
+        """启动后台线程跑图(建任务与恢复共用)。"""
+        threading.Thread(target=_run_loop, args=(handle,), daemon=True).start()
+
+    def _restore_pending() -> None:
+        """启动恢复:扫元数据表未完成任务,按 env 重建图 + handle 续跑。
+
+        时序:create_app 启动(uvicorn 加载)即恢复,线程失败不影响 app 启动。
+        恢复语义(Task 5 实测):checkpoint 已落盘(interrupt 挂起/中途)的任务,
+        graph.invoke(初始 state) 重放到挂起处(返回原 interrupt,挂起等用户回答);
+        checkpoint 缺失(建任务后线程未跑即崩溃)的任务走全流程从头跑。
+        并发闸门:恢复任务阻塞 acquire(重启场景配额未占),与 _run_loop finally
+        release 配对 —— 4 个恢复任务各自独立线程,不会 429 拒绝。
+        """
+        try:
+            for task_id, env_name, requirement in _pending_task_rows(path):
+                try:
+                    graph = graph_factory() if graph_factory \
+                        else build_graph(env=env_name,
+                                         checkpointer=app.state.saver)
+                    initial_state = {"requirement_spec": {"requirement": requirement,
+                                                          "environment": env_name},
+                                     "todo": [],
+                                     "environment": {"env_name": env_name},
+                                     "started_at": time.time()}
+                    handle = _make_handle(task_id, graph, env_name,
+                                          requirement, initial_state)
+                    _sem.acquire()
+                    _run_thread(handle)
+                    logger.info("service=kingdee-plugin-agent event=task_restored "
+                                "task_id=%s env=%s", task_id, env_name)
+                except Exception as exc:
+                    # 单任务恢复失败不阻断其余任务;配额在成功启动线程后由
+                    # _run_loop finally release,失败路径在此归还(未 acquire 不归还)
+                    logger.error("service=kingdee-plugin-agent event=task_restore_failed "
+                                 "task_id=%s env=%s error=%s", task_id, env_name, exc)
+        except Exception as exc:
+            logger.error("service=kingdee-plugin-agent event=task_restore_scan_failed "
+                         "error=%s", exc)
+
+    _restore_pending()
 
     @app.post("/tasks")
     def create_task(payload: dict, x_api_key: str = Header(default="")):
@@ -356,11 +529,8 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
             if not requirement:
                 raise HTTPException(400, "requirement 必填")
             task_id = uuid.uuid4().hex[:_TASK_ID_LEN]
-            graph = graph_factory() if graph_factory else build_graph(env=env_name)
-            # thread_id 每任务唯一(隔离 checkpointer 会话);recursion_limit 按子任务
-            # 数预算(与 CLI 同:澄清期未知子任务数,按上限 10 给足)
-            cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
-                   "recursion_limit": default_recursion_limit(10)}
+            graph = graph_factory() if graph_factory \
+                else build_graph(env=env_name, checkpointer=app.state.saver)
             # started_at: 任务创建时间戳,驱动全流程时间预算总闸(设计 §8)。
             # 存于 state 而非 thread_id:挂起 resume 后 checkpointer 恢复同一份值,不重置。
             state = {"requirement_spec": {"requirement": requirement,
@@ -370,9 +540,8 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
                      # v1 单环境只记录,不做环境级差异化,见 agent CLAUDE.md 债务)
                      "environment": {"env_name": env_name},
                      "started_at": time.time()}
-            handle = TaskHandle(task_id, graph, cfg, state, experience=experience)
-            app.state.tasks[task_id] = handle
-            threading.Thread(target=_run_loop, args=(handle,), daemon=True).start()
+            handle = _make_handle(task_id, graph, env_name, requirement, state)
+            _run_thread(handle)
             return {"task_id": task_id, "status": "created"}
         except BaseException:
             # 线程未启动成功(校验 503/400、build_graph 抛错、Thread.start 抛错等):

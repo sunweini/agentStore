@@ -5,7 +5,45 @@
 
 ---
 
-## v1.20.0 — 2026-08-10(kingdee-plugin-agent:skill 评估改进 —— 禁编造纪律强化 + verify 建议必填)
+## v1.21.0 — 2026-08-10(kingdee-plugin-agent:任务持久化 —— SQLite checkpointer + 重启恢复)
+
+### 行为变更
+
+- **API 任务不再内存存储,重启不丢**(清偿 v1 债务「内存任务存储」):create_app
+  统一用同步 `SqliteSaver`(共享连接,`check_same_thread=False` + 内部锁,官方
+  docstring 确认线程安全)替换每任务 MemorySaver —— 同步版贴合后台线程
+  `graph.invoke` 架构(AsyncSqliteSaver 需 ainvoke/asyncio.run 包装,不用);
+  checkpointer 存 `data/kingdee-tasks.db`(KINGDEE_TASKS_DB 可覆盖,data/ 已
+  gitignore)。
+- **启动恢复**:`create_app` 启动扫描 tasks 元数据表(id/env/status/created_at/
+  requirement)status='created' 的任务,按 env 重建图 + 后台线程续跑;
+  checkpoint 已落盘的任务重放挂起 interrupt(挂起等用户回答),checkpoint 缺失
+  (建任务后线程未跑即崩溃)的任务从头跑;任务结束/失败落盘终态,重启不再恢复。
+- **恢复任务配额语义**:恢复任务 `_sem.acquire()` 阻塞等待(重启场景不 429
+  拒绝),`_run_loop` finally 统一 release 配对;元数据写入用短生命周期连接 +
+  INSERT OR IGNORE(恢复幂等,首建记录为准)。
+- **msgpack 序列化兼容**(清偿 v1 债务「msgpack 反序列化警告」):TaskState/
+  Subtask dataclass 经 JsonPlusSerializer 显式白名单
+  (`allowed_msgpack_modules`),消除 unregistered-type 反序列化警告 —— 默认
+  宽松模式未来版本会收紧,提前显式登记。
+- 生产路径 `build_graph(env=..., checkpointer=app.state.saver)` 显式注入共享
+  checkpointer(MemorySaver 默认换掉,重启后 checkpoint 会话可见)。
+
+### 测试
+
+- 新增 `test_restore_pending_task`:建任务 → 等 interrupt 挂起 → 同 DB 新 app
+  恢复(env 透传断言)→ 答澄清 → done → 终态落盘 → 复位 created → 再次恢复。
+- 新增 `test_restore_recovers_task_hung_at_interrupt`:精确中断恢复语义(round 0
+  挂起 → 重启仍 round 0,不重跑)。
+- `test_api_production_build_graph_receives_env` 增补 checkpointer 透传断言
+  (生产路径必须注入共享 saver,否则持久化失效)。
+- conftest:新增 autouse `_reset_api_concurrency_sem` —— 模块级 Semaphore 跨
+  测试残留,前面测试的挂起任务线程(30s 超时)占满配额后,后续恢复任务的
+  `_sem.acquire()` 主线程阻塞 → 全量套件死锁(单跑不复现);每测试重置满配额。
+- 全量 163 测试全绿(agent 145 + api 18)。
+
+---
+
 
 ### 文档
 

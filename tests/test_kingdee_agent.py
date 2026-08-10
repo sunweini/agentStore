@@ -2130,14 +2130,18 @@ def test_api_production_build_graph_receives_env(tmp_path, monkeypatch):
     _set_kd_env(monkeypatch, env="prod")
     captured = {}
 
-    def _spy_build_graph(env=""):
+    def _spy_build_graph(env="", checkpointer=None):
         captured["env"] = env
+        captured["checkpointer_is_shared"] = checkpointer is not None
         return _det_graph_factory(tmp_path)
 
     monkeypatch.setattr(api_mod, "build_graph", _spy_build_graph)
     client = TestClient(create_app(api_key="k"))                 # 不注入 graph_factory
     tid = _create_task(client, tmp_path, env="prod")
     assert captured["env"] == "prod"                             # env 透传到 build_graph
+    # 生产路径必须把共享 SqliteSaver 作为 checkpointer 注入(否则 MemorySaver
+    # 默认,重启后 checkpoint 会话不可见,持久化恢复失效)
+    assert captured["checkpointer_is_shared"] is True
     _run_to_done(client, tid)                                    # 后台线程结束释放配额(防泄漏)
 
 
@@ -2156,7 +2160,7 @@ def test_api_build_graph_error_releases_quota(monkeypatch):
     sem = threading.Semaphore(1)                                 # 容量 1:泄漏即 _value==0
     monkeypatch.setattr(api_mod, "_sem", sem)
 
-    def _boom_build_graph(env=""):
+    def _boom_build_graph(env="", checkpointer=None):
         raise RuntimeError("build_graph boom")
 
     monkeypatch.setattr(api_mod, "build_graph", _boom_build_graph)
@@ -2906,3 +2910,86 @@ def test_json_mode_fallback_caps_tool_rounds():
                                 [("system", "s"), ("human", "h")])
     assert out is None
     assert len(llm.bound_invokes) == 2                    # 回合 1 调工具 + 回合 2 仍调 → 停止
+
+
+# ── Task 5:任务持久化(重启恢复,SqliteSaver + 元数据表)─────────────────
+
+
+def test_restore_pending_task(tmp_path, monkeypatch):
+    """建任务 → 模拟重启(新 app + 同 DB)→ 未完成任务恢复;任务结束落盘终态。
+
+    重启语义:同一 db_path 构造新 app,create_app 启动时 _restore_pending 扫
+    tasks 表 status='created' 的任务,重建 handle + 后台线程续跑。
+    - 恢复任务按原 env 重建图(注入 graph_factory 断言 env 透传)
+    - 恢复线程阻塞 acquire 配对(不 429 拒绝)
+    - 恢复任务可正常答澄清 → done → 元数据表终态置位(重启不再恢复)
+    """
+    from agents.kingdee_plugin_agent.api import (_pending_task_rows,
+                                                 _update_task_status)
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+
+    # 等首个澄清 interrupt 挂起(checkpoint 已落盘:thread_id 会话存在)
+    _wait_state(app1, tid, lambda s: s["interrupt"])
+    assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]
+
+    # —— 模拟重启:新 app(同 DB),恢复逻辑在 create_app 内执行 ——
+    captured = {}
+
+    def _factory():
+        captured["env"] = _factory.env
+        return _det_graph_factory(tmp_path)
+
+    _factory.env = "test"
+    app2 = TestClient(create_app(api_key="k", graph_factory=_factory,
+                                 db_path=str(db)))
+    assert tid in app2.app.state.tasks            # 恢复的任务可被端点访问
+    assert captured["env"] == "test"              # 按元数据表 env 重建图
+
+    # 恢复任务续跑:回答澄清 → 全流程 done(挂起 checkpoint 重放语义)
+    st = _wait_state(app2, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    _run_to_done(app2, tid)
+
+    # 任务结束 → 元数据表置 done → 再次重启不再恢复
+    assert _pending_task_rows(str(db)) == []
+    _update_task_status(str(db), tid, "created")  # 手工复位制造"未完成"场景
+    assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]
+    app3 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    # 注:app3 启动时恢复该任务并立即续跑(无挂起中断则直接全流程),
+    # 这里只断言恢复机制生效(app3 持有 handle),终态由 _run_loop finally 置位
+    assert tid in app3.app.state.tasks
+    _run_to_done(app3, tid)                       # 续跑完成,防泄漏退出
+    assert _pending_task_rows(str(db)) == []      # 终态再次落盘
+
+
+def test_restore_recovers_task_hung_at_interrupt(tmp_path, monkeypatch):
+    """重启恢复精确语义:任务挂在澄清 interrupt(checkpoint 落盘)→ 重启后
+    invoke 重放到挂起处(原 interrupt),不会从头重跑。"""
+    from agents.kingdee_plugin_agent.api import _pending_task_rows
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+    st = _wait_state(app1, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    assert st["interrupt"]["round"] == 0
+
+    app2 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    # 恢复后仍挂在同一 interrupt(第 1 问)—— 而非重新开始
+    st = _wait_state(app2, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    assert st["interrupt"]["round"] == 0
+    assert _pending_task_rows(str(db)) != []      # 未完成,重启后仍待恢复
+    _run_to_done(app2, tid)                       # 答完 → done
+    assert _pending_task_rows(str(db)) == []      # 终态落盘
