@@ -2095,7 +2095,11 @@ def test_api_env_missing_503_points_suffix(monkeypatch):
 
 
 def test_api_concurrency_limit_429(tmp_path, monkeypatch):
-    """并发任务数达上限 → 429「并发任务数已达上限」;释放配额后恢复可建。"""
+    """并发任务数达上限 → 429「并发任务数已达上限」;任务结束线程释放配额 → 恢复可建。
+
+    防泄漏断言:占满配额的信号量被后台线程持有 —— 429 后计数仍为 0(未泄漏归还),
+    任务跑完线程退出 release 后计数回归 1(可再次建任务)。
+    """
     import agents.kingdee_plugin_agent.api as api_mod
     _set_kd_env(monkeypatch, env="test")
     sem = threading.Semaphore(1)
@@ -2108,10 +2112,57 @@ def test_api_concurrency_limit_429(tmp_path, monkeypatch):
     assert r.status_code == 429
     assert "并发任务数已达上限" in r.json()["detail"]
     assert client.app.state.tasks == {}                          # 429 不建任务
-    sem.release()                                                # 配额释放 → 可建
+    assert sem._value == 0                                       # 未释放:配额仍被占用(线程持)
+    sem.release()                                                # 模拟配额归还(上一任务结束)
     tid = _create_task(client, tmp_path, requirement="x")
     assert tid
+    _run_to_done(client, tid)                                    # 后台线程结束自动 release
+    assert sem._value == 1                                       # 防泄漏:线程退出归还配额
+
+
+def test_api_production_build_graph_receives_env(tmp_path, monkeypatch):
+    """生产路径(不注入 graph_factory):create_task 调 build_graph(env=payload["env"])。
+
+    回归防护:I-1 —— create_app 曾预置 `graph_factory or (lambda: build_graph())`,
+    使 else 分支恒不可达、env 永不透传到图(生产连错环境)。
+    """
+    import agents.kingdee_plugin_agent.api as api_mod
+    _set_kd_env(monkeypatch, env="prod")
+    captured = {}
+
+    def _spy_build_graph(env=""):
+        captured["env"] = env
+        return _det_graph_factory(tmp_path)
+
+    monkeypatch.setattr(api_mod, "build_graph", _spy_build_graph)
+    client = TestClient(create_app(api_key="k"))                 # 不注入 graph_factory
+    tid = _create_task(client, tmp_path, env="prod")
+    assert captured["env"] == "prod"                             # env 透传到 build_graph
     _run_to_done(client, tid)                                    # 后台线程结束释放配额(防泄漏)
+
+
+def test_api_build_graph_error_releases_quota(tmp_path, monkeypatch):
+    """build_graph 抛错(非 HTTPException 异常路径)→ 配额归还,可再次建任务。
+
+    回归防护:I-2 —— 早期只 catch HTTPException,构建失败会泄漏信号量配额。
+    """
+    import agents.kingdee_plugin_agent.api as api_mod
+    _set_kd_env(monkeypatch, env="test")
+    calls = {"n": 0}
+
+    def _flaky_build_graph(env=""):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("build_graph boom")
+        return _det_graph_factory(tmp_path)
+
+    monkeypatch.setattr(api_mod, "build_graph", _flaky_build_graph)
+    client = TestClient(create_app(api_key="k"), raise_server_exceptions=False)
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code == 500                                  # 未捕获异常 → 500
+    tid = _create_task(client, tmp_path, requirement="x")        # 配额已归还 → 可建
+    _run_to_done(client, tid)
 
 
 def test_api_create_state_and_answers(tmp_path, monkeypatch):

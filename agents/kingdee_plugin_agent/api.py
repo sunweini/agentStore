@@ -294,8 +294,9 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
     Args:
         api_key: 期望 apikey;None = 从环境兜底(KINGDEE_API_KEY / API_KEYS_JSON 首个),
             仍无 → 默认拒绝全部请求(401)。
-        graph_factory: 每任务调用一次返回编译好的图(缺省 build_graph() 生产接线;
-            测试注入 llm=None + fake 编译/冒烟的确定性图,与 C11 CLI 同思路)。
+        graph_factory: 每任务调用一次返回编译好的图(注入 = 测试确定性图 llm=None +
+            fake 编译/冒烟,与 C11 CLI 同思路);None = 生产缺省 build_graph(env=env_name),
+            env 由 create_task 按 payload["env"] 透传(空 = 默认凭证套)。
         experience: w7 经验库(验收拒绝原因喂入;None = 跳过沉淀,验收仍记录)。
     """
     app = FastAPI(title="kingdee-plugin-agent")
@@ -313,7 +314,9 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
 
     effective_key = api_key if api_key is not None else (
         config.get_env("KINGDEE_API_KEY") or _apikey_from_json())
-    graph_factory = graph_factory or (lambda: build_graph())
+    # 注意:graph_factory 不做预置(不 `or (lambda: build_graph())`)—— 预置会让
+    # create_task 的 `graph_factory() if graph_factory else build_graph(env=...)`
+    # else 分支恒不可达,env 永不透传;生产路径必须走 build_graph(env=env_name)。
 
     def _check(x_api_key: str) -> None:
         """apikey 校验:compare_digest 恒定时间比较;未配置有效 key 一律 401。"""
@@ -371,8 +374,10 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
             app.state.tasks[task_id] = handle
             threading.Thread(target=_run_loop, args=(handle,), daemon=True).start()
             return {"task_id": task_id, "status": "created"}
-        except HTTPException:
-            # 校验失败(503/400):线程未启动,归还配额(成功路径由 _run_loop finally 释放)
+        except BaseException:
+            # 线程未启动成功(校验 503/400、build_graph 抛错、Thread.start 抛错等):
+            # 归还配额。acquire 在 try 之外,此处不会重复释放;成功路径由
+            # _run_loop finally 释放。
             _sem.release()
             raise
 
