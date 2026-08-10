@@ -17,8 +17,12 @@
   gitignore)。
 - **启动恢复**:`create_app` 启动扫描 tasks 元数据表(id/env/status/created_at/
   requirement)status='created' 的任务,按 env 重建图 + 后台线程续跑;
-  checkpoint 已落盘的任务重放挂起 interrupt(挂起等用户回答),checkpoint 缺失
-  (建任务后线程未跑即崩溃)的任务从头跑;任务结束/失败落盘终态,重启不再恢复。
+  checkpoint 已落盘的任务用 `get_state` 读回 checkpoint 原 state 作输入,
+  **fresh-run 重放挂点**(挂起处 interrupt 原样返回,挂起等用户回答;started_at
+  保留原值,时间预算不重置,设计 §8「挂起 resume 不重置」—— 用新 time.time()
+  会从重启时刻重新计时,违反冻结语义);checkpoint 缺失(建任务后线程未跑即
+  崩溃)的任务才用元数据表构造初始 state 从头跑;任务结束/失败落盘终态,
+  重启不再恢复。
 - **恢复任务配额语义**:恢复任务 `_sem.acquire()` 阻塞等待(重启场景不 429
   拒绝),`_run_loop` finally 统一 release 配对;元数据写入用短生命周期连接 +
   INSERT OR IGNORE(恢复幂等,首建记录为准)。
@@ -32,15 +36,18 @@
 ### 测试
 
 - 新增 `test_restore_pending_task`:建任务 → 等 interrupt 挂起 → 同 DB 新 app
-  恢复(env 透传断言)→ 答澄清 → done → 终态落盘 → 复位 created → 再次恢复。
-- 新增 `test_restore_recovers_task_hung_at_interrupt`:精确中断恢复语义(round 0
-  挂起 → 重启仍 round 0,不重跑)。
+  恢复(env 透传断言)→ 答澄清(等 confirm 挂起再投递,防恢复后 409)→ done →
+  终态落盘 → 复位 created → 再次恢复(终态 checkpoint 重放自动 done)。
+- 新增 `test_restore_recovers_task_hung_at_interrupt`:恢复语义三件套断言
+  (注入共享 SqliteSaver 图,与 create_app 共享 checkpointer 同实例):恢复后
+  挂 confirm 挂点(重跑则回 question round 0)/ `clarify_answers` 保留已答
+  答案(重跑则空)/ `started_at` 保留原值(重跑则被新时间戳覆盖)。
 - `test_api_production_build_graph_receives_env` 增补 checkpointer 透传断言
   (生产路径必须注入共享 saver,否则持久化失效)。
 - conftest:新增 autouse `_reset_api_concurrency_sem` —— 模块级 Semaphore 跨
   测试残留,前面测试的挂起任务线程(30s 超时)占满配额后,后续恢复任务的
   `_sem.acquire()` 主线程阻塞 → 全量套件死锁(单跑不复现);每测试重置满配额。
-- 全量 163 测试全绿(agent 145 + api 18)。
+- 全量 163 测试全绿(agent 145 + api 18;审查修复后复跑 163 passed 89.78s)。
 
 ---
 
