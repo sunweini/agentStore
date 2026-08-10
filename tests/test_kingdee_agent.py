@@ -2648,3 +2648,132 @@ def test_structured_with_skill_retry_recovers_after_parse_failure():
                                 [("system", "s"), ("human", "h")])
     assert out.questions == ["重试救回?"]
     assert len(llm.seen) == 2                         # 失败 1 次 + 重试成功 1 次
+
+
+# ── JSON Mode 回退路径(fake,不连真实 API)───────────────────────────────
+# 首选形态 with_structured_output(tools, include_raw) 的 invoke 在真实
+# DeepSeek 上被拒(openai SDK strict 校验 ValueError / API 400,2026-08-10
+# 实测)→ loader 自动回退 JSON Mode(bind_tools(strict=True) + json_object)。
+# 以下 fake 验证回退路径的契约:畸形重试 1 次(共 2 次尝试)、工具回合后结果
+# 直接返回不参与解析重试、2 回合上限强制停止、回退触发可观测(结构化日志)。
+
+
+class _RejectingStructuredRunnable:
+    """首选形态的 runnable:invoke 抛 ValueError(模拟 openai SDK 本地 strict
+    校验拒绝,真实 DeepSeek 上首选形态必然走到这里)。"""
+
+    def invoke(self, messages):
+        raise ValueError(
+            "`load_skill` is not strict. Only `strict` function tools "
+            "can be auto-parsed")
+
+
+class _JsonModeLLM(_ToolAwareLLM):
+    """触发回退的 fake:with_structured_output 返回 invoke 即抛异常的首选
+    runnable;回退后经 bind_tools(strict=True).bind(json_object) 的 bound 走
+    invoke。rounds 为回合响应序列(AIMessage),bound_invokes 记录每轮输入。"""
+
+    def __init__(self, rounds):
+        super().__init__()
+        self.rounds = list(rounds)
+        self.bound_invokes = []
+        self.bind_kwargs = {}
+        self.primary = _RejectingStructuredRunnable()
+
+    def with_structured_output(self, schema, **kwargs):
+        self.so_kwargs = kwargs
+        return self.primary                     # 首选形态 runnable(必拒)
+
+    def bind_tools(self, tools, **kwargs):
+        self.bind_kwargs.update(kwargs)
+        return self                             # bound 链:自身即 runnable
+
+    def bind(self, **kwargs):
+        self.bind_kwargs.update(kwargs)
+        return self
+
+    def invoke(self, messages):
+        self.bound_invokes.append(messages)
+        assert self.rounds, "超出预期回合数"
+        return self.rounds.pop(0)
+
+
+def _load_skill_tool_call():
+    """回合响应:模型请求调 load_skill。"""
+    return AIMessage(content="", tool_calls=[
+        {"id": "call_1", "name": "load_skill", "type": "function",
+         "args": {"skill_name": "requirement-clarify"}}])
+
+
+def test_json_mode_fallback_parse_failure_retries_then_returns_none(caplog):
+    """回退路径畸形 JSON:同输入重试 1 次(共 2 次尝试),仍失败 → None。
+
+    首选形态 invoke 抛异常(openai SDK strict 校验)→ 自动回退 JSON Mode;
+    回退后两次产出均无法解析 → None(worker 确定性骨架降级)。
+    同时验证回退触发有结构化日志(Important-3:禁止静默切换)。
+    """
+    llm = _JsonModeLLM([AIMessage(content="not json at all"),
+                        AIMessage(content="still not json")])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.bound_invokes) == 2                    # 2 次尝试(重试 1 次)
+    assert llm.bound_invokes[0] == llm.bound_invokes[1]   # 同输入重试
+    # 回退绑定形态:bind_tools strict=True + response_format json_object
+    assert llm.bind_kwargs.get("strict") is True
+    assert llm.bind_kwargs.get("response_format") == {"type": "json_object"}
+    assert any("event=structured_fallback" in r.message for r in caplog.records)
+
+
+def test_json_mode_fallback_retry_recovers_after_parse_failure():
+    """回退路径解析失败 1 次 → 重试成功:结果返回(重试救回,不进骨架)。"""
+    llm = _JsonModeLLM([AIMessage(content="not json"),
+                        AIMessage(content='{"questions": ["回退重试救回?"]}')])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["回退重试救回?"]
+    assert len(llm.bound_invokes) == 2                    # 失败 1 次 + 重试成功
+
+
+def test_json_mode_fallback_tool_round_then_schema():
+    """回退路径工具回合:回合 1 调 load_skill → 执行喂回 ToolMessage →
+    回合 2 出 schema(与首选形态同一契约)。"""
+    from langchain_core.messages import ToolMessage
+
+    llm = _JsonModeLLM([
+        _load_skill_tool_call(),
+        AIMessage(content='{"questions": ["回退工具回合成功?"]}'),
+    ])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["回退工具回合成功?"]
+    assert len(llm.bound_invokes) == 2                    # 1 工具 + 1 schema
+    second = llm.bound_invokes[1]
+    assert any(isinstance(m, ToolMessage) for m in second)  # 工具结果喂回
+    assert any("金蝶插件需求澄清方法论" in getattr(m, "content", "")
+               for m in second)
+
+
+def test_json_mode_fallback_tool_round_returned_directly_no_retry():
+    """工具回合后的结果直接返回,不参与解析重试:回合 2 产出畸形 JSON →
+    None(恰好 2 次 invoke,无第 3 次重试)。"""
+    from langchain_core.messages import ToolMessage
+
+    llm = _JsonModeLLM([
+        _load_skill_tool_call(),
+        AIMessage(content="bad json after tool round"),
+    ])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.bound_invokes) == 2                    # 无解析重试
+    assert any(isinstance(m, ToolMessage) for m in llm.bound_invokes[1])
+
+
+def test_json_mode_fallback_caps_tool_rounds():
+    """回退路径 2 回合上限:回合 2 仍调工具 → None(防工具调用死循环)。"""
+    llm = _JsonModeLLM([_load_skill_tool_call(), _load_skill_tool_call()])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.bound_invokes) == 2                    # 回合 1 调工具 + 回合 2 仍调 → 停止

@@ -29,11 +29,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
+
+_AGENT_NAME = "kingdee-plugin-agent"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _AGENT_SKILLS = _PROJECT_ROOT / "agents" / "kingdee_plugin_agent" / "skills"
@@ -189,9 +194,15 @@ def structured_with_skill(llm, schema, messages):
             if structured is not None:
                 try:
                     return _run_structured_tool_rounds(structured, messages)
-                except Exception:
+                except Exception as exc:
                     # 首选形态 invoke 被拒(openai SDK strict 校验 / DeepSeek
-                    # json_schema 不支持)→ JSON Mode 回退(CLAUDE.md 约束段)
+                    # json_schema 不支持)→ JSON Mode 回退(CLAUDE.md 约束段)。
+                    # 结构化日志(OBS-CORE-001/002):回退是运行时行为变更,
+                    # 失败原因必须可观测,禁止静默切换。
+                    logger.warning(
+                        "service=%s event=structured_fallback route=skills.loader "
+                        "reason=%s", _AGENT_NAME, type(exc).__name__
+                    )
                     return _run_json_mode_rounds(llm, schema, messages)
         return llm.with_structured_output(schema).invoke(messages)
     except Exception:
@@ -259,9 +270,15 @@ def _run_json_mode_rounds(llm, schema, messages):
     bound = llm.bind_tools([load_skill], strict=True).bind(
         response_format={"type": "json_object"})
     # JSON Mode 无响应格式限制,模型输出契约靠系统提示给出:
-    # schema 的 JSON 格式指令注入首条 system 消息(纯文本指令,无模板冲突)
+    # schema 的 JSON 格式指令注入首条 system 消息(纯文本指令,无模板冲突)。
+    # 首条消息兼容 BaseMessage(生产 format_messages 产物)与 ("system", ...)
+    # 元组(测试直传)两形态。
+    first = messages[0]
+    first_content = getattr(first, "content", None)
+    if first_content is None and isinstance(first, (tuple, list)) and len(first) > 1:
+        first_content = first[1]
     msgs = [
-        SystemMessage(content=f"{messages[0].content}\n\n{parser.get_format_instructions()}")
+        SystemMessage(content=f"{first_content or ''}\n\n{parser.get_format_instructions()}")
         if i == 0 else m
         for i, m in enumerate(messages)
     ]
