@@ -2141,28 +2141,30 @@ def test_api_production_build_graph_receives_env(tmp_path, monkeypatch):
     _run_to_done(client, tid)                                    # 后台线程结束释放配额(防泄漏)
 
 
-def test_api_build_graph_error_releases_quota(tmp_path, monkeypatch):
-    """build_graph 抛错(非 HTTPException 异常路径)→ 配额归还,可再次建任务。
+def test_api_build_graph_error_releases_quota(monkeypatch):
+    """build_graph 抛错(非 HTTPException 异常路径)→ 配额归还。
 
     回归防护:I-2 —— 早期只 catch HTTPException,构建失败会泄漏信号量配额。
+    验证手法(容量 1 断言):patched `_sem` 为容量 1 空信号量,请求 acquire
+    成功(1→0)→ build_graph 抛错 → 实现正确时 except 归还(0→1);若回退成
+    `except HTTPException`,RuntimeError 不被 catch,配额泄漏 _value 仍为 0,
+    断言失败。模块级默认容量 4 抓不住单次泄漏,必须用容量 1 断言。
+    请求为同步端点,无后台线程参与,无竞态。
     """
     import agents.kingdee_plugin_agent.api as api_mod
     _set_kd_env(monkeypatch, env="test")
-    calls = {"n": 0}
+    sem = threading.Semaphore(1)                                 # 容量 1:泄漏即 _value==0
+    monkeypatch.setattr(api_mod, "_sem", sem)
 
-    def _flaky_build_graph(env=""):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("build_graph boom")
-        return _det_graph_factory(tmp_path)
+    def _boom_build_graph(env=""):
+        raise RuntimeError("build_graph boom")
 
-    monkeypatch.setattr(api_mod, "build_graph", _flaky_build_graph)
+    monkeypatch.setattr(api_mod, "build_graph", _boom_build_graph)
     client = TestClient(create_app(api_key="k"), raise_server_exceptions=False)
     r = client.post("/tasks", json={"requirement": "x", "env": "test"},
                     headers=_HEADERS)
     assert r.status_code == 500                                  # 未捕获异常 → 500
-    tid = _create_task(client, tmp_path, requirement="x")        # 配额已归还 → 可建
-    _run_to_done(client, tid)
+    assert sem._value == 1                                       # 配额已归还(泄漏则仍为 0)
 
 
 def test_api_create_state_and_answers(tmp_path, monkeypatch):
