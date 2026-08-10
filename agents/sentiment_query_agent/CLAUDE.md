@@ -19,7 +19,7 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 | 文件 | 职责 |
 |---|---|
 | [agent.py](agent.py) | 图构建入口:`run_pipeline()` 跑完整流水线,AsyncSqliteSaver checkpointer(thread_id=group_id) |
-| [api.py](api.py) | FastAPI:提交/进度/方案/勾选/入库/导出 6 接口 |
+| [api.py](api.py) | FastAPI:提交/进度/status/方案/勾选/stop/入库/导出 + health 共 9 接口 |
 | [auth.py](auth.py) | apikey 鉴权 + 资源归属校验(越权 403) |
 | [billing.py](billing.py) | 计费:创建记 pending,commit 转正式(1 单位),限并发 |
 | [graph/state.py](graph/state.py) | 数据模型:SchemeGroup→Scheme→Track 三级 + AgentState |
@@ -29,6 +29,8 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 | [skills/loader.py](skills/loader.py) | load_skill 工具(每步节点绑定,LLM 主动调方法论,2 回合上限) |
 | [store/scheme_store.py](store/scheme_store.py) | JSON 文件库(草稿/正式/索引) |
 | [store/converter.py](store/converter.py) | 勾选后的方案组 → skill spec 格式 → Excel |
+| [deploy/](deploy/) | 生产部署套件:Dockerfile/精简依赖/compose/deploy.sh,用法见 [deploy/README.md](deploy/README.md) |
+| [API.md](API.md) | 接口文档(全真实返回示例);对接方文档 [INTEGRATION.md](INTEGRATION.md) |
 
 ## 常用操作
 
@@ -41,10 +43,22 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - **跑测试**:`pytest tests/test_sentiment_query_agent.py`(脚本/store/鉴权/计费单测;图/端到端需外部服务)。
 - **启动 API**:`uvicorn agents.sentiment_query_agent.api:app --reload`。
 
+## 发布流程(生产 10.33.17.72)
+
+详见 [deploy/README.md](deploy/README.md),设计文档 `docs/superpowers/specs/2026-08-10-sentiment-query-agent-prod-deploy-design.md`。
+
+- **发布**:`bash agents/sentiment_query_agent/deploy/deploy.sh`(rsync 上机 → docker build → compose up → 健康检查)。
+- **前置**:服务器 `/opt/sentiment-query-agent/.env` 已放置(手工,不进 git/rsync);缺失脚本会中止并提示。
+- **端口**:API 8000,演示页 nginx 80;日志 `/home/logs/sentiment-query-agent/api.log`;数据 `/opt/sentiment-query-agent/data/`。
+- **回滚**:`IMAGE_TAG=<旧tag>` 重启 compose;data 卷独立,不丢数据。
+- **注意**:重启容器会终止运行中的流水线;发布前先用 status 接口确认无在跑任务。
+
 ## 约束
 
 - LLM 经 `common/llm.py` 工厂,不直接 new。
-- skill 分步脚本是格式契约唯一执行器,节点不手写格式化逻辑。
+- **uvicorn 必须单 worker**:sqlite checkpoint + JSON 文件库的并发模型限制(已加 WAL + index.json 双锁),横向扩需 PostgresSaver 改造。
+- **load_skill 工具回合 2 必须换无工具 LLM**(nodes.py):deepseek-v4-flash 带工具绑定时工具回合后重复发 tool_calls 且 content 空(2026-08-10 生产事故,已修)。
+- skill 分步脚本是格式契约唯一执行器,节点不手写格式化逻辑;脚本校验失败与 bad_json 共用重试预算(总上限 3 次)。
 - 用户标识(apikey)只进日志/计费,不进 span label(OTel 高基数约束)。
-- commit 后方案组冻结,改勾选须重新生成。
+- commit 后方案组冻结,改勾选须重新生成;仅 review 状态可 commit(stopped/generating 拒绝)。
 - skill 原样保留在项目内(agent 专属),不依赖 ~/.claude/skills/。

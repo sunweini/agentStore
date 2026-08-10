@@ -4,9 +4,9 @@
 
 ## 项目状态
 
-**sentiment-query-agent(海外舆情检索方案生成 Agent)已交付**:输入一个中文公司名,自动完成 6 步流水线(实体测绘 → 主体画像 → 关键词字典 → 双轨检索式 → 属地信源 → 频次定级),产出方案组 + 组内多检索方案,经用户勾选确认后固化入库。前端演示页已跑通全流程。
+**sentiment-query-agent(海外舆情检索方案生成 Agent)已交付并上线生产(10.33.17.72)**:输入一个中文公司名,自动完成 6 步流水线(实体测绘 → 主体画像 → 关键词字典 → 双轨检索式 → 属地信源 → 频次定级),产出方案组 + 组内多检索方案,经用户勾选确认后固化入库。Docker Compose 部署(API:8000/演示页:80),9 接口(含 stop/status)全链路生产实测通过;接口文档 `agents/sentiment_query_agent/API.md`,发布流程 `agents/sentiment_query_agent/deploy/README.md`。
 
-**kingdee-plugin-agent(金蝶云星空插件开发 Agent)已交付**:输入自然语言需求,自动完成 澄清 → 设计 → 生成 → 审查 → 编译修复 → 冒烟 → 打包 → 沉淀 全流程(1 主管 + 8 worker 的 LangGraph 循环图,interrupt 交互澄清 + Send 并行派发),交付可部署的插件交付包(源码 + DLL + 部署说明 + 设计/审查/需求版本记录);失败时经 w6_fail 产出"未完成"包(部分产物 + 编译错误 + 审查意见 + 原因)。CLI + Web API(SSE 实时进度)+ 演示页已跑通全流程,212 项测试全过。
+**kingdee-plugin-agent(金蝶云星空插件开发 Agent)已交付**:输入自然语言需求,自动完成 澄清 → 设计 → 生成 → 审查 → 编译修复 → 冒烟 → 打包 → 沉淀 全流程(1 主管 + 8 worker 的 LangGraph 循环图,interrupt 交互澄清 + Send 并行派发),交付可部署的插件交付包(源码 + DLL + 部署说明 + 设计/审查/需求版本记录);失败时经 w6_fail 产出"未完成"包(部分产物 + 编译错误 + 审查意见 + 原因)。CLI + Web API(SSE 实时进度)+ 演示页已跑通全流程,272 项测试全过。
 
 ## 目录结构
 
@@ -43,7 +43,7 @@
 ├── web/
 │   ├── demo.html            # 前端演示页(sentiment:6 步实时回显 + 勾选入库导出)
 │   └── kingdee-demo.html    # kingdee 演示页(澄清流 + 任务矩阵 + 验收)
-├── tests/                   # pytest(212 个测试:kingdee 全套 + sentiment)
+├── tests/                   # pytest(272 个测试:kingdee 全套 + sentiment)
 ├── docs/
 │   ├── dev-standards.md     # 开发规范(含 §7 通用开发经验)
 │   ├── kingdee-plugin-agent/ # kingdee 三件套:project / tech / manual
@@ -100,14 +100,16 @@ curl -X POST http://127.0.0.1:8000/tasks \
 ## 测试
 
 ```bash
-pytest tests/   # 212 个测试:kingdee 图全链路/CLI/API/RAG/模板/编译服务/eval 集 + sentiment 技能脚本
+pytest tests/   # 272 个测试:kingdee 图全链路/CLI/API/RAG/模板/编译服务/eval 集 + sentiment 技能脚本
 ```
 
 ## 文档
 
-- [版本更新说明](CHANGELOG.md)(当前 v1.12.0:sentiment v1.0.0 + kingdee 系列)
+- [版本更新说明](CHANGELOG.md)(当前 v1.23.0:sentiment 生产部署/stop/status 接口 + kingdee 系列)
 - [AI Agent 开发规范](docs/dev-standards.md)(所有 agent 开发必须依据 LangChain 官方文档与 API 指引;§7 通用开发经验必读)
-- [API 接口文档](docs/api.md)(sentiment 7 个接口:提交/进度/方案/勾选/入库/导出 + 错误码)
+- [API 接口文档](agents/sentiment_query_agent/API.md)(sentiment 9 接口:提交/进度/status/方案/勾选/stop/入库/导出 + health,全真实返回示例)
+- [AI 对接规范](agents/sentiment_query_agent/INTEGRATION.md)(调用方 agent 可直接阅读的对接契约)
+- [sentiment 发布流程](agents/sentiment_query_agent/deploy/README.md)(生产 10.33.17.72,deploy.sh 一键发布/回滚)
 - [部署文档](docs/deployment.md)(环境要求/配置/启动/运维/常见问题)
 - [Agent1 重构设计(舆情方案生成)](docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md)
 - [Agent1 原始骨架设计](docs/superpowers/specs/2026-08-06-sentiment-query-agent-langgraph-design.md)(已被重构取代,留档)
