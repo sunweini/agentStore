@@ -13,7 +13,7 @@
 v1 约定:
   - 任务存储 = SQLite 持久化(重启恢复):checkpointer 用同步 SqliteSaver(共享连接,
     check_same_thread=False + 内部锁,官方 docstring 确认线程安全 —— 同步版贴合
-    后台线程 graph.invoke 架构,AsyncSqliteSaver 需 ainvoke + asyncio.run 包装,不用);
+    后台线程 graph.invoke 架构,无需 ainvoke/asyncio.run 包装,选同步版);
     tasks 元数据表(任务 id/env/status/created_at/requirement)驱动启动恢复
   - 每任务独立 build_graph + 共享 SqliteSaver checkpointer(thread_id 每任务唯一)
   - 图在后台线程执行(与 C11 CLI 同一交互模型):interrupt 挂起 → SSE 推送 → answers 恢复
@@ -29,9 +29,10 @@ API_KEYS_JSON 首个 key(与 sentiment auth.py 同源);未配置有效 key 时�
 持久化(本文件):TaskState/Subtask dataclass 经 JsonPlusSerializer(msgpack)序列化,
 Task 5 实测兼容;显式 allowlist(msgpack 白名单)消除「unregistered type」反序列化警告
 (默认宽松模式未来版本会收紧,提前显式登记)。恢复语义:启动扫描 tasks 表 status='created'
-的任务,按 env 重建图 + checkpoint 读挂起态,后台线程续跑 —— checkpoint 已落盘的任务
-invoke 重放挂起 interrupt(挂起等用户回答),checkpoint 缺失(建任务后线程未跑即崩溃)的
-任务用元数据表重建初始 state 从头跑。
+的任务,按 env 重建图 + checkpoint 读回原 state,后台线程续跑 —— checkpoint 已落盘
+的任务 fresh-run 重放挂点(get_state 原 state 作输入,started_at 保留原值不重置,
+时间预算不重新计时),checkpoint 缺失(建任务后线程未跑即崩溃)的任务用元数据表
+重建初始 state 从头跑。
 """
 from __future__ import annotations
 
@@ -100,8 +101,8 @@ def _make_saver(db_path: str) -> SqliteSaver:
     """共享 SQLite checkpointer:多线程(graph 后台线程 + 恢复扫描)同一连接写入。
 
     SqliteSaver 内部持 threading.Lock 保证线程安全,连接必须 check_same_thread=False
-    (官方 docstring 明确该组合安全);setup() 幂等建表。与 AsyncSqliteSaver 的区别:
-    本文件用同步 graph.invoke(后台线程架构),同步版无需 ainvoke/asyncio.run 包装。
+    (官方 docstring 明确该组合安全);setup() 幂等建表。本文件用同步 graph.invoke
+    (后台线程架构),同步版无需 ainvoke/asyncio.run 包装。
     """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     saver = SqliteSaver(sqlite3.connect(db_path, check_same_thread=False),
@@ -469,9 +470,14 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         """启动恢复:扫元数据表未完成任务,按 env 重建图 + handle 续跑。
 
         时序:create_app 启动(uvicorn 加载)即恢复,线程失败不影响 app 启动。
-        恢复语义(Task 5 实测):checkpoint 已落盘(interrupt 挂起/中途)的任务,
-        graph.invoke(初始 state) 重放到挂起处(返回原 interrupt,挂起等用户回答);
-        checkpoint 缺失(建任务后线程未跑即崩溃)的任务走全流程从头跑。
+        恢复输入语义(与 _run_loop 第一轮一致:plain dict 重放挂点):
+        checkpoint 已落盘(interrupt 挂起/中途)的任务,用 get_state 读回完整
+        checkpoint state 作为输入 —— fresh-run 重放,挂点正确(started_at 保留
+        原值,时间预算不重置,设计 §8「挂起 resume 不重置」;用新 time.time()
+        会覆盖 checkpoint 值,恢复任务从重启时刻重新计时,违反冻结语义;
+        todo 经 reducer 合并、spec 完整保留,不用元数据表简化 dict 覆盖);
+        checkpoint 缺失(建任务后线程未跑即崩溃)的任务用元数据表构造初始
+        state 从头跑。
         并发闸门:恢复任务阻塞 acquire(重启场景配额未占),与 _run_loop finally
         release 配对 —— 4 个恢复任务各自独立线程,不会 429 拒绝。
         """
@@ -481,11 +487,19 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
                     graph = graph_factory() if graph_factory \
                         else build_graph(env=env_name,
                                          checkpointer=app.state.saver)
-                    initial_state = {"requirement_spec": {"requirement": requirement,
-                                                          "environment": env_name},
-                                     "todo": [],
-                                     "environment": {"env_name": env_name},
-                                     "started_at": time.time()}
+                    # checkpoint 已落盘的任务:读回原 state 作恢复输入(见 docstring);
+                    # 缺失则构造新初始 state(从头跑)
+                    cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
+                           "recursion_limit": default_recursion_limit(10)}
+                    snapshot = graph.get_state(cfg)
+                    if snapshot.values:
+                        initial_state = snapshot.values
+                    else:
+                        initial_state = {"requirement_spec": {"requirement": requirement,
+                                                              "environment": env_name},
+                                         "todo": [],
+                                         "environment": {"env_name": env_name},
+                                         "started_at": time.time()}
                     handle = _make_handle(task_id, graph, env_name,
                                           requirement, initial_state)
                     _sem.acquire()

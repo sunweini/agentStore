@@ -1950,6 +1950,22 @@ def _det_graph_factory(tmp_path):
                        output_dir=tmp_path)
 
 
+def _shared_saver_graph_factory(tmp_path):
+    """带共享 SqliteSaver 的确定性图工厂:Task 5 恢复语义测试专用。
+
+    测试注入的图必须与 create_app 的共享 checkpointer 同一实例 —— MemorySaver
+    缺省下「重启恢复」实际是重新从头跑,区分不了重跑/重放;显式注入共享 saver
+    后,恢复任务经 _restore_pending 的 get_state 读回 checkpoint 原 state
+    (started_at/answers 保留),fresh-run 重放挂点,断言才真实。
+    """
+    from agents.kingdee_plugin_agent.api import _make_saver
+
+    saver = _make_saver(str(tmp_path / "checkpoints.db"))
+    return build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                       compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                       output_dir=tmp_path, checkpointer=saver)
+
+
 def _create_task(client, tmp_path, requirement="给采购单审核加库存校验",
                  env="test", headers=_HEADERS):
     """建任务(环境齐备 + 确定性图)→ 返回 task_id。"""
@@ -2923,13 +2939,16 @@ def test_restore_pending_task(tmp_path, monkeypatch):
     - 恢复任务按原 env 重建图(注入 graph_factory 断言 env 透传)
     - 恢复线程阻塞 acquire 配对(不 429 拒绝)
     - 恢复任务可正常答澄清 → done → 元数据表终态置位(重启不再恢复)
+
+    注入共享 SqliteSaver 图(见 _shared_saver_graph_factory):恢复语义的真实
+    路径(get_state 读回 checkpoint state 续跑)需要共享 checkpointer。
     """
     from agents.kingdee_plugin_agent.api import (_pending_task_rows,
                                                  _update_task_status)
     _set_kd_env(monkeypatch, env="test")
     db = tmp_path / "tasks.db"
     app1 = TestClient(create_app(api_key="k",
-                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
                                  db_path=str(db)))
     tid = _create_task(app1, tmp_path, env="test")
 
@@ -2942,7 +2961,7 @@ def test_restore_pending_task(tmp_path, monkeypatch):
 
     def _factory():
         captured["env"] = _factory.env
-        return _det_graph_factory(tmp_path)
+        return _shared_saver_graph_factory(tmp_path)
 
     _factory.env = "test"
     app2 = TestClient(create_app(api_key="k", graph_factory=_factory,
@@ -2950,46 +2969,77 @@ def test_restore_pending_task(tmp_path, monkeypatch):
     assert tid in app2.app.state.tasks            # 恢复的任务可被端点访问
     assert captured["env"] == "test"              # 按元数据表 env 重建图
 
-    # 恢复任务续跑:回答澄清 → 全流程 done(挂起 checkpoint 重放语义)
+    # 恢复任务续跑:回答澄清 → 全流程 done(fresh-run 重放挂点语义)。
+    # 注意:恢复后不能直接用 _run_to_done(两条 answers 间无等待,resume 投递
+    # 后图仍在跑,第二答会 409「未等待输入」)—— 与恢复路径一致的时序是:
+    # 等挂起 → 投递 → 等下一挂起(confirm)→ 投递 → 等终态。
     st = _wait_state(app2, tid, lambda s: s["interrupt"])
     assert st["interrupt"]["type"] == "question"
-    _run_to_done(app2, tid)
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "SAL_SaleOrder"},
+                  headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    st = _wait_state(app2, tid,
+                     lambda s: s["interrupt"] and s["interrupt"]["type"] == "confirm")
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "确认"}, headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    _wait_state(app2, tid, lambda s: s["done"], timeout=30)
 
     # 任务结束 → 元数据表置 done → 再次重启不再恢复
     assert _pending_task_rows(str(db)) == []
     _update_task_status(str(db), tid, "created")  # 手工复位制造"未完成"场景
     assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]
     app3 = TestClient(create_app(api_key="k",
-                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
                                  db_path=str(db)))
-    # 注:app3 启动时恢复该任务并立即续跑(无挂起中断则直接全流程),
-    # 这里只断言恢复机制生效(app3 持有 handle),终态由 _run_loop finally 置位
+    # 注:app3 恢复的是终态 checkpoint(spec_confirmed/todo 全 delivered)→
+    # 重放直接走完(无 interrupt),无需 answers,自动 done;终态由 _run_loop
+    # finally 置位。恢复机制生效断言 = app3 持有 handle + 任务自动跑完。
     assert tid in app3.app.state.tasks
-    _run_to_done(app3, tid)                       # 续跑完成,防泄漏退出
+    _wait_state(app3, tid, lambda s: s["done"], timeout=30)
     assert _pending_task_rows(str(db)) == []      # 终态再次落盘
 
 
 def test_restore_recovers_task_hung_at_interrupt(tmp_path, monkeypatch):
     """重启恢复精确语义:任务挂在澄清 interrupt(checkpoint 落盘)→ 重启后
-    invoke 重放到挂起处(原 interrupt),不会从头重跑。"""
+    fresh-run 重放挂点,不重跑、started_at 保留原值(时间预算不重置)。
+
+    注入共享 SqliteSaver 图(见 _shared_saver_graph_factory):恢复任务经
+    _restore_pending 的 get_state 读回 checkpoint 原 state。断言三件套:
+    - 已答答案出现在恢复后 state(clarify_answers=["SAL_SaleOrder"],重跑则为空)
+    - 挂点类型推进到 confirm(重跑则还在 question round 0)
+    - started_at 保留原值(重跑则被新 time.time() 覆盖,时间预算重新计时)
+    """
     from agents.kingdee_plugin_agent.api import _pending_task_rows
     _set_kd_env(monkeypatch, env="test")
     db = tmp_path / "tasks.db"
     app1 = TestClient(create_app(api_key="k",
-                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
                                  db_path=str(db)))
     tid = _create_task(app1, tmp_path, env="test")
     st = _wait_state(app1, tid, lambda s: s["interrupt"])
     assert st["interrupt"]["type"] == "question"
     assert st["interrupt"]["round"] == 0
+    started1 = app1.app.state.tasks[tid].state["started_at"]   # 完整 state dict(建任务写入)
+
+    # 答第 1 问(唯一问题,确定性图)→ 挂起在确认摘要(checkpoint 记录已答答案)。
+    # 等 type 从 question 变为 confirm(不能只等 interrupt 存在:resume 投递后
+    # 图仍在跑,interrupt 字段还是旧的 question,轮询会立即返回旧值)
+    r = app1.post(f"/tasks/{tid}/answers", json={"answer": "SAL_SaleOrder"},
+                  headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    st = _wait_state(app1, tid, lambda s: s["interrupt"]
+                     and s["interrupt"]["type"] == "confirm")
 
     app2 = TestClient(create_app(api_key="k",
-                                 graph_factory=lambda: _det_graph_factory(tmp_path),
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
                                  db_path=str(db)))
-    # 恢复后仍挂在同一 interrupt(第 1 问)—— 而非重新开始
+    # 恢复后仍挂在确认摘要(confirm,非重新开始),已答答案在 checkpoint state 中,
+    # started_at 保留原值(时间预算不重置)—— 区分重跑/重放的关键断言
     st = _wait_state(app2, tid, lambda s: s["interrupt"])
-    assert st["interrupt"]["type"] == "question"
-    assert st["interrupt"]["round"] == 0
-    assert _pending_task_rows(str(db)) != []      # 未完成,重启后仍待恢复
-    _run_to_done(app2, tid)                       # 答完 → done
-    assert _pending_task_rows(str(db)) == []      # 终态落盘
+    assert st["interrupt"]["type"] == "confirm"                # 重跑则回到 question round 0
+    h2 = app2.app.state.tasks[tid]
+    assert h2.state["clarify_answers"] == ["SAL_SaleOrder"]    # 重跑则为空
+    assert h2.state["started_at"] == started1                  # 重跑则被新时间戳覆盖
+    assert _pending_task_rows(str(db)) != []                   # 未完成,重启后仍待恢复
+    _run_to_done(app2, tid)                                    # 答完 → done
+    assert _pending_task_rows(str(db)) == []                   # 终态落盘
