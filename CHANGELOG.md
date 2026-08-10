@@ -23,6 +23,13 @@
   会从重启时刻重新计时,违反冻结语义);checkpoint 缺失(建任务后线程未跑即
   崩溃)的任务才用元数据表构造初始 state 从头跑;任务结束/失败落盘终态,
   重启不再恢复。
+- **恢复输入排除 metrics 键**(re-review Critical):metrics 是求和 reducer
+  (`_merge_metrics`),恢复输入带 checkpoint 当前值会被 `operator(current, v)`
+  再算一次 —— compile_pass_count/compile_fail_count/smoke_pass_count/
+  smoke_fail_count/rework_rounds 五计数器恢复后翻倍(多次重启逐次累计)。
+  去掉 metrics 键 = 该通道不产生输入更新,保留 checkpoint 原值;其余 reducer
+  通道(todo 按 id 合并 / rework_events 替换 / final_deliverables 去重追加)
+  对同值输入幂等,无此问题。
 - **恢复任务配额语义**:恢复任务 `_sem.acquire()` 阻塞等待(重启场景不 429
   拒绝),`_run_loop` finally 统一 release 配对;元数据写入用短生命周期连接 +
   INSERT OR IGNORE(恢复幂等,首建记录为准)。
@@ -42,12 +49,15 @@
   (注入共享 SqliteSaver 图,与 create_app 共享 checkpointer 同实例):恢复后
   挂 confirm 挂点(重跑则回 question round 0)/ `clarify_answers` 保留已答
   答案(重跑则空)/ `started_at` 保留原值(重跑则被新时间戳覆盖)。
+- 新增 `test_restore_metrics_nonzero_not_doubled`:metrics 非零时重启恢复不
+  翻倍(w1 挂起会话 `update_state` 注入 metrics=1 → 重启 → 断言仍 =1,非 2/3;
+  无修复时 FAIL)。
 - `test_api_production_build_graph_receives_env` 增补 checkpointer 透传断言
   (生产路径必须注入共享 saver,否则持久化失效)。
 - conftest:新增 autouse `_reset_api_concurrency_sem` —— 模块级 Semaphore 跨
   测试残留,前面测试的挂起任务线程(30s 超时)占满配额后,后续恢复任务的
   `_sem.acquire()` 主线程阻塞 → 全量套件死锁(单跑不复现);每测试重置满配额。
-- 全量 163 测试全绿(agent 145 + api 18;审查修复后复跑 163 passed 89.78s)。
+- 全量 164 测试全绿(agent 146 + api 18;审查修复后复跑 164 passed 95.80s)。
 
 ---
 
