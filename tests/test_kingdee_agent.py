@@ -1,4 +1,6 @@
 import pytest
+from contextlib import closing
+
 from agents.kingdee_plugin_agent.store.artifact_store import ArtifactStore, ArtifactStoreError
 
 
@@ -3041,7 +3043,12 @@ def test_restore_recovers_task_hung_at_interrupt(tmp_path, monkeypatch):
     h2 = app2.app.state.tasks[tid]
     assert h2.state["clarify_answers"] == ["SAL_SaleOrder"]    # 重跑则为空
     assert h2.state["started_at"] == started1                  # 重跑则被新时间戳覆盖
-    assert _pending_task_rows(str(db)) != []                   # 未完成,重启后仍待恢复
+    # 恢复前占位幂等(C-2 修复):恢复扫描把任务置 running(不再是 created)——
+    # 它不会出现在待恢复列表,也不会被另一实例重复认领;终态落盘前仍是运行态。
+    from agents.kingdee_plugin_agent.api import _task_conn
+    with closing(_task_conn(str(db))) as conn:
+        rows = conn.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchall()
+    assert rows and rows[0][0] == "running"                    # 占位生效,非终态
     _run_to_done(app2, tid)                                    # 答完 → done
     assert _pending_task_rows(str(db)) == []                   # 终态落盘
 
@@ -3107,3 +3114,110 @@ def test_restore_metrics_nonzero_not_doubled(tmp_path, monkeypatch):
                                    "smoke_fail_count": 1,
                                    "rework_rounds": 1}        # 注入值不被重复加回
     assert _pending_task_rows(str(db)) == []                   # 终态落盘
+
+
+def test_restore_skip_when_capacity_full(tmp_path, monkeypatch):
+    """C-1 回归:挂起任务数 > KINGDEE_MAX_CONCURRENT 时 create_app 不阻塞(恢复死锁修复)。
+
+    修复前:恢复路径阻塞 acquire(create_app 主线程),恢复线程挂在 interrupt
+    等用户回答不释放配额 —— 挂起任务数 > 容量时,第 N+1 个任务永久阻塞,
+    API 整个起不来(实测复现:服务挂了 → 用户睡觉 → 早上 5 个挂起任务 +
+    默认容量 4 → 起不来)。
+    修复后:非阻塞 acquire(blocking=False),配额不足跳过该任务(元数据回写
+    created 保持可恢复,下轮重启再试)。
+    断言:create_app 秒回(修复前卡死)+ 容量内任务恢复 + 超限任务仍 pending。
+    """
+    from agents.kingdee_plugin_agent.api import _insert_task, _pending_task_rows
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+
+    # 直接落库 5 个 created 任务(等价「服务崩溃时 5 个任务未完成」,默认容量 4)
+    tids = [f"capfull{i}" for i in range(5)]
+    for tid in tids:
+        _insert_task(str(db), tid, "test", "挂起任务")
+
+    start = _time.time()
+    app = TestClient(create_app(api_key="k",
+                                graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                db_path=str(db)))
+    assert _time.time() - start < 5                      # 修复前:第 5 个 acquire 永久阻塞
+    assert set(app.app.state.tasks) == set(tids[:4])     # 容量内恢复
+    assert _pending_task_rows(str(db)) == [(tids[4], "test", "挂起任务")]  # 超限跳过,保持可恢复
+
+
+def test_restore_claim_idempotent_skip_running(tmp_path, monkeypatch):
+    """C-2 回归:恢复前占位幂等 —— 已被别实例置 running 的任务跳过,不双跑。
+
+    修复前:同一 DB 双实例并发扫描都读到 status='created' → 同一任务双线程
+    invoke(同 thread_id checkpoint 竞态/双倍计费)。修复后:占位 UPDATE
+    created→running 条件更新,影响行数 0 = 已被认领,直接跳过。
+    """
+    from agents.kingdee_plugin_agent.api import (_claim_pending_task,
+                                                 _pending_task_rows,
+                                                 _update_task_status)
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+
+    def _hang_task():
+        client = TestClient(create_app(api_key="k",
+                                       graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                       db_path=str(db)))
+        tid = _create_task(client, tmp_path)
+        _wait_state(client, tid, lambda s: s["interrupt"])
+        return tid
+
+    tid = _hang_task()
+    _update_task_status(str(db), tid, "created")   # 手工复位,模拟重启前状态
+
+    # 实例 A 认领成功(created → running,影响 1 行);实例 B 再认领 → 已 running,跳过
+    assert _claim_pending_task(str(db), tid) is True
+    assert _claim_pending_task(str(db), tid) is False
+    rows = _pending_task_rows(str(db))
+    assert rows == [], f"running 任务不应出现在待恢复列表: {rows}"
+    _update_task_status(str(db), tid, "created")   # 复位,恢复可再认领
+
+
+def test_restore_claim_unknown_task_returns_false(tmp_path):
+    """C-2 边界:认领不存在的任务返回 False(不抛错,扫描继续)。"""
+    from agents.kingdee_plugin_agent.api import _claim_pending_task
+    db = tmp_path / "tasks.db"
+    assert _claim_pending_task(str(db), "nope") is False
+
+
+def test_cancel_persists_terminal_status(tmp_path, monkeypatch):
+    """C-2 回归:cancel 路径落终态 —— 重启不重放已取消任务。
+
+    修复前:_run_loop 的 finally 只 catch _update_task_status 的异常,不处理
+    cancel 路径(handle.cancelled 直接 return 不落终态)→ 任务在 DB 里永远
+    created,每次重启都重建 handle + 重放 checkpoint(重复执行副作用)。
+    修复后:finally 按 cancelled → 'cancelled' 落终态,重启恢复扫描不到。
+    """
+    from agents.kingdee_plugin_agent.api import _pending_task_rows, _task_conn
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                   db_path=str(db)))
+    tid = _create_task(client, tmp_path)
+    _wait_state(client, tid, lambda s: s["interrupt"])   # 挂起在澄清 interrupt
+
+    handle = client.app.state.tasks[tid]
+    handle.cancelled = True                    # 模拟取消(实际由运维/关闭路径置位)
+    with handle._cond:
+        handle._cond.notify_all()              # 唤醒 _run_loop 等恢复的 wait
+
+    # cancel 线程退出后终态落盘:cancelled(修复前 = created,重启会重放)。
+    # 注意 cancel 不置 done/error 快照(既有语义),直接轮询 DB 终态
+    deadline = _time.time() + 10
+    status = None
+    while _time.time() < deadline:
+        with closing(_task_conn(str(db))) as conn:
+            rows = conn.execute("SELECT status FROM tasks WHERE id=?",
+                                (tid,)).fetchall()
+        if rows:
+            status = rows[0][0]
+            if status != "created":
+                break
+        _time.sleep(0.05)
+    assert status == "cancelled", f"cancel 应落 cancelled 终态,实际: {status}"
+    assert _pending_task_rows(str(db)) == []   # 终态非 created,重启不再恢复

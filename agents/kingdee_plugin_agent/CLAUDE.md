@@ -68,7 +68,8 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 
 ## v1 已知债务(上线前需决策)
 
-- **内存任务存储**:API 任务存于 `app.state.tasks`(进程内),重启即丢,无持久化/恢复。
-- **apikey 非 timing-safe**:`x_api_key != effective_key` 直接字符串比较,未用 `secrets.compare_digest`。
-- **msgpack 反序列化警告**:TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本时 dataclass 字段/嵌套 dict 需验证兼容(api.py `_subtask_dict` 已兼容 Subtask 实例/dict 两种形态)。
+**已清偿(v1.21.0)**:内存任务存储(已改 SQLite 持久化 + 重启恢复,见 api.py 模块 docstring);apikey 非 timing-safe(已改 `secrets.compare_digest`);msgpack 反序列化警告(已显式白名单解决,`JsonPlusSerializer(allowed_msgpack_modules=[Subtask, TaskState])`)。
+
+**剩余项**:
 - **`--env` 部分消费**:CLI/API 的 env 值进 `requirement_spec` + `state.environment["env_name"]` + 凭证分套取(`KD_*_<ENV>` 回落 `KD_*`),未做节点级环境差异化处理(单环境 v1)。
+- **CLI 门控仅 1 项**:CLI 硬门槛只查 KD_BASE_URL(API 已全校验 4 项),命令级补充校验未做。

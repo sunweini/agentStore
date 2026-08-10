@@ -288,13 +288,13 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 22 | 时间预算 | 编译单轮 ≤120s(httpx timeout);msbuild 后端 180s 超时(首次冷启动较慢);answers 端点等图挂起 ≤30s 否则 409;单任务编译阶段 ≤15min(5 轮 × 180s 上限,w5 内部覆盖);**全流程 ≤30min 图级总闸**:`started_at` 距今 >1800s 且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`(LLM 决策上下文摘要表含"已用/总闸"时长,可自行选择 fail) |
 | 23 | 需求版本冻结 | spec 确认(`spec_confirmed`)即冻结:`spec_version=1` 盖章,requirement_spec 此后无任何写路径(w1 只在未确认时改 spec);API answers 确认后仅接受 ask_user 类型恢复(409 拒绝 question/confirm 残留输入,防回归);修改需求须开新任务;w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json` |
 | 24 | 澄清无限循环 | 逐问 ≤10 轮;确认最多 1 次补充,仍不确认带假设强制收口 |
-| 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 中断后内存任务存储重启即丢(v1 债务),重建任务重跑 |
+| 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 任务落盘 `data/kingdee-tasks.db`(KINGDEE_TASKS_DB 可配),重启自动恢复:挂起任务经 checkpoint 续跑(时间预算不重置),恢复前占位置 running 防双实例重复恢复;恢复线程非阻塞 acquire,配额不足跳过留待下次重启(不阻塞 create_app) |
 | 26 | 非法 skill 名 | load_skill 返回 error JSON + 可用列表 |
 | 27 | 反馈端点沉淀失败(`POST /tasks/{id}/feedback`) | 部署后行为错误手动上报 → 经验库 `propose("DEPLOY", sha256(reason)[:12], …)`(proposed 态,签名去重,不同原因各自累计);沉淀失败不阻塞反馈(记录 warning 日志,SSE 发 `feedback` 事件);404 未知任务 / 401 无有效 apikey |
 
 ## 7. 安全
 
-- **apikey 鉴权**(api.py):`X-API-Key` 头;来源优先级 `create_app(api_key=...)` 显式参数 > 环境 `KINGDEE_API_KEY` > `API_KEYS_JSON` 首个 key(复用 sentiment auth.py 数据源);未配置有效 key 默认拒绝(401)。⚠️ 已知债务:字符串直接比较,未用 `secrets.compare_digest`。
+- **apikey 鉴权**(api.py):`X-API-Key` 头;来源优先级 `create_app(api_key=...)` 显式参数 > 环境 `KINGDEE_API_KEY` > `API_KEYS_JSON` 首个 key(复用 sentiment auth.py 数据源);未配置有效 key 默认拒绝(401);校验用 `secrets.compare_digest` 恒定时间比较(v1.21.0 已修复,防时序侧信道)。
 - **环境凭证**:`KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 等只经 `.env` 注入(`.env` 在 .gitignore,不提交),随请求体携带到金蝶 WebAPI(该 API 的登录方式之一)。
 - **CORS**:演示放开 `allow_origins=["*"]`(web/kingdee-demo.html 跨域访问),注释标注"生产按需收紧"。
 - **路径白名单**:ArtifactStore 子任务 id 正则白名单,拒绝 `..`/`/` 等路径穿越;load_skill 名必须 ∈ `_AVAILABLE_SKILLS` 才读盘。
@@ -374,7 +374,7 @@ default_recursion_limit(n) = 100 + 20 × n
 
 ## 11. 已知债务与未验证项(与 CLAUDE.md 同步)
 
-**v1 已知债务**(上线前需决策):API 任务存 `app.state.tasks` 进程内内存,重启即丢、无持久化/恢复;API 每任务一个后台 daemon 线程,无线程池/并发闸门;apikey 字符串比较非 timing-safe;TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本需验证兼容(api.py `_subtask_dict` 已兼容实例/dict 两形态);CLI `--env` 部分消费(进 requirement_spec + `state.environment["env_name"]` 记录,未做环境级差异化,单环境 v1);CLI 门控仅 KD_BASE_URL(API 已全校验 4 项)。
+**v1 已知债务**(上线前需决策)。已清偿(v1.21.0):内存任务存储(改 SQLite 持久化 + 重启恢复:checkpointer 用同步 SqliteSaver 共享连接,元数据表驱动启动恢复,恢复输入 = get_state 原 state 重放挂点、metrics 键排除防求和 reducer 双计;恢复前占位置 running 防双实例重复恢复;恢复路径非阻塞 acquire 防挂起任务超容量时 create_app 死锁);apikey 非 timing-safe(改 `secrets.compare_digest`);msgpack 反序列化警告(JsonPlusSerializer 显式白名单 `[Subtask, TaskState]`)。剩余项:CLI `--env` 部分消费(进 requirement_spec + `state.environment["env_name"]` 记录 + 凭证分套,未做节点级环境差异化,单环境 v1);CLI 门控仅 KD_BASE_URL(API 已全校验 4 项)。
 
 **反馈通道(设计 §12)**:`POST /tasks/{id}/feedback {reason}` 部署后行为错误手动上报 → 经验库 propose("DEPLOY", sha256(reason)[:12], reason, …)(proposed 态,同验收拒绝沉淀模式,失败不阻塞);API 端点契约见 api.py 模块 docstring 与 manual.md §4 端点表。
 

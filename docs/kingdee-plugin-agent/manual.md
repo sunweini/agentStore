@@ -255,5 +255,7 @@ deliverable-<子任务id>-<时间戳>.zip
 
 - **插件类型**:bill(单据)/ service(服务)/ list(列表),暂不含定时任务。
 - **E2E 门(编译侧)已达成**:三类型样例在 Windows Server 2016 金蝶服务器(WebSite\bin 真实 DLL + .NET 4.8 DevPack + Framework MSBuild)真实编译通过并产出 DLL,见 [windows-deployment.md](windows-deployment.md)。
-- **未线上验证**:load_skill 工具绑定未对真实 DeepSeek 验证;真实金蝶环境 WebAPI 端点/响应结构为占位契约(编译侧已真实验证,元数据/冒烟侧仍未);Linux 容器内 BOS 编译兼容性未验证(实际采用 Windows 原生部署)。
+- **真实金蝶 WebAPI(✅ 2026-08-10 实测)**:ValidateUser 登录 / ExecuteBillQuery / QueryBusinessInfo 三端点可用(`get_form_fields` 真实返回 337 字段,会话失效自动重登),见 tech.md §11。
+- **load_skill 绑定(✅ 2026-08-10 真实 DeepSeek 实测)**:首选 `with_structured_output(schema, tools=[load_skill])` 形态被 DeepSeek 拒绝后自动回退 JSON Mode,回退路径实测可用,见 tech.md §11。
+- **Linux 容器内 BOS 编译兼容性未验证**(实际采用 Windows 原生部署)。
 - **v1 单环境**:`--env` 记录进 `state.environment["env_name"]`(CLI/API 初始 state,节点可感知),未做环境级差异化配置。

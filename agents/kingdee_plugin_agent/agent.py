@@ -132,7 +132,8 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
         smoke_client: 冒烟客户端(缺省基于 api_client/环境构造,无环境则 None)
         experience: 经验库(w2 设计历史坑参考 / w5 修复检索 / w7 沉淀;None = 跳过)
         package_builder/output_dir: 交付包构建(缺省 PackageBuilder(output_dir))
-        checkpointer: 缺省 MemorySaver(interrupt 必需);生产可换 AsyncSqliteSaver
+        checkpointer: 缺省 MemorySaver(interrupt 必需);生产 API 换同步 SqliteSaver
+            (api.py 共享连接,重启恢复用;同步版贴合后台线程 graph.invoke 架构)
         env: 金蝶目标环境名(凭证 <VAR>_<ENV> 分套,空 = 默认 KD_*)
 
     Returns:

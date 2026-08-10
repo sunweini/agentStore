@@ -22,7 +22,7 @@
   unavailable now,json_schema response_format 不支持)→ invoke 抛异常时自动
   回退 JSON Mode(bind_tools([load_skill], strict=True) + response_format
   json_object + schema 契约指令注入系统提示 + 手动 pydantic 解析,真实 DeepSeek
-  实测可用,见 CLAUDE.md「load_skill 绑定未线上验证」回退方案)。回退保持同一
+  实测可用,见 CLAUDE.md「load_skill 绑定线上验证」回退方案)。回退保持同一
   外部契约:畸形 JSON 同输入重试 1 次(共 2 次尝试)、工具 2 回合上限、失败 → None。
 """
 

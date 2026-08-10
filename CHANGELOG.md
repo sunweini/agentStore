@@ -5,6 +5,39 @@
 
 ---
 
+## v1.21.1 — 2026-08-10(kingdee-plugin-agent:终审修复 —— 恢复死锁 + 重复恢复 + 文档一致性)
+
+### 修复
+
+- **恢复死锁(C-1,终审 Critical)**:`_restore_pending` 原在主线程对每个恢复任务
+  「先启线程再阻塞 acquire」—— 恢复线程挂在 interrupt 等用户回答不释放配额,
+  挂起任务数 > `KINGDEE_MAX_CONCURRENT`(默认 4)时第 N+1 个任务永久阻塞,
+  create_app 起不来(实证:服务挂了 → 用户睡觉 → 早上 5 个挂起任务 → 起不来)。
+  改为非阻塞 acquire(blocking=False),配额不足跳过该任务(元数据回写 created,
+  留待下次重启恢复)—— 恢复语义是「不漏任务」而非「限制恢复」。补测试
+  `test_restore_skip_when_capacity_full`(5 个 created 任务 + 容量 4 → create_app
+  秒回、容量内恢复、超限跳过仍 pending)。
+- **恢复任务被重复恢复(C-2,终审 Critical)**:① 恢复前占位幂等 ——
+  `UPDATE tasks SET status='running' WHERE id=? AND status='created'`,影响行数
+  0 = 已被别实例认领,跳过(防同一 DB 双实例并发扫描同 thread_id 双线程 invoke,
+  checkpoint 竞态/双倍计费);② cancel 路径也落终态(`cancelled`,原直接 return
+  不落盘 → DB 永远 created 每次重启重放)。补测试
+  `test_restore_claim_idempotent_skip_running`(二次认领返回 False + 不在待恢复
+  列表)、`test_restore_claim_unknown_task_returns_false`、
+  `test_cancel_persists_terminal_status`(cancel → 'cancelled' 落盘)。
+- **加载期 int() 容错(I-5)**:`KINGDEE_MAX_CONCURRENT` 非数字配置 import 即崩
+  (500 全 API),改解析失败回落默认 4 + warning 结构化日志;`.env.example` 补
+  `KINGDEE_MAX_CONCURRENT` / `KINGDEE_TASKS_DB` 注释(运维可见性)。
+- **文档一致性(I-1~I-4)**:CLAUDE.md 债务清单改「已清偿(v1.21.0)+ 剩余项」
+  两段式;manual.md §7「未线上验证」整段更新(load_skill/WebAPI 均已实测);
+  tech.md §9 故障表 L25 改持久化语义 + §7 安全段 apikey 债务移除 + §11 债务
+  列表同步;project.md 待办勾销(WebAPI 联调 / load_skill 验证 / 任务持久化);
+  agent.py `checkpointer` 注释 AsyncSqliteSaver → 同步 SqliteSaver;loader.py
+  docstring 旧节名修正;api.py 注释「KD_* 5 项」→ 4 项。
+- 测试:新增 5 个回归测试(上述),终审修复后全量 kingdee 测试全绿。
+
+---
+
 ## v1.21.0 — 2026-08-10(kingdee-plugin-agent:任务持久化 —— SQLite checkpointer + 重启恢复)
 
 ### 行为变更

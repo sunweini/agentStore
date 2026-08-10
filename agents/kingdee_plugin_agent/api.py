@@ -18,7 +18,7 @@ v1 约定:
   - 每任务独立 build_graph + 共享 SqliteSaver checkpointer(thread_id 每任务唯一)
   - 图在后台线程执行(与 C11 CLI 同一交互模型):interrupt 挂起 → SSE 推送 → answers 恢复
   - 并发闸门:同时运行任务 ≤ KINGDEE_MAX_CONCURRENT(默认 4),占满 → 429「并发任务数已达上限」;
-    恢复的任务阻塞 acquire(重启场景等待配额),_run_loop finally 统一 release 配对
+    恢复的任务非阻塞 acquire(配额不足跳过留待下次重启),_run_loop finally 统一 release 配对
   - 环境硬门槛:按 payload["env"] 分套取凭证(KD_*_<ENV>,空 = 默认 KD_*),
     KD_BASE_URL + KD_USERNAME + KD_PASSWORD + KD_DATA_CENTER 4 项全校验,
     任一缺失 → 503 并点明带后缀缺项(C11 复审 carry-over,不只查 KD_BASE_URL)
@@ -69,7 +69,22 @@ logger = logging.getLogger(__name__)
 _KD_ENV_VARS = ("KD_BASE_URL", "KD_USERNAME", "KD_PASSWORD", "KD_DATA_CENTER")
 #: 并发闸门:同时运行的任务数上限(默认 4,KINGDEE_MAX_CONCURRENT 可配)。
 #: acquire 发生在 create_task 请求处理线程(429 即时响应,不进后台线程)。
-MAX_CONCURRENT_TASKS = int(config.get_env("KINGDEE_MAX_CONCURRENT", "4"))
+def _max_concurrent_tasks() -> int:
+    """并发容量:KINGDEE_MAX_CONCURRENT 环境配置;非数字回落默认 4。
+
+    (模块加载期解析,配置写错即抛 ValueError 会 500 全 API —— 回落保证
+    服务可起,运维配错只影响并发上限而非可用性。)
+    """
+    raw = config.get_env("KINGDEE_MAX_CONCURRENT", "4")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("service=kingdee-plugin-agent event=max_concurrent_invalid "
+                       "value=%s fallback=4", raw)
+        return 4
+
+
+MAX_CONCURRENT_TASKS = _max_concurrent_tasks()
 _sem = threading.Semaphore(MAX_CONCURRENT_TASKS)
 #: answers 端点等待图进入 interrupt 挂起态的上限(秒);超时说明图仍在执行,409 让客户端重试
 _ANSWER_WAIT_S = 30
@@ -149,6 +164,22 @@ def _pending_task_rows(db_path: str) -> list[tuple[str, str, str]]:
         return conn.execute(
             "SELECT id, env, requirement FROM tasks WHERE status='created'"
         ).fetchall()
+
+
+def _claim_pending_task(db_path: str, task_id: str) -> bool:
+    """恢复前占位:created → running,条件更新保证任务级幂等。
+
+    返回 True = 本实例成功认领(继续恢复);False = 行不存在/已被认领
+    (另一实例已置 running),跳过该任务 —— 防同一 DB 双实例并发扫描
+    读到同一 status='created' 行,对同一 thread_id 双线程 invoke
+    (checkpoint 竞态损坏 / 双倍计费)。
+    """
+    with closing(_task_conn(db_path)) as conn:
+        cur = conn.execute(
+            "UPDATE tasks SET status='running' WHERE id=? AND status='created'",
+            (task_id,))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def _apikey_from_json() -> str | None:
@@ -383,15 +414,19 @@ def _run_loop(handle: TaskHandle) -> None:
     finally:
         # 归还并发闸门配额(任务结束/失败/取消统一走这里,不泄漏信号量)
         _sem.release()
-        # 终态落盘:重启恢复只扫 status='created'(建任务记录);写入失败不阻塞
-        # 线程退出(任务本体已完成,元数据缺失仅影响恢复语义,记日志待排查)
+        # 终态落盘:重启恢复只扫 status='created'(建任务记录)。cancel 路径
+        # (handle.cancelled 直接 return 不进 _set_done)同样落终态 —— 不落的话
+        # 任务在 DB 里永远 created,每次重启都重建 handle 重放(checkpoint 会话
+        # 虽一致,但重复执行有双倍计费/重复冒烟副作用)。写入失败不阻塞线程
+        # 退出(任务本体已完成,元数据缺失仅影响恢复语义,记日志待排查)。
+        final_status = ("cancelled" if handle.cancelled
+                        else "done" if handle.done else "error")
         try:
-            _update_task_status(handle.db_path, handle.task_id,
-                                "done" if handle.done else "error")
+            _update_task_status(handle.db_path, handle.task_id, final_status)
         except Exception as exc:
             logger.warning("service=kingdee-plugin-agent event=task_status_persist_failed "
                            "task_id=%s status=%s error=%s", handle.task_id,
-                           "done" if handle.done else "error", exc)
+                           final_status, exc)
 
 
 def create_app(api_key: str | None = None, *, graph_factory=None,
@@ -479,46 +514,84 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         metrics 键排除(求和 reducer,输入同值会双计翻倍,见恢复输入处注释);
         checkpoint 缺失(建任务后线程未跑即崩溃)的任务用元数据表构造初始
         state 从头跑。
-        并发闸门:恢复任务阻塞 acquire(重启场景配额未占),与 _run_loop finally
-        release 配对 —— 4 个恢复任务各自独立线程,不会 429 拒绝。
+        并发闸门:恢复路径用非阻塞 acquire(blocking=False),失败跳过该任务
+        (元数据回写 created,留待下次重启/手动恢复)—— 不能阻塞 acquire:
+        恢复线程挂在 interrupt 等用户回答期间不释放配额,挂起任务数 >
+        KINGDEE_MAX_CONCURRENT 时第 N+1 个任务会永久阻塞在 create_app 内,
+        整个 API 起不来(实测复现)。恢复语义是「不漏任务」而非「限制恢复」,
+        超限跳过不丢任务(下轮恢复)。
+        任务级幂等:恢复前先 UPDATE 占位 created → running(见
+        _claim_pending_task),并发实例扫到 running 跳过,防双线程 invoke。
         """
         try:
             for task_id, env_name, requirement in _pending_task_rows(path):
                 try:
-                    graph = graph_factory() if graph_factory \
-                        else build_graph(env=env_name,
-                                         checkpointer=app.state.saver)
-                    # checkpoint 已落盘的任务:读回原 state 作恢复输入(见 docstring);
-                    # 缺失则构造新初始 state(从头跑)
-                    cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
-                           "recursion_limit": default_recursion_limit(10)}
-                    snapshot = graph.get_state(cfg)
-                    if snapshot.values:
-                        # 恢复输入 = checkpoint 原 state(fresh-run 重放,started_at
-                        # 保留不重置);但 metrics 是求和 reducer(_merge_metrics),
-                        # 输入带 checkpoint 当前值会被 operator(current, v) 再算
-                        # 一次 —— 双计,compile_pass_count 等五计数器恢复后翻倍
-                        # (多次重启逐次累计)。去掉 metrics 键 = 该通道不产生输入
-                        # 更新,保留 checkpoint 原值(等价 pre-fix 覆盖起算);其余
-                        # reducer 通道(todo 按 id 合并 / rework_events 替换 /
-                        # final_deliverables 去重追加)对同值输入幂等,无此问题。
-                        initial_state = dict(snapshot.values)
-                        initial_state.pop("metrics", None)
-                    else:
-                        initial_state = {"requirement_spec": {"requirement": requirement,
-                                                              "environment": env_name},
-                                         "todo": [],
-                                         "environment": {"env_name": env_name},
-                                         "started_at": time.time()}
-                    handle = _make_handle(task_id, graph, env_name,
-                                          requirement, initial_state)
-                    _sem.acquire()
-                    _run_thread(handle)
-                    logger.info("service=kingdee-plugin-agent event=task_restored "
-                                "task_id=%s env=%s", task_id, env_name)
+                    if not _claim_pending_task(path, task_id):
+                        # 已被另一实例认领(占位先行,幂等跳过)
+                        logger.info("service=kingdee-plugin-agent "
+                                    "event=task_restore_skipped_claimed "
+                                    "task_id=%s", task_id)
+                        continue
+                    if not _sem.acquire(blocking=False):
+                        # 恢复配额不足:回写 created 保持可恢复,跳过等下次
+                        # (线程未启动,不得 release —— 配额从未被本任务持有)
+                        _update_task_status(path, task_id, "created")
+                        logger.warning("service=kingdee-plugin-agent "
+                                       "event=task_restore_skipped_capacity "
+                                       "task_id=%s env=%s", task_id, env_name)
+                        continue
+                    # 认领成功且配额到手:重建图 + handle + 启动线程。
+                    # 认领与启动之间任何失败都归还配额 + 回写 created(保持可恢复,
+                    # 下轮重启再试);线程启动成功后由 _run_loop finally release + 落终态。
+                    try:
+                        graph = graph_factory() if graph_factory \
+                            else build_graph(env=env_name,
+                                             checkpointer=app.state.saver)
+                        # checkpoint 已落盘的任务:读回原 state 作恢复输入(见 docstring);
+                        # 缺失则构造新初始 state(从头跑)
+                        cfg = {"configurable": {"thread_id": f"kingdee-api-{task_id}"},
+                               "recursion_limit": default_recursion_limit(10)}
+                        snapshot = graph.get_state(cfg)
+                        if snapshot.values:
+                            # 恢复输入 = checkpoint 原 state(fresh-run 重放,started_at
+                            # 保留不重置);但 metrics 是求和 reducer(_merge_metrics),
+                            # 输入带 checkpoint 当前值会被 operator(current, v) 再算
+                            # 一次 —— 双计,compile_pass_count 等五计数器恢复后翻倍
+                            # (多次重启逐次累计)。去掉 metrics 键 = 该通道不产生输入
+                            # 更新,保留 checkpoint 原值(等价 pre-fix 覆盖起算);其余
+                            # reducer 通道(todo 按 id 合并 / rework_events 替换 /
+                            # final_deliverables 去重追加)对同值输入幂等,无此问题。
+                            initial_state = dict(snapshot.values)
+                            initial_state.pop("metrics", None)
+                        else:
+                            initial_state = {"requirement_spec": {"requirement": requirement,
+                                                                  "environment": env_name},
+                                             "todo": [],
+                                             "environment": {"env_name": env_name},
+                                             "started_at": time.time()}
+                        handle = _make_handle(task_id, graph, env_name,
+                                              requirement, initial_state)
+                        _run_thread(handle)
+                        logger.info("service=kingdee-plugin-agent event=task_restored "
+                                    "task_id=%s env=%s", task_id, env_name)
+                    except Exception as exc:
+                        # 单任务恢复失败不阻断其余任务;线程未启动,归还本任务
+                        # 持有的配额(与上方 acquire 配对)+ 回写 created 保持
+                        # 可恢复(下轮重启再试)。线程启动成功后配额与终态由
+                        # _run_loop finally 统一处理,不会走到这里。
+                        _sem.release()
+                        try:
+                            _update_task_status(path, task_id, "created")
+                        except Exception as persist_exc:  # 回写失败不阻断后续任务
+                            logger.warning("service=kingdee-plugin-agent "
+                                           "event=task_restore_status_reset_failed "
+                                           "task_id=%s error=%s", task_id, persist_exc)
+                        logger.error("service=kingdee-plugin-agent event=task_restore_failed "
+                                     "task_id=%s env=%s error=%s", task_id, env_name, exc)
                 except Exception as exc:
-                    # 单任务恢复失败不阻断其余任务;配额在成功启动线程后由
-                    # _run_loop finally release,失败路径在此归还(未 acquire 不归还)
+                    # 认领/配额分支异常(DB 读写失败等):此路径未 acquire、未启动
+                    # 线程,无需 release;任务保持 created(或回写失败停在 running,
+                    # 记日志),下轮重启仍可恢复。单任务失败不阻断其余任务。
                     logger.error("service=kingdee-plugin-agent event=task_restore_failed "
                                  "task_id=%s env=%s error=%s", task_id, env_name, exc)
         except Exception as exc:
@@ -535,7 +608,7 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         不进后台线程(线程内 raise 到不了 FastAPI)。
         """
         _check(x_api_key)
-        env_name = str(payload.get("env") or "")   # 空 = 默认环境(KD_* 5 项)
+        env_name = str(payload.get("env") or "")   # 空 = 默认环境(KD_* 4 项硬门槛)
         if not _sem.acquire(blocking=False):
             raise HTTPException(429, "并发任务数已达上限,稍后重试")
         try:
