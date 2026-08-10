@@ -31,7 +31,8 @@ def test_artifact_store_rejects_path_traversal_id(tmp_path):
     assert store.write("A_1-B2", "p.cs", "y").parent.name == "A_1-B2"
 
 
-from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState, TASK_STATUS
+from agents.kingdee_plugin_agent.graph.state import (METRIC_KEYS, Subtask,
+                                                     TaskState, TASK_STATUS)
 
 
 def test_subtask_status_valid():
@@ -3042,4 +3043,67 @@ def test_restore_recovers_task_hung_at_interrupt(tmp_path, monkeypatch):
     assert h2.state["started_at"] == started1                  # 重跑则被新时间戳覆盖
     assert _pending_task_rows(str(db)) != []                   # 未完成,重启后仍待恢复
     _run_to_done(app2, tid)                                    # 答完 → done
+    assert _pending_task_rows(str(db)) == []                   # 终态落盘
+
+
+def test_restore_metrics_nonzero_not_doubled(tmp_path, monkeypatch):
+    """metrics 非零时重启恢复不翻倍(re-review 新 Critical 回归)。
+
+    背景:恢复输入 = checkpoint 原 state(fresh-run 重放),metrics 通道是求和
+    reducer(_merge_metrics),输入带 checkpoint 当前值会被 operator(current, v)
+    再算一次 —— 双计(compile_pass_count 等五计数器恢复后翻倍,多次重启逐次
+    累计)。修复:恢复输入排除 metrics 键(该通道不产生更新 → 保留 checkpoint
+    原值)。
+
+    场景设计:确定性图默认只在 w1 澄清 interrupt 处挂起,此时 metrics 全 0
+    (0+0=0 掩盖双计)。本测试在 w1 挂起会话里用 update_state 注入 metrics=1
+    (等价「任务跑到位后崩溃重启」的中间态),再走恢复路径 —— 恢复后 metrics
+    仍 =1,而非 2/3;继续答完整个流程,各计数器保持注入值不被重复累计。
+    """
+    from langgraph.types import Overwrite
+    from agents.kingdee_plugin_agent.api import _pending_task_rows
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+    _wait_state(app1, tid, lambda s: s["interrupt"])           # w1 澄清挂起
+
+    # 注入 metrics=1(checkpoint 已落盘,重启可见);Overwrite 跳过求和 reducer
+    # 直接覆写(与 langgraph 内部 _get_overwrite 同一语义,公开 API)
+    g1 = app1.app.state.tasks[tid].graph
+    cfg1 = app1.app.state.tasks[tid].cfg
+    g1.update_state(cfg1, {"metrics": Overwrite(
+        {"compile_pass_count": 1, "compile_fail_count": 1, "smoke_pass_count": 1,
+         "smoke_fail_count": 1, "rework_rounds": 1})})
+
+    # —— 模拟重启:恢复任务读回 checkpoint 原 state(metrics 排除,不双计)——
+    app2 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    # 等恢复线程跑完第一轮(fresh-run 重放挂点):此时 handle.state 已是图结果
+    # (metrics 通道从 checkpoint 原值 1 起步 —— 修复前输入同值会被求和 reducer
+    # 再算一次 → 2;修复后排除 metrics 键 → 1)
+    st = _wait_state(app2, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    h2 = app2.app.state.tasks[tid]
+    assert h2.state["metrics"] == {"compile_pass_count": 1, "compile_fail_count": 1,
+                                   "smoke_pass_count": 1, "smoke_fail_count": 1,
+                                   "rework_rounds": 1}        # 非 2/3(双计则翻倍)
+
+    # 继续走完整流程 → 指标在注入值上增量(w5 编译 +1 是合法增量),不重复累计
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "SAL_SaleOrder"},
+                  headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    st = _wait_state(app2, tid,
+                     lambda s: s["interrupt"] and s["interrupt"]["type"] == "confirm")
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "确认"}, headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    _wait_state(app2, tid, lambda s: s["done"], timeout=30)
+    assert h2.state["metrics"] == {"compile_pass_count": 2,   # 1(注入)+ 1(w5 合法增量)
+                                   "compile_fail_count": 1,
+                                   "smoke_pass_count": 1,
+                                   "smoke_fail_count": 1,
+                                   "rework_rounds": 1}        # 注入值不被重复加回
     assert _pending_task_rows(str(db)) == []                   # 终态落盘

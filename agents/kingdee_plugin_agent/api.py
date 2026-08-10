@@ -476,6 +476,7 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         原值,时间预算不重置,设计 §8「挂起 resume 不重置」;用新 time.time()
         会覆盖 checkpoint 值,恢复任务从重启时刻重新计时,违反冻结语义;
         todo 经 reducer 合并、spec 完整保留,不用元数据表简化 dict 覆盖);
+        metrics 键排除(求和 reducer,输入同值会双计翻倍,见恢复输入处注释);
         checkpoint 缺失(建任务后线程未跑即崩溃)的任务用元数据表构造初始
         state 从头跑。
         并发闸门:恢复任务阻塞 acquire(重启场景配额未占),与 _run_loop finally
@@ -493,7 +494,16 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
                            "recursion_limit": default_recursion_limit(10)}
                     snapshot = graph.get_state(cfg)
                     if snapshot.values:
-                        initial_state = snapshot.values
+                        # 恢复输入 = checkpoint 原 state(fresh-run 重放,started_at
+                        # 保留不重置);但 metrics 是求和 reducer(_merge_metrics),
+                        # 输入带 checkpoint 当前值会被 operator(current, v) 再算
+                        # 一次 —— 双计,compile_pass_count 等五计数器恢复后翻倍
+                        # (多次重启逐次累计)。去掉 metrics 键 = 该通道不产生输入
+                        # 更新,保留 checkpoint 原值(等价 pre-fix 覆盖起算);其余
+                        # reducer 通道(todo 按 id 合并 / rework_events 替换 /
+                        # final_deliverables 去重追加)对同值输入幂等,无此问题。
+                        initial_state = dict(snapshot.values)
+                        initial_state.pop("metrics", None)
                     else:
                         initial_state = {"requirement_spec": {"requirement": requirement,
                                                               "environment": env_name},
