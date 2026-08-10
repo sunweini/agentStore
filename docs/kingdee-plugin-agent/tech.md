@@ -379,4 +379,4 @@ default_recursion_limit(n) = 100 + 20 × n
 
 **反馈通道(设计 §12)**:`POST /tasks/{id}/feedback {reason}` 部署后行为错误手动上报 → 经验库 propose("DEPLOY", sha256(reason)[:12], reason, …)(proposed 态,同验收拒绝沉淀模式,失败不阻塞);API 端点契约见 api.py 模块 docstring 与 manual.md §4 端点表。
 
-**未验证项**:线上 DeepSeek 验证 load_skill 绑定(见 §4.2);真实金蝶环境 WebAPI 端点/响应结构(编译侧已真实验证,E2E 门 ✅;元数据/冒烟侧仍为文档化初始契约占位,见 tools/kingdee_api.py 头部警告);Linux 容器 BOS 编译兼容性(实际采用 Windows 原生部署,见 windows-deployment.md,容器方案保留);规范库(standards)目录与文档导入尚未接真实资料。
+**未验证项**:线上 DeepSeek 验证 load_skill 绑定(见 §4.2);真实金蝶环境 WebAPI(✅ 2026-08-10 已实测:ValidateUser 登录 / ExecuteBillQuery / QueryBusinessInfo 三端点可用,`get_form_fields` 真实返回 337 字段,会话失效自动重登;官方 SDK 无 GetFormOperations/QueryBusinessObjects,占位方法已删,见 tools/kingdee_api.py);Linux 容器 BOS 编译兼容性(实际采用 Windows 原生部署,见 windows-deployment.md,容器方案保留);规范库(standards)目录与文档导入尚未接真实资料。
