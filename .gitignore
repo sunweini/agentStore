@@ -26,3 +26,6 @@ htmlcov/
 
 # LangGraph
 .langgraph_api/
+
+# git worktrees
+.worktrees/
