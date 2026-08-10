@@ -172,40 +172,76 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
         # 3. LLM 生成(DeepSeek JSON Mode + load_skill 工具 + 容错解析,最多 2 回合)
         # - JSON Mode 强制模型输出合法 JSON(DeepSeek 官方,见 api-docs.deepseek.com/zh-cn/guides/json_mode)
         # - 绑定 load_skill 工具:LLM 需要方法论时主动调用(方案 2a,每步固定可用 skill 列表)
-        # - 多轮:回合 1 调工具 → 喂工具结果 → 回合 2 生成 JSON;回合 2 仍调工具则强制停止
-        from langchain_core.messages import ToolMessage
+        # - 多轮:回合 1 调工具 → 回合 2 换无工具 LLM 生成 JSON
+        #   原因:deepseek-v4-flash 带工具绑定时,工具回合后仍重复发 tool_calls
+        #   且 content 为空(生产实测 2026-08-10),去掉工具绑定才能稳定出 JSON
         from agents.sentiment_query_agent.skills.loader import load_skill
 
         llm = get_chat_model().bind_tools([load_skill], strict=True).bind(
             response_format={"type": "json_object"}
         )
+        llm_no_tools = get_chat_model().bind(response_format={"type": "json_object"})
         messages = prompt.format_messages(
             company=company,
             prev=json.dumps(group.get(f"_step{step-1}", {}), ensure_ascii=False),
             search=search_result,
         )
-        raw_output: dict | None = None
-        for attempt in range(3):  # 外层:JSON 解析重试(最多 3 次)
+        normalized: dict | None = None
+        for attempt in range(3):  # 外层:JSON 解析 + 格式校验重试(最多 3 次)
             response = await llm.ainvoke(messages)
-            # 回合 1:LLM 发 tool_calls → 执行工具 → 追加结果 → 回合 2(仅 1 轮工具)
+            # 回合 1:LLM 发 tool_calls → 执行工具 → 回合 2(无工具 LLM,防 tool_calls 循环)
             if getattr(response, "tool_calls", None):
-                tool_msgs = [
-                    ToolMessage(content=load_skill.invoke(tc["args"]), tool_call_id=tc["id"])
-                    for tc in response.tool_calls
-                ]
-                response = await llm.ainvoke([*messages, response, *tool_msgs])
+                tool_contents = "\n\n".join(
+                    str(load_skill.invoke(tc["args"])) for tc in response.tool_calls
+                )
+                response = await llm_no_tools.ainvoke([
+                    *messages,
+                    HumanMessage(
+                        content="load_skill 返回的方法论内容:\n" + tool_contents
+                        + "\n\n已获取方法论。现在严格按格式直接输出 JSON,不要调用任何工具。"
+                    ),
+                ])
             content = response.content if isinstance(response, AIMessage) else str(response)
             raw_output = _extract_json(content)
-            if raw_output is not None:
+            if raw_output is None:
+                if attempt < 2:
+                    logger.warning(
+                        "service=%s step=%d span=%s event=retry reason=bad_json "
+                        "tool_calls=%s content_len=%d content_head=%r",
+                        _AGENT, step, span_id,
+                        bool(getattr(response, "tool_calls", None)), len(content), content[:200],
+                    )
+                    # 带错误反馈重试:LLM 看到自己的坏输出 + 纠正指令
+                    messages = [*messages, AIMessage(content=content), HumanMessage(
+                        content="上面的输出不是合法 JSON。请严格按格式重新输出完整 JSON。")]
+                    continue
+                # 完整记录原始返回,便于排查模型输出问题(空 content = tool_calls 循环等)
+                logger.error(
+                    "service=%s step=%d span=%s event=bad_json_final "
+                    "tool_calls=%s content_len=%d content_head=%r content_tail=%r",
+                    _AGENT, step, span_id,
+                    bool(getattr(response, "tool_calls", None)),
+                    len(content), content[:500], content[-200:],
+                )
+                raise RuntimeError(
+                    f"LLM 输出无法解析为 JSON,重试 2 次仍失败;"
+                    f"content_len={len(content)}, head={content[:200]!r}"
+                )
+            # skill 脚本格式校验;失败同样带反馈重试(LLM 偶发缺字段/类型错)
+            try:
+                normalized = _run_skill_script(step, raw_output)
                 break
-            if attempt < 2:
-                logger.warning("service=%s step=%d span=%s event=retry reason=bad_json",
-                               _AGENT, step, span_id)
-            else:
-                raise RuntimeError("LLM 输出无法解析为 JSON,重试 2 次仍失败")
+            except RuntimeError as exc:
+                if attempt == 2:
+                    logger.error("service=%s step=%d span=%s event=format_error_final error=%s",
+                                 _AGENT, step, span_id, exc)
+                    raise
+                logger.warning("service=%s step=%d span=%s event=retry reason=format_error error=%s",
+                               _AGENT, step, span_id, exc)
+                messages = [*messages, AIMessage(content=content), HumanMessage(
+                    content=f"上面的输出格式校验失败:{exc}。请修正后重新输出完整 JSON。")]
 
-        # 4. skill 脚本标准化
-        normalized = _run_skill_script(step, raw_output)
+        # 4. skill 脚本标准化产物(已在循环内校验通过)
         group[f"_step{step}"] = normalized
 
         # 5. 写回产物到对应字段

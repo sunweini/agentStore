@@ -1,0 +1,16 @@
+# sentiment-query-agent 生产镜像精简依赖(不含 torch/chromadb/RAG 栈)。
+# 版本锁定 = 测试环境(10.15.80.5)验证过的版本。
+# 增删依赖时同步根目录 requirements.txt(全局)与这里(镜像)。
+langchain-core==1.5.3
+langchain-openai==1.4.1
+langgraph==1.2.10
+langgraph-checkpoint-sqlite==3.1.1
+langchain-mcp-adapters==0.3.2
+python-dotenv==1.1.0
+fastapi==0.141.1
+uvicorn==0.52.1
+pydantic==2.13.4
+httpx==0.28.1
+openpyxl>=3.1,<4
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,21 +24,50 @@ from pydantic import BaseModel
 
 from agents.sentiment_query_agent import auth, billing
 from agents.sentiment_query_agent.agent import run_pipeline
-from agents.sentiment_query_agent.graph.state import STATUS_COMMITTED, STATUS_GENERATING, STATUS_REVIEW
+from agents.sentiment_query_agent.graph.state import (
+    STATUS_COMMITTED, STATUS_GENERATING, STATUS_REVIEW, STATUS_STOPPED,
+)
 from agents.sentiment_query_agent.store import converter, scheme_store
 from common.otel import init_otel, get_tracer
 
 app = FastAPI(title="海外舆情检索方案生成 Agent", version="0.1.0")
 
 # CORS:允许前端演示页(web/demo.html)跨域访问
+# 生产用 CORS_ORIGINS 收紧(逗号分隔源,如 http://10.33.17.72);缺省 "*" 兼容测试环境
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 演示环境放开;生产按需收紧
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _setup_file_logging() -> None:
+    """LOG_DIR 环境变量设置时日志落盘(RotatingFileHandler,10MB×5);未设置仅 stdout。"""
+    log_dir = os.getenv("LOG_DIR")
+    if not log_dir:
+        return
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        log_path / "api.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    # root 接业务日志(agents.*);uvicorn logger 设了 propagate=False,
+    # 访问日志到不了 root,需单独挂。注意不挂 uvicorn.error:
+    # 它向父 "uvicorn" 传播,挂两处会导致文件里每行重复
+    for lg in (
+        logging.getLogger(),
+        logging.getLogger("uvicorn"),
+        logging.getLogger("uvicorn.access"),
+    ):
+        lg.addHandler(handler)
+    root = logging.getLogger()
+    if root.level == logging.NOTSET:
+        root.setLevel(logging.INFO)
 
 
 def _user(request: Request) -> str:
@@ -56,9 +88,13 @@ class SelectionRequest(BaseModel):
 
 @app.on_event("startup")
 async def _startup() -> None:
+    _setup_file_logging()
     init_otel()
     # 后台任务表:group_id → asyncio.Task
     app.state.tasks = {}
+    # 提交元信息:group_id → {owner, company_name, meta, created_at}
+    # 用途:checkpoint 落盘前(提交后瞬间)的归属校验与 stop 兜底
+    app.state.metas = {}
 
 
 @app.get("/health")
@@ -96,6 +132,10 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
 
     task = asyncio.create_task(_runner())
     app.state.tasks[group_id] = task
+    app.state.metas[group_id] = {
+        "owner": user, "company_name": req.company_name, "meta": meta,
+        "created_at": datetime.now().isoformat(),
+    }
     return {"group_id": group_id, "status": STATUS_GENERATING}
 
 
@@ -119,6 +159,79 @@ async def get_progress(group_id: str, user: str = Depends(_user)):
     }
 
 
+@app.get("/api/v1/groups/{group_id}/status")
+async def get_status(group_id: str, user: str = Depends(_user)):
+    """轻量查运行状态:status + 是否后台运行 + 当前步骤,不带 step 产物。
+
+    供前端/调用方做轮询心跳与"能否查方案组"判断:
+    status=review(或 stopped/committed)且 running=false 时可查 schemes。
+    """
+    task = app.state.tasks.get(group_id)
+    running = task is not None and not task.done()
+    group = scheme_store.load_group(group_id)
+    if group is None:
+        group = await _load_from_checkpoint(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="方案组不存在")
+    auth.assert_owner(user, group)
+
+    # 当前步骤:有 running 步取其步号,否则取已出现的最大步号
+    step_status = group.get("step_status", [])
+    running_steps = [s["step"] for s in step_status if s.get("status") == "running"]
+    current_step = running_steps[-1] if running_steps else (
+        max((s["step"] for s in step_status), default=0)
+    )
+    steps_done = sum(1 for s in step_status if s.get("status") == "done")
+    steps_error = sum(1 for s in step_status if s.get("status") == "error")
+    # 明确标识:review/committed = 6 步流程已结束,可调 schemes
+    schemes_ready = group["status"] in (STATUS_REVIEW, STATUS_COMMITTED)
+    return {
+        "group_id": group_id,
+        "status": group["status"],
+        "running": running,
+        "current_step": current_step,
+        "total_steps": 6,
+        "steps_done": steps_done,
+        "steps_error": steps_error,
+        "schemes_ready": schemes_ready,
+    }
+
+
+@app.post("/api/v1/groups/{group_id}/stop")
+async def stop_group(group_id: str, user: str = Depends(_user)):
+    """停止正在运行的组:取消后台任务,标记 stopped,不重启进程。
+
+    - 只停 generating 态;已 review/committed/stopped 的组拒绝(409)。
+    - 取消后落 stopped 草稿,保留已完成步骤产物。
+    - pending 计费记录保留(未 commit 不计费),不影响并发额度外的清理。
+    """
+    task = app.state.tasks.get(group_id)
+    group = scheme_store.load_group(group_id)
+    if group is None:
+        group = await _load_from_checkpoint(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="方案组不存在")
+    auth.assert_owner(user, group)
+
+    if group["status"] != STATUS_GENERATING:
+        raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 generating 可停止")
+
+    if task is not None and not task.done():
+        task.cancel()
+        # 等待任务真正退出,避免取消后 runner 继续写草稿覆盖 stopped 状态
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # 取消过程中 runner 抛错,忽略(目的就是停)
+            pass
+
+    group["status"] = STATUS_STOPPED
+    scheme_store.save_draft(group)
+    logger.info("service=sentiment-query-agent event=group_stopped group_id=%s user=%s", group_id, user)
+    return {"group_id": group_id, "status": STATUS_STOPPED}
+
+
 async def _load_from_checkpoint(group_id: str) -> dict | None:
     """从 LangGraph checkpoint 读 group 状态(生成中进度)。"""
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -127,6 +240,8 @@ async def _load_from_checkpoint(group_id: str) -> dict | None:
 
     try:
         async with AsyncSqliteSaver.from_conn_string(str(_CHECKPOINT_DB)) as saver:
+            # WAL 与 run_pipeline 写路径一致(幂等;确保读不阻塞写)
+            await saver.conn.execute("PRAGMA journal_mode=WAL")
             g = build_graph().compile(checkpointer=saver)
             state = await g.aget_state({"configurable": {"thread_id": group_id}})
             group = state.values.get("group")
@@ -186,6 +301,8 @@ async def commit_group(group_id: str, user: str = Depends(_user)):
     auth.assert_owner(user, group)
     if group["status"] == STATUS_COMMITTED:
         raise HTTPException(status_code=409, detail="已入库")
+    if group["status"] != STATUS_REVIEW:
+        raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 review(待勾选)可入库")
     group["status"] = STATUS_COMMITTED
     scheme_store.save_committed(group)
     billing.commit(user, group_id)
