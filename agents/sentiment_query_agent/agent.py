@@ -43,6 +43,8 @@ async def run_pipeline(group_id: str, company_name: str, owner: str, meta: dict)
     """
     _CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(_CHECKPOINT_DB)) as saver:
+        # WAL:流水线写与进度轮询读走不同连接,防并发 database is locked
+        await saver.conn.execute("PRAGMA journal_mode=WAL")
         graph = build_graph().compile(checkpointer=saver)
         from datetime import datetime
 

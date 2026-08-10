@@ -5,19 +5,46 @@
 - 草稿:data/schemes/<group_id>.draft.json(生成中/待勾选)
 - 正式:data/schemes/<group_id>.json(commit 后,冻结)
 - 索引:data/schemes/index.json(方案组列表)
+
+并发安全:index.json 读-改-写非原子,用线程锁(进程内)+ fcntl 文件锁
+(跨进程,为多 worker 预留)双保险,模式对齐 billing.py。
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "schemes"
 
+# 进程内线程锁:同进程多协程/线程并发读写索引时串行化
+_index_lock = threading.Lock()
+
 
 def _ensure_dir() -> None:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _with_index_lock(fn):
+    """持锁执行 fn:线程锁 + fcntl 文件锁(跨进程,如多 worker)。
+
+    fcntl 仅 Unix;Windows 环境退化到仅线程锁。
+    """
+    with _index_lock:
+        try:
+            import fcntl
+        except ImportError:  # Windows
+            return fn()
+        _ensure_dir()
+        lock_path = _DATA_DIR / "index.lock"
+        with open(lock_path, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                return fn()
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def save_draft(group: dict) -> None:
@@ -42,19 +69,23 @@ def save_committed(group: dict) -> None:
 
 
 def _update_index(group: dict) -> None:
-    """更新索引文件(方案组列表页用)。"""
-    index_path = _DATA_DIR / "index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
-    entry = {
-        "group_id": group["group_id"],
-        "company_name": group["company_name"],
-        "status": group["status"],
-        "owner": group["owner"],
-        "created_at": group.get("created_at", ""),
-        "committed_at": group.get("committed_at"),
-    }
-    index = [e for e in index if e["group_id"] != group["group_id"]] + [entry]
-    index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    """更新索引文件(方案组列表页用)。并发安全。"""
+
+    def _do() -> None:
+        index_path = _DATA_DIR / "index.json"
+        index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
+        entry = {
+            "group_id": group["group_id"],
+            "company_name": group["company_name"],
+            "status": group["status"],
+            "owner": group["owner"],
+            "created_at": group.get("created_at", ""),
+            "committed_at": group.get("committed_at"),
+        }
+        index = [e for e in index if e["group_id"] != group["group_id"]] + [entry]
+        index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    _with_index_lock(_do)
 
 
 def load_group(group_id: str) -> dict | None:
@@ -67,9 +98,13 @@ def load_group(group_id: str) -> dict | None:
 
 
 def list_groups(owner: str) -> list[dict]:
-    """按 owner 列方案组索引。"""
-    index_path = _DATA_DIR / "index.json"
-    if not index_path.exists():
-        return []
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    return [e for e in index if e.get("owner") == owner]
+    """按 owner 列方案组索引。持锁读,避免读到写一半的索引。"""
+
+    def _do() -> list[dict]:
+        index_path = _DATA_DIR / "index.json"
+        if not index_path.exists():
+            return []
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        return [e for e in index if e.get("owner") == owner]
+
+    return _with_index_lock(_do)

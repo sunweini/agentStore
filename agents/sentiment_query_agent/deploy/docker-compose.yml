@@ -1,0 +1,40 @@
+# sentiment-query-agent 生产 compose(自包含,不动根目录 docker-compose.yml)。
+# 用法:仓库根下 docker compose -f agents/sentiment_query_agent/deploy/docker-compose.yml up -d --build
+# 前置:.env 放仓库根(LLM key/API_KEYS_JSON/MCP token/CORS_ORIGINS),rsync 不覆盖。
+services:
+  api:
+    build:
+      context: ../../..
+      dockerfile: agents/sentiment_query_agent/deploy/Dockerfile
+    image: sentiment-query-agent:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../../.env
+    environment:
+      - LOG_DIR=/app/logs
+    volumes:
+      - ../../../data:/app/data
+      - /home/logs/sentiment-query-agent:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ../../../web:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      - api

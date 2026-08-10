@@ -19,6 +19,7 @@ TRACK_KEYS = ("全量新闻", "负面新闻", "行业新闻", "快讯", "司法"
 STATUS_GENERATING = "generating"   # 生成中
 STATUS_REVIEW = "review"           # 待勾选
 STATUS_COMMITTED = "committed"     # 已入库(冻结)
+STATUS_STOPPED = "stopped"         # 已停止(用户手动停止,未计费)
 
 
 class Track(TypedDict, total=False):
