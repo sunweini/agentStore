@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
 import logging
 import threading
 import time
@@ -303,8 +304,9 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
     graph_factory = graph_factory or (lambda: build_graph())
 
     def _check(x_api_key: str) -> None:
-        """apikey 校验:X-API-Key 头;未配置有效 key 一律 401(默认拒绝)。"""
-        if not effective_key or x_api_key != effective_key:
+        """apikey 校验:compare_digest 恒定时间比较;未配置有效 key 一律 401。"""
+        if not effective_key or not secrets.compare_digest(
+                x_api_key.encode(), effective_key.encode()):
             raise HTTPException(401, "apikey 无效")
 
     def _get_task_or_404(task_id: str) -> TaskHandle:

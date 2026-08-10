@@ -1985,6 +1985,13 @@ def test_api_requires_apikey():
     assert r.status_code == 401
 
 
+def test_api_key_compare_digest():
+    """apikey 用恒定时间比较(时序侧信道防护)。"""
+    import secrets as _s
+    assert _s.compare_digest(b"abc", b"abc") is True
+    assert _s.compare_digest(b"abc", b"abd") is False
+
+
 def test_api_cors_preflight():
     """CORS:跨域 OPTIONS 预检返回 CORS 头(演示页 web/kingdee-demo.html 可跨域的前提)。
 
