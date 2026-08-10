@@ -183,6 +183,28 @@ def test_no_env_no_client():
     assert KingdeeApiClient.client_from_env_or_none() is None  # 无 env 返回 None(硬门槛信号)
 
 
+def test_client_from_env_env_vars(monkeypatch):
+    """env 分套:KD_BASE_URL_TEST 优先于 KD_BASE_URL。"""
+    import common.config as config
+    monkeypatch.setenv("KD_BASE_URL", "http://default/k3cloud/")
+    monkeypatch.setenv("KD_BASE_URL_TEST", "http://test/k3cloud/")
+    monkeypatch.setenv("KD_USERNAME_TEST", "t-user")
+    c = KingdeeApiClient.client_from_env_or_none(env="test")
+    assert c is not None
+    assert c.base_url == "http://test"
+    assert c._username == "t-user"
+
+
+def test_client_from_env_no_env_falls_back(monkeypatch):
+    """env 空回落默认 KD_*。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://default/k3cloud/")
+    monkeypatch.setenv("KD_USERNAME", "d-user")
+    c = KingdeeApiClient.client_from_env_or_none(env="")
+    assert c is not None
+    assert c.base_url == "http://default"
+    assert c._username == "d-user"
+
+
 # --- B8: 冒烟客户端 + 打包工具 ---
 from agents.kingdee_plugin_agent.tools.smoke_client import SmokeClient
 from agents.kingdee_plugin_agent.tools.package import PackageBuilder

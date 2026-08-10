@@ -52,3 +52,17 @@ def provider_api_key(provider: str) -> str:
 def provider_base_url(provider: str) -> str:
     """供应商 API 地址。未配置返回空串。"""
     return get_env(f"{provider.upper()}_BASE_URL")
+
+
+_KD_VAR_NAMES = ("KD_BASE_URL", "KD_USERNAME", "KD_PASSWORD",
+                 "KD_DATA_CENTER", "KD_LCID")
+
+
+def kingdee_env_vars(env: str = "") -> dict:
+    """按环境取金蝶凭证:优先 <VAR>_<ENV>,回落 <VAR>(默认环境)。
+
+    含 KD_LCID(语系);env 空 = 默认环境,直接用 KD_* 5 项。
+    客户端按返回值构造,缺项由调用方(硬门槛)报 503 点明。
+    """
+    prefix = f"_{env.upper()}" if env else ""
+    return {name: get_env(f"{name}{prefix}") for name in _KD_VAR_NAMES}

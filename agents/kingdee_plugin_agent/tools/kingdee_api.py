@@ -14,7 +14,6 @@
   已失效(报「会话信息已丢失」),必须走 ValidateUser 预登录;httpx 0.28+ 默认
   HTTP/2 金蝶不支持,须显式 http1=True。
 """
-import os
 import time
 from dataclasses import dataclass
 
@@ -177,17 +176,20 @@ class KingdeeApiClient:
         return fields
 
     @classmethod
-    def client_from_env_or_none(cls) -> "KingdeeApiClient | None":
+    def client_from_env_or_none(cls, env: str = "") -> "KingdeeApiClient | None":
         """从环境变量构造客户端;缺 KD_BASE_URL 返回 None(无环境 = 硬门槛信号)。
 
+        env: 环境名(凭证 <VAR>_<ENV> 分套,空 = 默认 KD_* 5 项)。
         环境变量:KD_BASE_URL(主机,可带 /k3cloud/ 前缀)/ KD_USERNAME / KD_PASSWORD
         / KD_DATA_CENTER(账套 ID,即 ValidateUser 的 acctID)/ KD_LCID(可选,默认 2052)
         """
-        base = os.getenv("KD_BASE_URL")
+        from common.config import kingdee_env_vars
+        vars_ = kingdee_env_vars(env)
+        base = vars_.get("KD_BASE_URL", "")
         if not base:
             return None
-        return cls(base, os.getenv("KD_DATA_CENTER", ""), os.getenv("KD_USERNAME", ""),
-                   os.getenv("KD_PASSWORD", ""), int(os.getenv("KD_LCID", "2052")))
+        return cls(base, vars_.get("KD_DATA_CENTER", ""), vars_.get("KD_USERNAME", ""),
+                   vars_.get("KD_PASSWORD", ""), int(vars_.get("KD_LCID", "2052") or 2052))
 
 
 def _dumps(body: dict) -> str:
