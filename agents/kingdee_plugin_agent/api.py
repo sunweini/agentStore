@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     env TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'created',
     created_at TEXT NOT NULL,
-    requirement TEXT NOT NULL
+    requirement TEXT NOT NULL,
+    claimed_at REAL
 )
 """
 #: 共享 msgpack 白名单 serde:TaskState/Subtask dataclass 显式登记,
@@ -134,6 +135,11 @@ def _task_conn(db_path: str) -> sqlite3.Connection:
     """
     conn = sqlite3.connect(db_path)
     conn.execute(_TASKS_DDL)
+    # 轻量迁移:v1.21.x 早期表无 claimed_at 列(B-1 时间戳回收新增)——
+    # 老表补列,不迁移不丢列即认领 SQL 崩(ALTER 幂等仅一次,加列后不再执行)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    if cols and "claimed_at" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN claimed_at REAL")
     return conn
 
 
@@ -158,26 +164,51 @@ def _update_task_status(db_path: str, task_id: str, status: str) -> None:
         conn.commit()
 
 
+def _clear_claimed_at(db_path: str, task_id: str) -> None:
+    """恢复配额不足/失败回退时清占位时间戳(任务回 created 保持可恢复)。
+
+    恢复认领的占位(running + claimed_at=本次启动)在任务回到 created 时一并
+    清掉 —— 否则下次重启陈旧回收仍能认领(claimed_at 早于新 boot_ts,语义
+    等价),但保持表状态干净:created 任务无 claimed_at 归属,不误导排查。
+    """
+    with closing(_task_conn(db_path)) as conn:
+        conn.execute("UPDATE tasks SET claimed_at=NULL WHERE id=?", (task_id,))
+        conn.commit()
+
+
 def _pending_task_rows(db_path: str) -> list[tuple[str, str, str]]:
-    """启动恢复扫描:未完成任务 (id, env, requirement)。"""
+    """启动恢复扫描:未完成任务 (id, env, requirement)。
+
+    扫 status IN ('created','running'):created = 建任务后线程未跑即崩溃,
+    running = 上个进程认领后崩溃/挂起未落终态(恢复最常见结果:任务恢复后
+    再次 interrupt 挂起等用户回答,DB 停留在 running)。只扫 created 会丢
+    running 任务(恢复成功的反而丢失,被跳过的反而保留)。
+    """
     with closing(_task_conn(db_path)) as conn:
         return conn.execute(
-            "SELECT id, env, requirement FROM tasks WHERE status='created'"
+            "SELECT id, env, requirement FROM tasks "
+            "WHERE status IN ('created','running')"
         ).fetchall()
 
 
-def _claim_pending_task(db_path: str, task_id: str) -> bool:
-    """恢复前占位:created → running,条件更新保证任务级幂等。
+def _claim_pending_task(db_path: str, task_id: str, boot_ts: float) -> bool:
+    """恢复前占位:created/running → running + claimed_at,任务级幂等 + 陈旧回收。
 
-    返回 True = 本实例成功认领(继续恢复);False = 行不存在/已被认领
-    (另一实例已置 running),跳过该任务 —— 防同一 DB 双实例并发扫描
-    读到同一 status='created' 行,对同一 thread_id 双线程 invoke
-    (checkpoint 竞态损坏 / 双倍计费)。
+    返回 True = 本实例成功认领(继续恢复);False = 行不存在 / 并发实例刚认领
+    (claimed_at 新鲜),跳过该任务 —— 防同一 DB 双实例并发扫描读到同一行,
+    对同一 thread_id 双线程 invoke(checkpoint 竞态损坏 / 双倍计费)。
+
+    陈旧判定:claimed_at 早于本次启动 boot_ts = 上个进程遗留(崩溃/挂起),
+    可回收重认领;晚于本次启动 = 并发实例刚认领,不回收(防双跑)。快速重启
+    (秒级)也正确 —— 上个进程的 claimed_at 必然早于新 boot_ts。双实例并发
+    启动窗口内的竞态 v1 接受(单实例部署设计约束)。
     """
     with closing(_task_conn(db_path)) as conn:
         cur = conn.execute(
-            "UPDATE tasks SET status='running' WHERE id=? AND status='created'",
-            (task_id,))
+            "UPDATE tasks SET status='running', claimed_at=? "
+            "WHERE id=? AND status IN ('created','running') "
+            "AND (claimed_at IS NULL OR claimed_at < ?)",
+            (boot_ts, task_id, boot_ts))
         conn.commit()
         return cur.rowcount > 0
 
@@ -381,9 +412,10 @@ def _run_loop(handle: TaskHandle) -> None:
     state 始终是 dict(全量快照 /state 与 SSE 随时可读,Command 瞬时态不可见)。
 
     配额模型(Task 5 持久化后):create_task 在请求线程 acquire(占满 429);
-    恢复的任务在恢复线程 acquire(阻塞等待,重启场景容量 4 不再 429 拒绝)。
-    统一由本函数 finally release 配对,不泄漏;结束/失败写元数据表终态,
-    防止重启误恢复已结束任务。
+    恢复的任务在恢复线程非阻塞 acquire(配额不足跳过,回写 created 留待
+    下次重启 —— 恢复语义是「不漏任务」而非「限制恢复」)。统一由本函数
+    finally release 配对,不泄漏;结束/失败/取消写元数据表终态,防止重启
+    误恢复已结束任务。
     """
     try:
         invoke_input = handle.state   # 初始为需求 dict;挂起恢复后为 Command(resume=...)
@@ -520,22 +552,28 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
         KINGDEE_MAX_CONCURRENT 时第 N+1 个任务会永久阻塞在 create_app 内,
         整个 API 起不来(实测复现)。恢复语义是「不漏任务」而非「限制恢复」,
         超限跳过不丢任务(下轮恢复)。
-        任务级幂等:恢复前先 UPDATE 占位 created → running(见
-        _claim_pending_task),并发实例扫到 running 跳过,防双线程 invoke。
+        任务级幂等 + 陈旧回收:恢复前先 UPDATE 占位 created/running →
+        running + claimed_at(见 _claim_pending_task),并发实例扫到新鲜
+        claimed_at 跳过,防双线程 invoke;claimed_at 早于本次启动(boot_ts)
+        = 上个进程遗留,可回收 —— 恢复后的任务再次挂起停在 running 也不丢
+        (下次重启仍可回收重认领)。
         """
+        boot_ts = time.time()
         try:
             for task_id, env_name, requirement in _pending_task_rows(path):
                 try:
-                    if not _claim_pending_task(path, task_id):
-                        # 已被另一实例认领(占位先行,幂等跳过)
+                    if not _claim_pending_task(path, task_id, boot_ts):
+                        # 已被另一实例认领(占位先行,claimed_at 新鲜,幂等跳过)
                         logger.info("service=kingdee-plugin-agent "
                                     "event=task_restore_skipped_claimed "
                                     "task_id=%s", task_id)
                         continue
                     if not _sem.acquire(blocking=False):
-                        # 恢复配额不足:回写 created 保持可恢复,跳过等下次
-                        # (线程未启动,不得 release —— 配额从未被本任务持有)
+                        # 恢复配额不足:回写 created + 清 claimed_at 保持可恢复,
+                        # 跳过等下次(线程未启动,不得 release —— 配额从未被
+                        # 本任务持有)
                         _update_task_status(path, task_id, "created")
+                        _clear_claimed_at(path, task_id)
                         logger.warning("service=kingdee-plugin-agent "
                                        "event=task_restore_skipped_capacity "
                                        "task_id=%s env=%s", task_id, env_name)
@@ -582,6 +620,7 @@ def create_app(api_key: str | None = None, *, graph_factory=None,
                         _sem.release()
                         try:
                             _update_task_status(path, task_id, "created")
+                            _clear_claimed_at(path, task_id)
                         except Exception as persist_exc:  # 回写失败不阻断后续任务
                             logger.warning("service=kingdee-plugin-agent "
                                            "event=task_restore_status_reset_failed "
