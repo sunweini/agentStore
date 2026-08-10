@@ -15,6 +15,15 @@
   会经 __getattr__ 委派丢失 tools,必须用 with_structured_output(schema,
   tools=[load_skill], include_raw=True) 形态),脚本/fake LLM(无 bind_tools)
   自动跳过绑定,既有测试契约不变。
+- 首选形态被拒(2026-08-10 真实 DeepSeek 实测):langchain-openai 的 tools 参数
+  在 strict=None(不传 strict)时生成的工具不带 strict 标记,openai SDK
+  validate_input_tools 本地校验拒绝(ValueError: `load_skill` is not strict);
+  传 strict=True 又会被 DeepSeek API 拒绝(400 This response_format type is
+  unavailable now,json_schema response_format 不支持)→ invoke 抛异常时自动
+  回退 JSON Mode(bind_tools([load_skill], strict=True) + response_format
+  json_object + schema 契约指令注入系统提示 + 手动 pydantic 解析,真实 DeepSeek
+  实测可用,见 CLAUDE.md「load_skill 绑定未线上验证」回退方案)。回退保持同一
+  外部契约:畸形 JSON 同输入重试 1 次(共 2 次尝试)、工具 2 回合上限、失败 → None。
 """
 
 from __future__ import annotations
@@ -22,7 +31,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.tools import tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -138,12 +148,19 @@ def skill_summary() -> str:
 def structured_with_skill(llm, schema, messages):
     """结构化输出 + load_skill 工具绑定(最多 2 回合,对照 sentiment 工具循环)。
 
-    真实模型:with_structured_output(schema, tools=[load_skill], include_raw=True)
-    —— json_schema 模式官方 tools 参数,输出 schema 与 load_skill 同时下发;
-    模型回合 1 调 load_skill → 执行并喂回 ToolMessage → 回合 2 出 schema JSON。
-    畸形 JSON 重试(设计 §8):parsed 为空且无 tool_calls → 同输入重试 1 次
-    (共 2 次尝试);重试耗尽仍解析失败 → 返回 None → worker 既有确定性骨架降级。
-    工具回合后的结果直接返回(成功出 schema / 又调工具强制停止),不再重试。
+    真实模型双形态(首选被拒自动回退,2026-08-10 真实 DeepSeek 实测):
+      首选:with_structured_output(schema, tools=[load_skill], include_raw=True)
+            —— json_schema 模式官方 tools 参数,输出 schema 与 load_skill 同时
+            下发;模型回合 1 调 load_skill → 执行并喂回 ToolMessage → 回合 2
+            出 schema JSON。此形态在 DeepSeek 上 invoke 即被拒(不传 strict:
+            openai SDK 本地校验;传 strict=True:API 400 不支持该 response_format),
+            异常时自动走回退。
+      回退:JSON Mode(bind_tools([load_skill], strict=True) + response_format
+            json_object)+ schema 格式指令注入系统提示 + 手动 pydantic 解析
+            (真实 DeepSeek 实测可用,load_skill 工具回合 2 回合上限一致)。
+    两形态同一外部契约:畸形 JSON 同输入重试 1 次(共 2 次尝试);工具回合后的
+    结果直接返回(成功出 schema / 又调工具强制停止);重试与工具 2 回合上限
+    正交。失败 → None → worker 既有确定性骨架降级。
 
     不传 strict:worker 输出 schema 含默认值字段(QuestionsOutput.questions 等),
     OpenAI strict json_schema 禁止默认值,传了会被 API 拒绝;load_skill 单字符串
@@ -170,28 +187,95 @@ def structured_with_skill(llm, schema, messages):
             except TypeError:
                 structured = None  # 实现不支持 tools 参数 → 普通结构化输出
             if structured is not None:
-                # 畸形 JSON 重试(设计 §8):parsed=None 且无 tool_calls(解析失败)→
-                # 同输入重试 1 次(共 2 次尝试),仍失败返回 None → worker 既有确定性
-                # 骨架降级。重试与工具 2 回合上限正交:工具回合后的结果直接返回
-                # (成功出 schema / 又调工具强制停止),不再参与解析重试。
-                for _ in range(2):
-                    result = structured.invoke(messages)
-                    if not (isinstance(result, dict) and "raw" in result):
-                        return result  # 非 include_raw 形态(自定义实现):直接返回
-                    raw = result.get("raw")
-                    if getattr(raw, "tool_calls", None):
-                        tool_msgs = [
-                            ToolMessage(content=load_skill.invoke(tc["args"]),
-                                        tool_call_id=tc["id"])
-                            for tc in raw.tool_calls
-                        ]
-                        result = structured.invoke([*messages, raw, *tool_msgs])
-                        return result.get("parsed")
-                    parsed = result.get("parsed")
-                    if parsed is not None:
-                        return parsed
-                    # parsed=None 且无 tool_calls:畸形 JSON → 同输入重试
-                return None
+                try:
+                    return _run_structured_tool_rounds(structured, messages)
+                except Exception:
+                    # 首选形态 invoke 被拒(openai SDK strict 校验 / DeepSeek
+                    # json_schema 不支持)→ JSON Mode 回退(CLAUDE.md 约束段)
+                    return _run_json_mode_rounds(llm, schema, messages)
         return llm.with_structured_output(schema).invoke(messages)
     except Exception:
         return None  # LLM 故障 → worker 既有确定性骨架
+
+
+def _run_structured_tool_rounds(structured, messages):
+    """首选形态:with_structured_output(schema, tools, include_raw) 工具回合。
+
+    畸形 JSON 重试(设计 §8):parsed=None 且无 tool_calls(解析失败)→
+    同输入重试 1 次(共 2 次尝试),仍失败返回 None → worker 既有确定性
+    骨架降级。重试与工具 2 回合上限正交:工具回合后的结果直接返回
+    (成功出 schema / 又调工具强制停止),不再参与解析重试。
+    """
+    for _ in range(2):
+        result = structured.invoke(messages)
+        if not (isinstance(result, dict) and "raw" in result):
+            return result  # 非 include_raw 形态(自定义实现):直接返回
+        raw = result.get("raw")
+        if getattr(raw, "tool_calls", None):
+            tool_msgs = [
+                ToolMessage(content=load_skill.invoke(tc["args"]),
+                            tool_call_id=tc["id"])
+                for tc in raw.tool_calls
+            ]
+            result = structured.invoke([*messages, raw, *tool_msgs])
+            return result.get("parsed")
+        parsed = result.get("parsed")
+        if parsed is not None:
+            return parsed
+        # parsed=None 且无 tool_calls:畸形 JSON → 同输入重试
+    return None
+
+
+def _parse_json_content(parser, response):
+    """JSON Mode 响应 → schema 实例;工具调用/空内容/畸形 JSON → None。
+
+    畸形 JSON 与空内容都返回 None(调用方按解析失败重试/降级处理)。
+    """
+    if getattr(response, "tool_calls", None):
+        return None  # 仍调工具:2 回合上限强制停止
+    content = getattr(response, "content", None)
+    if not content:
+        return None
+    try:
+        return parser.parse(content)
+    except Exception:
+        return None
+
+
+def _run_json_mode_rounds(llm, schema, messages):
+    """JSON Mode 回退(CLAUDE.md 约束段):bind_tools(strict=True) + json_object。
+
+    首选形态 invoke 被拒时启用 —— 2026-08-10 真实 DeepSeek 实测:不传 strict
+    生成的工具被 openai SDK 本地校验拒绝(ValueError not strict);传 strict=True
+    则 json_schema response_format 被 API 拒绝(400 This response_format type is
+    unavailable now)。JSON Mode 无响应格式限制,DeepSeek 实测可用(回合 1 调
+    load_skill → 执行喂回 → 回合 2 出合法 JSON)。
+
+    与首选形态同一外部契约:工具 2 回合上限、畸形 JSON 同输入重试 1 次
+    (共 2 次尝试)、工具回合后的结果直接返回(不参与解析重试)、失败 → None
+    (worker 确定性骨架降级)。
+    """
+    parser = PydanticOutputParser(pydantic_object=schema)
+    bound = llm.bind_tools([load_skill], strict=True).bind(
+        response_format={"type": "json_object"})
+    # JSON Mode 无响应格式限制,模型输出契约靠系统提示给出:
+    # schema 的 JSON 格式指令注入首条 system 消息(纯文本指令,无模板冲突)
+    msgs = [
+        SystemMessage(content=f"{messages[0].content}\n\n{parser.get_format_instructions()}")
+        if i == 0 else m
+        for i, m in enumerate(messages)
+    ]
+    for _ in range(2):  # 畸形 JSON 重试:同输入重试 1 次(共 2 次尝试)
+        r = bound.invoke(msgs)
+        if getattr(r, "tool_calls", None):
+            tool_msgs = [
+                ToolMessage(content=load_skill.invoke(tc["args"]),
+                            tool_call_id=tc["id"])
+                for tc in r.tool_calls
+            ]
+            # 工具回合后的结果直接返回(成功出 schema / 又调工具强制停止 None)
+            return _parse_json_content(parser, bound.invoke([*msgs, r, *tool_msgs]))
+        parsed = _parse_json_content(parser, r)
+        if parsed is not None:
+            return parsed
+    return None  # 2 次尝试均畸形 → 降级

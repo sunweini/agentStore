@@ -64,7 +64,7 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **w1 澄清上限**:逐问 interrupt ≤10 轮;确认摘要最多再确认 1 次,仍不确认带假设强制收口(防无限循环)。
 - **LLM 畸形输出重试(设计 §8)**:`structured_with_skill` 解析失败(parsed=None 且无 tool_calls)→ 同一输入重试 1 次(**共 2 次尝试**),仍失败返回 None → 确定性骨架降级;重试与 load_skill 工具 2 回合上限正交(工具回合后结果直接返回,不参与解析重试)。改这里时同步看 loader.py docstring 与测试(`test_structured_with_skill_parse_failure_*`)。
 - **测试注入约定**:只注入 LLM/外部服务(build_graph(llm=None) + fake 编译/冒烟),不 mock LangGraph 本身。
-- **load_skill 绑定未线上验证**:w1-w5 的 `structured_with_skill` 用 tools + json_schema response_format 组合绑定 load_skill,未对真实 DeepSeek 线上验证;首次真实环境联调时先跑 w1 generate_questions smoke,若被 API 拒绝改用 sentiment 的 JSON Mode 模式(`bind_tools([load_skill], strict=True).bind(response_format={"type": "json_object"})` + 手动 2 回合循环)。
+- **load_skill 绑定线上验证(✅ 2026-08-10 真实 DeepSeek,Task 2)**:w1-w5 的 `structured_with_skill` 双形态 —— 首选 `with_structured_output(schema, tools=[load_skill], include_raw=True)` 在 DeepSeek 上 invoke 即被拒(不传 strict:openai SDK 本地校验 ValueError「Only strict function tools can be auto-parsed」;传 strict=True:API 400「This response_format type is unavailable now」),loader 已自动回退 JSON Mode(`bind_tools([load_skill], strict=True).bind(response_format={"type": "json_object"})` + schema 格式指令注入系统提示 + 手动 pydantic 解析),真实 DeepSeek 实测可用(LLM 主动调 load_skill 拿方法论 → 回合 2 出合法 JSON,2 回合上限/畸形重试契约不变)。回退逻辑在 loader.py `_run_json_mode_rounds`;smoke 脚本 `scripts/smoke_structured_with_skill.py`(一次性,不入测试)。**注意 langchain-core 1.5+ 无 `parse_prompt_value`(大版本重构移除),JSON 解析用 `parser.parse(content)`。**
 
 ## v1 已知债务(上线前需决策)
 
