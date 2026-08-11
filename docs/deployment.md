@@ -36,15 +36,31 @@ cp .env.example .env
 | `API_KEYS_JSON` | ✅ | 本服务 API 的 apikey→用户 映射,JSON 格式:`{"sk-key1": "user1"}` |
 | `LLM_PROVIDER` / `LLM_MODEL` | — | 供应商/模型(默认 deepseek / deepseek-chat) |
 | `OTEL_ENDPOINT` | — | OpenTelemetry collector 地址,配了才上报(留空本地可用) |
+| `MYSQL_URL` | ✅(v1.3.0+) | 配额/资费存储,如 `mysql://mcp:pass@deploy-mysql-1:3306/agentstore` |
+| `ADMIN_APIKEY` | ✅(v1.3.0+) | 管理员 apikey,额度 99999999,可查全部/调额度 |
 
 ### 2.3 运行时数据目录(自动创建,已 gitignore)
 
 ```
 data/
-├── billing/          # 计费记录(<user>.json + <user>.lock)
+├── billing/          # 计费记录(v1.3.0 前 JSON;v1.3.0 起迁移 MySQL)
 ├── schemes/          # 方案组(草稿 .draft.json / 正式 .json / index.json)
 └── checkpoints.sqlite  # LangGraph 状态持久化(中断续跑)
 ```
+
+### 2.4 配额/资费(v1.3.0+)初始化
+
+1. 建表:生产 MySQL 执行 `agents/sentiment_query_agent/deploy/init_tables.sql`
+2. 迁移旧数据(先 dry-run 再执行):
+
+```bash
+DB_BACKEND=mysql MYSQL_URL=... ADMIN_APIKEY=sk-demo-hefangyuan20260810 \
+  python3 agents/sentiment_query_agent/scripts/migrate_legacy.py          # dry-run
+DB_BACKEND=mysql MYSQL_URL=... ADMIN_APIKEY=sk-demo-hefangyuan20260810 \
+  python3 agents/sentiment_query_agent/scripts/migrate_legacy.py --apply  # 实际执行
+```
+
+3. 迁移内容:JSON 计费 → billing_records、方案组 owner 用户标识→apikey、api_keys 初始化(管理员 99999999/普通 10)
 
 ## 3. 启动服务
 

@@ -707,6 +707,32 @@
 
 ---
 
+## v1.3.0 — 2026-08-11(多用户配额管理与资费统计)
+
+### 新增功能
+
+- **配额体系**:用户即 apikey。每个 apikey 免费额度(初始 10)+ 付费额度(充值 0),commit 扣减(先免费后付费);提交时校验额度>0,不足 403
+- **apikey 管理**(仅管理员):创建(默认免费 10/付费 0)/ 修改(换 key 资费继承 + 历史任务迁移)/ 删除(软删,数据保留)
+- **管理员**:ADMIN_APIKEY(sk-demo-hefangyuan20260810),额度 99999999,不受权限控制,可查全部用户额度、可增减免费/付费额度
+- **资费接口**:
+  - 普通用户:查自己免费/付费额度总数、已用、剩余 + pending 数
+  - 管理员:查所有普通用户 apikey 额度(按 apikey 分类)+ 汇总
+- **pending 查询**:按 apikey 查当前 pending 任务
+- **8 个新接口**:POST/PUT/DELETE /api/v1/apikeys、GET /api/v1/apikeys/list、GET /api/v1/apikeys/pending、GET /api/v1/billing/usage、POST /api/v1/billing/quota/paid、POST /api/v1/billing/quota/free
+
+### 技术变更
+
+- **存储迁移**:计费 JSON 文件 → MySQL(agentstore 库,api_keys + billing_records 两表)
+- **鉴权改造**:API_KEYS_JSON 废弃,apikey 存 MySQL;owner = apikey 本身;管理员放行 assert_owner
+- **数据库抽象**:common/db.py 双后端(MySQL 生产 / SQLite 测试),事务 + 占位符适配
+- **数据迁移脚本**:migrate_legacy.py(JSON 计费 → MySQL、方案组 owner 迁移、api_keys 初始化,支持 dry-run)
+
+### 修复
+
+- stop 任务取消 pending 释放并发额度(已部署 v1.2.0,随本版本入档)
+
+---
+
 ## v1.2.0 — 2026-08-11(生产三错修复 + 推理模型调优)
 
 ### 修复

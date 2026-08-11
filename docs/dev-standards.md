@@ -142,6 +142,14 @@ START → <node1> ──<条件>──→ <node2>
 - 前端轮询 progress 时,404 是"还没数据"的正常态,不要当错误处理;但要确认后端在生成中能返回实时进度(见 7.1)。
 - 提交按钮要禁用 + loading 态,失败用 alert 醒目提示(小字错误提示用户注意不到,看起来像"没反应")。
 
+### 7.6 数据库双后端(MySQL/SQLite)
+
+- **占位符差异**:pymysql 用 `%s`,SQLite 用 `?`——统一在 db 层转换,业务 SQL 只写 `%s`。
+- **语法差异**:SQLite 无 `NOW()`(用 CURRENT_TIMESTAMP)、无 `FOR UPDATE`(单写者场景可去掉)、`execute` 返回 cursor 而非行数(SELECT 需 fetch)。db 层统一适配。
+- **SQLite 内存库每个连接独立**:`:memory:` 建表后新连接看不到表,测试用临时文件。
+- **事务包装**:db.transaction 注入 `_exec`(自动转换占位符 + 统一返回值:SELECT 返回 dict 列表,其他返回影响行数),业务代码不直接碰 cursor.execute。
+- 迁移脚本支持 **dry-run**(默认只报告不写库),先验证再执行。
+
 ### 7.6 Windows 远程部署与运维(kingdee 编译服务实测)
 
 - **scp 多文件必须逐个指定目标路径**:`scp a b user@host:dir/` 会把 `b` 当目标路径、`a` 复制成 `dir/b`(不是并排放两个文件)。对策:每个文件单独 `scp a user@host:dir/`、`scp b user@host:dir/`,或先 scp 到临时目录再在远端 `mv`。
