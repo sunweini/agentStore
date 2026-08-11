@@ -6,6 +6,8 @@
 
 **sentiment-query-agent(海外舆情检索方案生成 Agent)已交付并上线生产(10.33.17.72)**:输入一个中文公司名,自动完成 6 步流水线(实体测绘 → 主体画像 → 关键词字典 → 双轨检索式 → 属地信源 → 频次定级),产出方案组 + 组内多检索方案,经用户勾选确认后固化入库。Docker Compose 部署(API:8000/演示页:80),9 接口(含 stop/status)全链路生产实测通过;接口文档 `agents/sentiment_query_agent/API.md`,发布流程 `agents/sentiment_query_agent/deploy/README.md`。
 
+**多用户配额与资费(v1.24.0,feature/quota-billing-stats 分支,未部署)**:apikey 即用户,免费/付费额度(commit 扣减,先免费后付费),apikey 管理(创建/修改/删除),管理员可查全部/调额度,8 新接口,MySQL 存储。设计: `docs/superpowers/specs/2026-08-11-quota-billing-stats-design.md`。
+
 **kingdee-plugin-agent(金蝶云星空插件开发 Agent)已交付**:输入自然语言需求,自动完成 澄清 → 设计 → 生成 → 审查 → 编译修复 → 冒烟 → 打包 → 沉淀 全流程(1 主管 + 8 worker 的 LangGraph 循环图,interrupt 交互澄清 + Send 并行派发),交付可部署的插件交付包(源码 + DLL + 部署说明 + 设计/审查/需求版本记录);失败时经 w6_fail 产出"未完成"包(部分产物 + 编译错误 + 审查意见 + 原因)。CLI + Web API(SSE 实时进度)+ 演示页已跑通全流程,272 项测试全过。
 
 ## 目录结构

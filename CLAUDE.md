@@ -28,6 +28,7 @@
 ## 项目状态
 
 - sentiment-query-agent 已交付为**海外舆情检索方案生成 Agent**:输入中文公司名 → 6 步流水线(skill 分步脚本按格式传回)→ 方案组 → API 勾选确认 → JSON 入库 + 计费。**已部署生产 10.33.17.72**(Docker Compose,API:8000/nginx:80),9 接口(含 stop/status)全链路生产实测通过,272 测试全绿。
+- **多用户配额与资费(v1.24.0,feature/quota-billing-stats 分支,未部署)**:apikey 即用户,免费/付费额度,apikey 管理(创建/修改/删除),管理员,8 新接口,MySQL 存储(agentstore 库)。设计:`docs/superpowers/specs/2026-08-11-quota-billing-stats-design.md`。
 - 前端演示页 `web/demo.html`(6 步实时回显 + 勾选/入库/导出)已跑通全流程。
 - sentiment 文档:接口文档 `agents/sentiment_query_agent/API.md`(全真实返回示例)、AI 对接规范 `INTEGRATION.md`、发布流程 `agents/sentiment_query_agent/deploy/README.md`、部署设计 `docs/superpowers/specs/2026-08-10-sentiment-query-agent-prod-deploy-design.md`。
 - 设计文档:`docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md`
