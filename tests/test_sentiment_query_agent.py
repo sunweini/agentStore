@@ -18,10 +18,10 @@ from pathlib import Path
 import pytest
 
 from agents.sentiment_query_agent import billing
-from agents.sentiment_query_agent.auth import _valid_keys, assert_owner
+from agents.sentiment_query_agent.auth import assert_owner
 from agents.sentiment_query_agent.graph.nodes import _extract_json
 from agents.sentiment_query_agent.store import converter, scheme_store
-from common import config
+from common import config, db
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,7 +29,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 def test_data_paths():
     """运行时数据目录必须落在项目根 data/(防路径层级错)。"""
     assert str(scheme_store._DATA_DIR).endswith(f"{_PROJECT_ROOT}/data/schemes")
-    assert str(billing._DATA_DIR).endswith(f"{_PROJECT_ROOT}/data/billing")
 
 _SCRIPTS = (
     Path(__file__).resolve().parent.parent
@@ -177,69 +176,128 @@ def test_store_save_load_roundtrip(tmp_path, monkeypatch):
     assert scheme_store.list_groups("other") == []
 
 
-# ===== 3. 鉴权/计费单测 =====
+# ===== 3. 鉴权/配额/计费单测(SQLite 后端) =====
 
 
-def test_auth_valid_keys(monkeypatch):
-    """apikey 映射从 env 读。"""
-    monkeypatch.setenv("API_KEYS_JSON", json.dumps({"key1": "user1"}))
-    assert _valid_keys() == {"key1": "user1"}
+@pytest.fixture()
+def sqlite_db(monkeypatch, tmp_path):
+    """测试用临时文件 SQLite(内存库每个连接独立,建表后新连接看不到)。"""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("ADMIN_APIKEY", "sk-admintest123")
+    from common import db
+    db.init_tables()
+    return db
 
 
-def test_auth_assert_owner():
-    """归属校验:owner 不符 → 403。"""
+def _seed_apikey(apikey="sk-usertest123", free=10, paid=0, role="normal"):
+    from common import db
+    db.execute(
+        "INSERT INTO api_keys (apikey, role, status, free_quota, paid_quota) "
+        "VALUES (%s, %s, 'active', %s, %s)",
+        (apikey, role, free, paid),
+    )
+
+
+def test_auth_assert_owner(sqlite_db):
+    """归属校验:owner 不符 → 403;管理员放行。"""
+    _seed_apikey("sk-usertest123")
+    _seed_apikey("sk-admintest123", role="admin", free=99999999)
     with pytest.raises(Exception):
-        assert_owner("user2", {"owner": "user1"})
-    assert_owner("user1", {"owner": "user1"})  # 不抛
+        assert_owner("sk-usertest123", {"owner": "other"})
+    assert_owner("sk-usertest123", {"owner": "sk-usertest123"})  # 本人不抛
+    assert_owner("sk-admintest123", {"owner": "other"})  # 管理员放行
 
 
-def test_billing_pending_commit(tmp_path, monkeypatch):
-    """计费:创建记 pending,commit 转正式;超并发拒绝。"""
-    monkeypatch.setattr(billing, "_DATA_DIR", tmp_path)
-    billing.create_pending("u1", "g1")
-    rec = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
-    assert rec[0]["status"] == "pending"
-    billing.commit("u1", "g1")
-    rec = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
-    assert rec[0]["status"] == "committed"
-    assert rec[0]["committed_at"]
+def test_billing_pending_commit(sqlite_db):
+    """计费:创建记 pending,commit 转正式 + 扣免费额度。"""
+    _seed_apikey()
+    billing.create_pending("sk-usertest123", "g1")
+    rows = db.query("SELECT status FROM billing_records WHERE group_id='g1'")
+    assert rows[0]["status"] == "pending"
+    billing.commit("sk-usertest123", "g1")
+    rows = db.query("SELECT status, quota_type FROM billing_records WHERE group_id='g1'")
+    assert rows[0]["status"] == "committed"
+    assert rows[0]["quota_type"] == "free"
+    key = db.query("SELECT free_used FROM api_keys WHERE apikey='sk-usertest123'")[0]
+    assert key["free_used"] == 1  # 免费扣 1
 
 
-def test_billing_max_pending(tmp_path, monkeypatch):
+def test_billing_max_pending(sqlite_db):
     """防刷:超过并发上限拒绝。"""
-    monkeypatch.setattr(billing, "_DATA_DIR", tmp_path)
-    for i in range(billing._MAX_PENDING):
-        billing.create_pending("u1", f"g{i}")
+    _seed_apikey()
+    for i in range(5):
+        billing.create_pending("sk-usertest123", f"g{i}")
     with pytest.raises(Exception):
-        billing.create_pending("u1", "g_over")
+        billing.create_pending("sk-usertest123", "g_over")
 
 
-def test_billing_concurrent_no_loss(tmp_path, monkeypatch):
-    """并发竞态:同一用户并发提交,记录不丢失(文件锁保证原子)。"""
-    import asyncio
-    monkeypatch.setattr(billing, "_DATA_DIR", tmp_path)
-    monkeypatch.setattr(billing, "_MAX_PENDING", 100)  # 放开上限测竞态
-
-    async def _run():
-        await asyncio.gather(*[
-            asyncio.to_thread(billing.create_pending, "u1", f"g{i}")
-            for i in range(10)
-        ], return_exceptions=True)
-
-    asyncio.run(_run())
-    recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
-    assert len(recs) == 10  # 无丢失
-
-
-def test_billing_cancel_pending_releases_quota(tmp_path, monkeypatch):
-    """stop 任务:取消 pending 释放并发额度。"""
-    monkeypatch.setattr(billing, "_DATA_DIR", tmp_path)
+def test_billing_cancel_pending_releases_quota(sqlite_db):
+    """stop 任务:取消 pending 释放并发额度,不扣额度。"""
+    _seed_apikey()
     for i in range(3):
-        billing.create_pending("u1", f"g{i}")
-    billing.cancel_pending("u1", "g1")
-    recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
-    assert [r["group_id"] for r in recs] == ["g0", "g2"]  # g1 已释放
-    # 取消不存在的记录不报错
-    billing.cancel_pending("u1", "g_never")
-    recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
-    assert len(recs) == 2
+        billing.create_pending("sk-usertest123", f"g{i}")
+    billing.cancel_pending("sk-usertest123", "g1")
+    rows = db.query("SELECT group_id FROM billing_records WHERE apikey='sk-usertest123' AND status='pending'")
+    assert [r["group_id"] for r in rows] == ["g0", "g2"]
+    key = db.query("SELECT free_used FROM api_keys WHERE apikey='sk-usertest123'")[0]
+    assert key["free_used"] == 0  # 不扣额度
+
+
+def test_quota_deduction_order(sqlite_db):
+    """额度扣减:先免费后付费。"""
+    _seed_apikey(free=2, paid=3)
+    for i in range(5):
+        billing.create_pending("sk-usertest123", f"g{i}")
+    for i in range(5):
+        billing.commit("sk-usertest123", f"g{i}")
+    key = db.query("SELECT free_used, paid_used FROM api_keys WHERE apikey='sk-usertest123'")[0]
+    assert key["free_used"] == 2  # 免费先用完
+    assert key["paid_used"] == 3  # 再扣付费
+
+
+def test_quota_insufficient_rejected(sqlite_db):
+    """额度不足:check_quota 拒绝。"""
+    _seed_apikey(free=1, paid=0)
+    billing.check_quota("sk-usertest123")  # 还有 1 次,通过
+    billing.create_pending("sk-usertest123", "g1")
+    billing.commit("sk-usertest123", "g1")  # 用掉唯一额度
+    with pytest.raises(Exception):
+        billing.check_quota("sk-usertest123")  # 0 剩余,拒绝
+
+
+def test_apikey_crud(sqlite_db):
+    """apikey 管理:创建(默认 10/0)/修改(资费继承)/删除(软删)。"""
+    from agents.sentiment_query_agent import apikey_mgmt
+    _seed_apikey()
+    # 创建
+    r = apikey_mgmt.create_apikey("sk-newuser123")
+    assert r["free_quota"] == 10 and r["paid_quota"] == 0
+    # 修改:旧→新,资费继承
+    apikey_mgmt.update_apikey("sk-usertest123", "sk-renamed123")
+    row = db.query("SELECT apikey, free_quota FROM api_keys WHERE apikey='sk-renamed123'")[0]
+    assert row["free_quota"] == 10  # 资费继承
+    assert not db.query("SELECT apikey FROM api_keys WHERE apikey='sk-usertest123'")  # 旧 key 没了
+    # 删除:软删
+    apikey_mgmt.delete_apikey("sk-renamed123")
+    row = db.query("SELECT status FROM api_keys WHERE apikey='sk-renamed123'")[0]
+    assert row["status"] == "deleted"
+
+
+def test_admin_usage_all(sqlite_db):
+    """管理员查全部额度。"""
+    _seed_apikey("sk-a", free=10, paid=0)
+    _seed_apikey("sk-b", free=10, paid=5)
+    users = billing.usage_all()
+    assert len(users) == 2
+    by_key = {u["apikey"]: u for u in users}
+    assert by_key["sk-b"]["paid"]["total"] == 5
+
+
+def test_add_quota(sqlite_db):
+    """管理员加额度。"""
+    _seed_apikey()
+    billing.add_free_quota("sk-usertest123", 5)
+    billing.add_paid_quota("sk-usertest123", 3)
+    row = db.query("SELECT free_quota, paid_quota FROM api_keys WHERE apikey='sk-usertest123'")[0]
+    assert row["free_quota"] == 15 and row["paid_quota"] == 3

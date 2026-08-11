@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from agents.sentiment_query_agent import auth, billing
+from agents.sentiment_query_agent import apikey_mgmt, auth, billing
 from agents.sentiment_query_agent.agent import run_pipeline
 from agents.sentiment_query_agent.graph.state import (
     STATUS_COMMITTED, STATUS_GENERATING, STATUS_REVIEW, STATUS_STOPPED,
@@ -95,6 +95,9 @@ async def _startup() -> None:
     # 提交元信息:group_id → {owner, company_name, meta, created_at}
     # 用途:checkpoint 落盘前(提交后瞬间)的归属校验与 stop 兜底
     app.state.metas = {}
+    # 确保管理员 apikey 存在(额度 99999999)
+    from agents.sentiment_query_agent import apikey_mgmt
+    apikey_mgmt.ensure_admin()
 
 
 @app.get("/health")
@@ -108,6 +111,7 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
     if not req.company_name.strip():
         raise HTTPException(status_code=400, detail="company_name 必填")
     group_id = uuid.uuid4().hex[:16]
+    billing.check_quota(user)          # 额度校验:free+paid remaining > 0,否则 403
     billing.create_pending(user, group_id)  # 计费:记 pending,commit 转正式
 
     meta = {
@@ -321,3 +325,81 @@ async def export_group(group_id: str, user: str = Depends(_user)):
     out = f"/tmp/{group_id}_tasks.xlsx"
     converter.export_excel(group, out)
     return FileResponse(out, filename=f"{group_id}_tasks.xlsx")
+
+
+# ===== 多用户配额与资费(2026-08-11) =====
+
+class CreateApiKeyRequest(BaseModel):
+    apikey: str
+
+
+class UpdateApiKeyRequest(BaseModel):
+    old_apikey: str
+    new_apikey: str
+
+
+class QuotaChangeRequest(BaseModel):
+    apikey: str
+    count: int
+
+
+@app.post("/api/v1/apikeys")
+async def create_apikey_api(req: CreateApiKeyRequest, user: str = Depends(_user)):
+    """创建 apikey(默认免费 10/付费 0)。仅管理员。"""
+    auth.require_admin(user)
+    return apikey_mgmt.create_apikey(req.apikey)
+
+
+@app.put("/api/v1/apikeys")
+async def update_apikey_api(req: UpdateApiKeyRequest, user: str = Depends(_user)):
+    """修改 apikey:旧 key → 新 key,资费继承 + 历史迁移。仅管理员。"""
+    auth.require_admin(user)
+    return apikey_mgmt.update_apikey(req.old_apikey, req.new_apikey)
+
+
+@app.delete("/api/v1/apikeys/{apikey}")
+async def delete_apikey_api(apikey: str, user: str = Depends(_user)):
+    """删除 apikey(软删,数据保留)。仅管理员。"""
+    auth.require_admin(user)
+    return apikey_mgmt.delete_apikey(apikey)
+
+
+@app.get("/api/v1/apikeys/list")
+async def list_apikeys_api(user: str = Depends(_user)):
+    """查所有普通用户 apikey 额度。仅管理员。"""
+    auth.require_admin(user)
+    return {"users": billing.usage_all()}
+
+
+@app.get("/api/v1/apikeys/pending")
+async def pending_api(user: str = Depends(_user)):
+    """查当前 apikey 的 pending 任务。本人。"""
+    return {"apikey": user, "pending": billing.list_pending(user)}
+
+
+@app.get("/api/v1/billing/usage")
+async def billing_usage_api(user: str = Depends(_user)):
+    """资费查询:普通查自己;管理员查全部。"""
+    if auth.is_admin(user):
+        return {"role": "admin", "users": billing.usage_all()}
+    return {"role": "normal", **billing.usage(user)}
+
+
+@app.post("/api/v1/billing/quota/paid")
+async def add_paid_quota_api(req: QuotaChangeRequest, user: str = Depends(_user)):
+    """增加付费额度。仅管理员。"""
+    auth.require_admin(user)
+    if req.count <= 0:
+        raise HTTPException(status_code=400, detail="count 必须为正数")
+    billing.add_paid_quota(req.apikey, req.count)
+    return {"apikey": req.apikey, "paid_added": req.count}
+
+
+@app.post("/api/v1/billing/quota/free")
+async def add_free_quota_api(req: QuotaChangeRequest, user: str = Depends(_user)):
+    """增加免费额度。仅管理员。"""
+    auth.require_admin(user)
+    if req.count <= 0:
+        raise HTTPException(status_code=400, detail="count 必须为正数")
+    billing.add_free_quota(req.apikey, req.count)
+    return {"apikey": req.apikey, "free_added": req.count}
