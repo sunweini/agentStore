@@ -94,13 +94,13 @@ def test_step4_rejects_old_letter_keys():
 
 
 def test_step6_cadence_fix_fast():
-    """快讯轨强制快讯/小时级;多余 risk 字段被忽略,输出不含 risk。"""
+    """快讯轨强制快讯/小时级;risk 字段保留(修复后行为)。"""
     out = _run_script("step6_cadence.py", {"schemes": [
         {"id": "Q3", "tracks": [{"key": "快讯", "frequency": "周级", "risk": "critical"}]},
     ]})
     tr = out["schemes"][0]["tracks"][0]
     assert tr["frequency"] == "快讯/小时级"
-    assert "risk" not in tr
+    assert tr["risk"] == "critical"  # risk 保留
     assert any("GAP" in g for g in out.get("_gaps", []))
 
 
@@ -229,3 +229,17 @@ def test_billing_concurrent_no_loss(tmp_path, monkeypatch):
     asyncio.run(_run())
     recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
     assert len(recs) == 10  # 无丢失
+
+
+def test_billing_cancel_pending_releases_quota(tmp_path, monkeypatch):
+    """stop 任务:取消 pending 释放并发额度。"""
+    monkeypatch.setattr(billing, "_DATA_DIR", tmp_path)
+    for i in range(3):
+        billing.create_pending("u1", f"g{i}")
+    billing.cancel_pending("u1", "g1")
+    recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
+    assert [r["group_id"] for r in recs] == ["g0", "g2"]  # g1 已释放
+    # 取消不存在的记录不报错
+    billing.cancel_pending("u1", "g_never")
+    recs = json.loads((tmp_path / "u1.json").read_text(encoding="utf-8"))
+    assert len(recs) == 2

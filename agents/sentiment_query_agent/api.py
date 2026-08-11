@@ -203,7 +203,7 @@ async def stop_group(group_id: str, user: str = Depends(_user)):
 
     - 只停 generating 态;已 review/committed/stopped 的组拒绝(409)。
     - 取消后落 stopped 草稿,保留已完成步骤产物。
-    - pending 计费记录保留(未 commit 不计费),不影响并发额度外的清理。
+    - 取消 pending 计费记录(stop 未 commit 不计费),释放并发额度。
     """
     task = app.state.tasks.get(group_id)
     group = scheme_store.load_group(group_id)
@@ -228,6 +228,8 @@ async def stop_group(group_id: str, user: str = Depends(_user)):
 
     group["status"] = STATUS_STOPPED
     scheme_store.save_draft(group)
+    # 取消 pending 计费记录,释放并发额度(stop 未 commit 不计费)
+    billing.cancel_pending(user, group_id)
     logger.info("service=sentiment-query-agent event=group_stopped group_id=%s user=%s", group_id, user)
     return {"group_id": group_id, "status": STATUS_STOPPED}
 

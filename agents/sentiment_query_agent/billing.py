@@ -98,3 +98,18 @@ def commit(user: str, group_id: str) -> None:
         raise HTTPException(status_code=404, detail="计费记录不存在(group 未创建或无 pending)")
 
     _with_file_lock(user, _do)
+
+
+def cancel_pending(user: str, group_id: str) -> None:
+    """取消 pending 计费记录(stop 任务时调用):删除记录,释放并发额度。
+
+    未 commit 不计费,stop 后不再占用 5 个并发限额。并发安全。
+    """
+
+    def _do() -> None:
+        records = _load(user)
+        remaining = [r for r in records if not (r["group_id"] == group_id and r["status"] == "pending")]
+        if len(remaining) != len(records):
+            _save(user, remaining)
+
+    _with_file_lock(user, _do)
