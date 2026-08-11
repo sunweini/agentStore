@@ -177,16 +177,17 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
         # - 多轮:回合 1 调工具 → 回合 2 换无工具 LLM 生成 JSON
         #   原因:deepseek-v4-flash 带工具绑定时,工具回合后仍重复发 tool_calls
         #   且 content 为空(生产实测 2026-08-10),去掉工具绑定才能稳定出 JSON
-        # - max_tokens=8192 限制输出长度,防止 step6 频次定级超限(生产实测 65536 token 上限)
+        # - max_tokens=16384 限制输出长度,防止 step6 频次定级超限(生产实测 65536 token 上限)
+        #   16384 = 48 条目(8 方案×6 轨)×100 tokens + 外层结构 3K + 余量,保证完整输出
         from agents.sentiment_query_agent.skills.loader import load_skill
 
         llm = get_chat_model().bind_tools([load_skill], strict=True).bind(
             response_format={"type": "json_object"},
-            max_tokens=8192,
+            max_tokens=16384,
         )
         llm_no_tools = get_chat_model().bind(
             response_format={"type": "json_object"},
-            max_tokens=8192,
+            max_tokens=16384,
         )
         messages = prompt.format_messages(
             company=company,
