@@ -120,10 +120,12 @@ _STEP_PROMPTS = {
        "先 websearch 验证域名活性,再输出 JSON。\n"
        "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
        '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "全量新闻", "sources": ["属地媒体.com"]}}]}}]}}',
-    6: "你是频次定级专家。按信号为每轨定频次与相关度。先 websearch 验证时效,再输出 JSON。\n"
-       "输出格式(JSON,schemes 结构与步骤 4 对应):\n"
+    6: "你是频次定级专家。按信号为每轨定频次(快讯/日/周/双周/月)与风险等级。"
+       "先 websearch 验证时效,再输出 JSON。\n"
+       "输出格式(JSON,schemes 结构与步骤 4 对应,每轨补 frequency/risk/relevance):\n"
        '{{"schemes": [{{"id": "Q0", "tracks": [{{"key": "全量新闻", "frequency": "周级", '
-       '"relevance": "direct"}}]}}]}}',
+       '"risk": "medium", "relevance": "direct"}}]}}]}}\n'
+       "重要:必须输出纯 JSON,不要 Markdown 代码块,不要说明文字。输出要简洁,不要冗长解释。",
 }
 
 
@@ -175,12 +177,17 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
         # - 多轮:回合 1 调工具 → 回合 2 换无工具 LLM 生成 JSON
         #   原因:deepseek-v4-flash 带工具绑定时,工具回合后仍重复发 tool_calls
         #   且 content 为空(生产实测 2026-08-10),去掉工具绑定才能稳定出 JSON
+        # - max_tokens=8192 限制输出长度,防止 step6 频次定级超限(生产实测 65536 token 上限)
         from agents.sentiment_query_agent.skills.loader import load_skill
 
         llm = get_chat_model().bind_tools([load_skill], strict=True).bind(
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            max_tokens=8192,
         )
-        llm_no_tools = get_chat_model().bind(response_format={"type": "json_object"})
+        llm_no_tools = get_chat_model().bind(
+            response_format={"type": "json_object"},
+            max_tokens=8192,
+        )
         messages = prompt.format_messages(
             company=company,
             prev=json.dumps(group.get(f"_step{step-1}", {}), ensure_ascii=False),

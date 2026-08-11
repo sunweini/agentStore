@@ -23,7 +23,8 @@ def main() -> None:
         if layer not in LAYERS:
             gap(f"关键词第 {i} 项层 {layer!r} 非法,跳过")
             continue
-        terms = norm_str(k.get("terms"), f"keywords[{i}].terms", required=True)
+        # terms 字段缺失时用默认值(生产实测 LLM 偶尔漏输出),记 GAP 提醒人工复核
+        terms = norm_str(k.get("terms"), f"keywords[{i}].terms", default="(LLM 未输出,需人工补)")
         guard = norm_str(k.get("guard"), f"keywords[{i}].guard")
         # ≤5 字符缩写必须带 context_guard
         short = [t.strip('"') for t in terms.replace(" ", ",").split(",") if 0 < len(t.strip('"')) <= 5]
