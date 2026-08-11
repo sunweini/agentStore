@@ -277,6 +277,7 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
                         cd_tracks = cd.get("tracks", []) if isinstance(cd, dict) else []
                         meta = cd_tracks[t] if t < len(cd_tracks) else {}
                         tr["frequency"] = meta.get("frequency", "周级")
+                        tr["risk"] = meta.get("risk", "medium")
                         tr["relevance"] = meta.get("relevance", "direct")
 
         step_status[-1] = {"step": step, "status": "done", "output": normalized}
