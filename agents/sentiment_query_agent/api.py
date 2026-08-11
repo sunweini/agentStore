@@ -201,7 +201,9 @@ async def get_status(group_id: str, user: str = Depends(_user)):
 async def stop_group(group_id: str, user: str = Depends(_user)):
     """停止正在运行的组:取消后台任务,标记 stopped,不重启进程。
 
-    - 只停 generating 态;已 review/committed/stopped 的组拒绝(409)。
+    - generating 态:取消后台任务,标记 stopped。
+    - review 态(生成已完成未入库):无后台任务,直接标记 stopped(前端"重新生成"场景)。
+    - committed/stopped 态:拒绝(409)。
     - 取消后落 stopped 草稿,保留已完成步骤产物。
     - 取消 pending 计费记录(stop 未 commit 不计费),释放并发额度。
     """
@@ -213,8 +215,8 @@ async def stop_group(group_id: str, user: str = Depends(_user)):
         raise HTTPException(status_code=404, detail="方案组不存在")
     auth.assert_owner(user, group)
 
-    if group["status"] != STATUS_GENERATING:
-        raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 generating 可停止")
+    if group["status"] not in (STATUS_GENERATING, STATUS_REVIEW):
+        raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 generating/review 可停止")
 
     if task is not None and not task.done():
         task.cancel()
