@@ -114,6 +114,11 @@ START → <node1> ──<条件>──→ <node2>
 - **ChatPromptTemplate 是 f-string 语法**:prompt 里 JSON 样例的 `{}` 必须转义成 `{{}}`,否则报 "Nested replacement fields are not allowed"。
 - prompt 必须给 LLM **具体 JSON schema 样例**(字段名/枚举值),否则 LLM 盲猜字段名,脚本校验全挂(实测:轨 key 输成 "boolean" 而非合法枚举如 全量新闻/负面新闻/行业新闻/快讯/司法/招标)。
 - LLM 输出的数组长度可能与上步不一致(如 schemes 数),下游合并要防御性取值(`i < len(...)` 保护),否则 `list index out of range`。
+- **deepseek-v4-flash 推理模型注意**(生产实测 2026-08-11):
+  - 思考模式默认开启,推理 token 计入 max_tokens 总预算;极端情况思考可能吃光预算(reasoning_tokens=65536 输出为 0)。
+  - **不要传 `extra_body={"thinking": {"type": "disabled"}}`**:服务端对 thinking disabled 强制输出上限 8192 token,反而截断大 JSON 输出(实测 max_tokens=32768 无 thinking 参数可正常输出 22704;加 thinking disabled 后 8191 即截断)。
+  - **结论:传 max_tokens=32768,不传 thinking 参数**,让模型自行控制思考量。
+- **max_tokens 影响输出上限**:显式传 max_tokens 时服务端按该值截断(不传时可输出 14383)。给足余量(如 32768)避免截断。
 
 ### 7.3 skill 分步脚本模式
 

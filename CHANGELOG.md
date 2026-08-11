@@ -707,6 +707,22 @@
 
 ---
 
+## v1.2.0 — 2026-08-11(生产三错修复 + 推理模型调优)
+
+### 修复
+
+- **生产三错**:bad_json(增强 prompt 强制 JSON 输出)/ token 超限(step6 频次定级)/ terms 缺失(脚本默认值 + GAP 提醒)
+- **max_tokens 调优**:16384 → 32768(4 倍余量,保证 48 条目完整输出)
+- **thinking 参数踩坑**:加 `thinking: disabled` 反而触发服务端 8192 输出硬上限(实测 8191 截断);去掉后 max_tokens=32768 可正常输出 22704。**结论:传 max_tokens 不传 thinking**
+- **step6 risk 字段丢失**:脚本缺 risk 输出(补 _common RISKS 枚举)+ nodes.py 合并逻辑漏 risk(补合并)
+
+### 技术要点
+
+- deepseek-v4-flash 推理模型:思考 token 计入 max_tokens 预算;思考模式默认开启,极端情况思考吃光预算(reasoning_tokens=65536 输出为 0)
+- 生产部署 + 全流程测试通过(5 方案,risk/frequency 正常分级)
+
+---
+
 ## v1.1.0 — 2026-08-07(load_skill 方法论接入)
 
 ### 新增功能
