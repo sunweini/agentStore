@@ -80,6 +80,8 @@ CREATE TABLE billing_records (
 
 **确认入库(commit)**:鉴权 + 归属 → 事务:pending→committed 记 quota_type + 额度扣减(**先 free 后 paid**)→ 方案组固化。
 
+**commit 顺序一致性(审计补充)**:现有实现先固化方案组文件、再计费(计费失败则方案组已 committed,状态不一致)。改造后保持现有顺序不变(先固化后计费),但计费失败时方案组文件已 committed——需在计费失败时回滚方案组状态或接受该不一致(与现状一致,不引入新问题)。
+
 **停止任务(stop)**:鉴权 + 归属 → pending→cancelled(释放并发)→ 方案组 stopped。
 
 **额度扣减顺序**:先免费后付费(用户确认)。
@@ -90,14 +92,15 @@ CREATE TABLE billing_records (
 
 - MySQL 读 api_keys,校验 apikey 存在且 active(否则 401)
 - `require_admin(apikey)`:管理接口校验 role='admin'(否则 403)
-- 归属:group.owner = apikey(跨 apikey 403,管理员除外)
+- 归属:group.owner = apikey(跨 apikey 403,**管理员除外——审计补充:assert_owner 对 admin 放行**)
 - `API_KEYS_JSON` 废弃;管理员 key 独立配置 `.env ADMIN_APIKEY`
 
 ## 6. 数据迁移(部署时一次性)
 
 - `data/billing/*.json` pending/committed → billing_records
 - 现有 apikey → api_keys(管理员 sk-demo-hefangyuan20260810:role=admin,额度 99999999)
-- 方案组 owner:用户标识 → apikey
+- **方案组 owner 迁移(审计补充)**:现有方案组(草稿/正式文件)的 owner 是**用户标识**(如 local-hefangyuan),改造后 owner = apikey。迁移脚本需按 API_KEYS_JSON 映射把 owner 替换为 apikey,否则旧方案组全部 403 不可访问。
+- **修改 apikey 时方案组迁移(审计补充)**:修改 apikey(旧 key→新 key)时,除 api_keys/billing_records 迁移外,还需扫 `data/schemes/*.json` 把 owner=旧 key 的方案组改为新 key(文件存储,不在 MySQL 事务内,迁移后校验)。
 
 ## 7. 配置
 
