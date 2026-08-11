@@ -177,22 +177,19 @@ async def _step_node(state: AgentState, step: int) -> AgentState:
         # - 多轮:回合 1 调工具 → 回合 2 换无工具 LLM 生成 JSON
         #   原因:deepseek-v4-flash 带工具绑定时,工具回合后仍重复发 tool_calls
         #   且 content 为空(生产实测 2026-08-10),去掉工具绑定才能稳定出 JSON
-        # - max_tokens=32768 限制输出长度,防止 step6 频次定级超限(生产实测 65536 token 上限)
-        #   32768 = 48 条目(8 方案×6 轨)×100 tokens + 外层结构 3K 的 4 倍余量,保证完整输出
-        # - thinking disabled:deepseek-v4-flash 是推理模型,思考模式默认开启且 effort=high,
-        #   结构化 JSON 任务思考纯浪费——生产实测 reasoning_tokens=65536 全被思考吃光,输出为 0。
-        #   关闭后所有 token 都给输出,32768 充足(DeepSeek 官方 thinking_mode 文档)。
+        # - max_tokens=32768 输出上限(4 倍余量保证完整输出)
+        # - 不加 thinking disabled:DeepSeek 服务端对 thinking disabled 强制输出上限 8192,
+        #   实测 max_tokens=32768 无 thinking 参数可正常输出 22704 tokens(测试 3),
+        #   加 thinking disabled 反而 8191 截断(测试 2)。模型默认会自行控制思考量。
         from agents.sentiment_query_agent.skills.loader import load_skill
 
         llm = get_chat_model().bind_tools([load_skill], strict=True).bind(
             response_format={"type": "json_object"},
             max_tokens=32768,
-            extra_body={"thinking": {"type": "disabled"}},
         )
         llm_no_tools = get_chat_model().bind(
             response_format={"type": "json_object"},
             max_tokens=32768,
-            extra_body={"thinking": {"type": "disabled"}},
         )
         messages = prompt.format_messages(
             company=company,
