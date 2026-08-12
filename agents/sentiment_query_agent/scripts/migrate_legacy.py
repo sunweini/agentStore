@@ -28,8 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.pare
 
 from common import config, db  # noqa: E402
 
+# 数据目录:优先 DATA_DIR 环境变量(容器内 /app/data),否则项目根 data/
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-_DRY_RUN = "--dry-run" in sys.argv or "--dry-run" not in sys.argv  # 默认 dry-run
+_DATA_DIR = Path(config.get_env("DATA_DIR", str(_PROJECT_ROOT / "data")))
+_DRY_RUN = "--apply" not in sys.argv  # 默认 dry-run;传 --apply 才实际写库
 
 
 def _legacy_apikey_map() -> dict:
@@ -46,7 +48,7 @@ def _legacy_apikey_map() -> dict:
 
 def _migrate_billing(apikey_of: dict) -> None:
     """旧计费 JSON → billing_records + 额度扣减。"""
-    billing_dir = _PROJECT_ROOT / "data" / "billing"
+    billing_dir = _DATA_DIR / "billing"
     if not billing_dir.exists():
         print("[skip] data/billing 不存在")
         return
@@ -113,7 +115,7 @@ def _commit_with_quota(apikey: str, group_id: str) -> None:
 
 def _migrate_scheme_owner(apikey_of: dict) -> None:
     """方案组 owner:用户标识 → apikey。"""
-    schemes_dir = _PROJECT_ROOT / "data" / "schemes"
+    schemes_dir = _DATA_DIR / "schemes"
     if not schemes_dir.exists():
         print("[skip] data/schemes 不存在")
         return
