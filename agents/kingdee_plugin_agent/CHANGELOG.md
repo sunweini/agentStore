@@ -533,7 +533,7 @@
 - `docs/kingdee-plugin-agent/manual.md`:answers 端点表补冻结 409 语义;常见问题新增 Q8(确认后改需求 → 开新任务)/ Q9(任务超时 → 30min 总闸);交付物解读补 `records/spec.json`。
 
 ---
-## v1.8.1 — 2026-08-08(kingdee-plugin-agent 三份文档:项目/技术/使用手册)
+## v1.8.1 — 2026-08-08(三份文档:项目/技术/使用手册)
 
 ### 文档
 
@@ -660,7 +660,7 @@
 - tests/test_kingdee_agent.py 追加 3 项(编译 HTTP 错误 BLOCKED 不扣预算 / 产物 id 路径穿越拒绝 / 主管幻觉 finish 回落),全套 146 项全过。
 
 ---
-## v1.4.0 — 2026-08-08(kingdee-plugin-agent 全流程交付首版:CLI + Web + 文档)
+## v1.4.0 — 2026-08-08(全流程交付首版:CLI + Web + 文档)
 
 ### 新增功能
 
@@ -679,7 +679,7 @@
 - tests/test_kingdee_agent.py 67 项全过(图全链路 + CLI/API 确定性注入路径),tests/test_kingdee_api.py 8 项全过;全套 143 项全过(含 tests/eval 生成质量 eval 4 项)
 
 ---
-## v1.3.0 — 2026-08-08(kingdee-plugin-agent 主管图构建 C10)
+## v1.3.0 — 2026-08-08(主管图构建 C10)
 
 ### 新增功能
 

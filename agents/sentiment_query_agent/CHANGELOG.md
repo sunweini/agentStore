@@ -38,7 +38,7 @@
 - stop 任务取消 pending 释放并发额度(已部署 v1.2.0,随本版本入档)
 
 ---
-## v1.23.0 — 2026-08-10(sentiment-query-agent:格式校验失败带反馈重试 + stop/status 接口 + commit 状态守卫)
+## v1.23.0 — 2026-08-10(格式校验失败带反馈重试 + stop/status 接口 + commit 状态守卫)
 
 ### 修复
 
@@ -63,7 +63,7 @@
   防止部分产物入库计费。
 
 ---
-## v1.22.0 — 2026-08-10(sentiment-query-agent:修复 deepseek-v4-flash 工具调用循环 + 错误日志带原始返回 + 对接文档)
+## v1.22.0 — 2026-08-10(修复 deepseek-v4-flash 工具调用循环 + 错误日志带原始返回 + 对接文档)
 
 ### 修复
 
@@ -89,7 +89,7 @@
   禁止事项/验收清单),开发人员可直接喂给 agent 实现对接。
 
 ---
-## v1.21.0 — 2026-08-10(sentiment-query-agent:生产部署方案落地 —— Docker Compose + 并发加固)
+## v1.21.0 — 2026-08-10(生产部署方案落地 —— Docker Compose + 并发加固)
 
 ### 部署
 
@@ -164,7 +164,7 @@
 - 多轮工具调用:回合 1 tool_calls → 执行 load_skill → 喂 ToolMessage → 回合 2 生成 JSON
 
 ---
-## v1.0.0 — 2026-08-07(sentiment-query-agent 正式交付)
+## v1.0.0 — 2026-08-07(正式交付)
 
 首个完整交付版本:海外舆情检索方案生成 Agent。
 
