@@ -5,60 +5,7 @@
 
 ---
 
-## v1.23.0 — 2026-08-10(sentiment-query-agent:格式校验失败带反馈重试 + stop/status 接口 + commit 状态守卫)
-
-### 修复
-
-- **skill 脚本格式校验失败纳入重试循环**:此前 LLM 输出合法 JSON 但缺字段
-  (如 keywords[7].terms 缺失)直接 step_error 不重试;现在把校验错误反馈给
-  LLM 重新生成,与 bad_json 共用重试预算(总上限 3 次,含首次),日志
-  event=retry reason=format_error / format_error_final。
-
-### 新增
-
-- **POST /api/v1/groups/{id}/stop**:停止 generating 中的组。进程内
-  asyncio.Task.cancel + 等待退出(防草稿覆盖竞态)+ 标 stopped 落草稿;
-  已完成步骤产物保留;不计费;不重启容器。
-- **GET /api/v1/groups/{id}/status**:轻量心跳,status/running/
-  current_step/total_steps,判断"能否查方案组"(running=false 且
-  status ∈ review/stopped/committed)。
-- 状态枚举新增 `stopped`(graph/state.py)。
-
-### 收紧
-
-- **commit 仅允许 review 状态**:stopped/generating 组 commit 报 409,
-  防止部分产物入库计费。
-
----
-
-## v1.22.0 — 2026-08-10(sentiment-query-agent:修复 deepseek-v4-flash 工具调用循环 + 错误日志带原始返回 + 对接文档)
-
-### 修复
-
-- **step 3-6 全部 bad_json 失败**(生产 10.33.17.72 实测):deepseek-v4-flash
-  绑定 load_skill 工具后,回合 1 发 tool_calls、回合 2 喂工具结果后**仍重复
-  发 tool_calls 且 content 为空**,节点解析永远失败。四象限隔离实验确认罪魁
-  是工具绑定(非 JSON Mode/prompt);修复 = 回合 2 换无工具绑定 LLM,方法论
-  内容转普通消息喂入(graph/nodes.py),容器实测输出合法 JSON,生产全流程
-  6 步验证通过(group 4c777cad,4 方案/10 轨/15 关键词)。
-
-### 可观测性
-
-- **bad_json 错误日志带原始返回**:重试记 tool_calls/content_len/content_head,
-  最终失败记 content_head+content_tail,异常消息同样携带(progress 接口
-  step_status[].error 可见)——此前只记"重试失败"结论,无法定位;
-- **修日志文件重复行**:FileHandler 同时挂 uvicorn.error 与其父 uvicorn,
-  启动/关闭类日志每行进文件两次;去掉 uvicorn.error 挂点(靠传播)。
-
-### 文档
-
-- `API.md`:完整接口文档,全部接口真实返回示例(生产实测数据);
-- `INTEGRATION.md`:AI agent 可读对接规范(字段契约/状态机/错误处理/
-  禁止事项/验收清单),开发人员可直接喂给 agent 实现对接。
-
----
-
-## v1.21.1 — 2026-08-10(kingdee-plugin-agent:终审修复 —— 恢复死锁 + 重复恢复 + 文档一致性)
+## v1.26.0 — 2026-08-10(kingdee-plugin-agent:终审修复 —— 恢复死锁 + 重复恢复 + 文档一致性)
 
 ### 修复
 
@@ -91,7 +38,7 @@
 
 ---
 
-## v1.21.0 — 2026-08-10(kingdee-plugin-agent:任务持久化 —— SQLite checkpointer + 重启恢复)
+## v1.25.0 — 2026-08-10(kingdee-plugin-agent:任务持久化 —— SQLite checkpointer + 重启恢复)
 
 ### 行为变更
 
@@ -147,7 +94,6 @@
 
 ---
 
-
 ### 文档
 
 - **code-generator 强化「禁止编造 API(签名必须有来源)」**(skill-creator 评估
@@ -171,6 +117,59 @@
   - references/distillation.md 条目模板/好例坏例/判据同步;loader 摘要补
     "proposed 必带验证建议"。
 - 全量测试:272 全绿(契约断言短语未变,仅内容增强)。
+
+---
+
+## v1.23.0 — 2026-08-10(sentiment-query-agent:格式校验失败带反馈重试 + stop/status 接口 + commit 状态守卫)
+
+### 修复
+
+- **skill 脚本格式校验失败纳入重试循环**:此前 LLM 输出合法 JSON 但缺字段
+  (如 keywords[7].terms 缺失)直接 step_error 不重试;现在把校验错误反馈给
+  LLM 重新生成,与 bad_json 共用重试预算(总上限 3 次,含首次),日志
+  event=retry reason=format_error / format_error_final。
+
+### 新增
+
+- **POST /api/v1/groups/{id}/stop**:停止 generating 中的组。进程内
+  asyncio.Task.cancel + 等待退出(防草稿覆盖竞态)+ 标 stopped 落草稿;
+  已完成步骤产物保留;不计费;不重启容器。
+- **GET /api/v1/groups/{id}/status**:轻量心跳,status/running/
+  current_step/total_steps,判断"能否查方案组"(running=false 且
+  status ∈ review/stopped/committed)。
+- 状态枚举新增 `stopped`(graph/state.py)。
+
+### 收紧
+
+- **commit 仅允许 review 状态**:stopped/generating 组 commit 报 409,
+  防止部分产物入库计费。
+
+---
+
+## v1.22.0 — 2026-08-10(sentiment-query-agent:修复 deepseek-v4-flash 工具调用循环 + 错误日志带原始返回 + 对接文档)
+
+### 修复
+
+- **step 3-6 全部 bad_json 失败**(生产 10.33.17.72 实测):deepseek-v4-flash
+  绑定 load_skill 工具后,回合 1 发 tool_calls、回合 2 喂工具结果后**仍重复
+  发 tool_calls 且 content 为空**,节点解析永远失败。四象限隔离实验确认罪魁
+  是工具绑定(非 JSON Mode/prompt);修复 = 回合 2 换无工具绑定 LLM,方法论
+  内容转普通消息喂入(graph/nodes.py),容器实测输出合法 JSON,生产全流程
+  6 步验证通过(group 4c777cad,4 方案/10 轨/15 关键词)。
+
+### 可观测性
+
+- **bad_json 错误日志带原始返回**:重试记 tool_calls/content_len/content_head,
+  最终失败记 content_head+content_tail,异常消息同样携带(progress 接口
+  step_status[].error 可见)——此前只记"重试失败"结论,无法定位;
+- **修日志文件重复行**:FileHandler 同时挂 uvicorn.error 与其父 uvicorn,
+  启动/关闭类日志每行进文件两次;去掉 uvicorn.error 挂点(靠传播)。
+
+### 文档
+
+- `API.md`:完整接口文档,全部接口真实返回示例(生产实测数据);
+- `INTEGRATION.md`:AI agent 可读对接规范(字段契约/状态机/错误处理/
+  禁止事项/验收清单),开发人员可直接喂给 agent 实现对接。
 
 ---
 
