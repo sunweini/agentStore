@@ -1,4 +1,6 @@
 import pytest
+from contextlib import closing
+
 from agents.kingdee_plugin_agent.store.artifact_store import ArtifactStore, ArtifactStoreError
 
 
@@ -31,7 +33,8 @@ def test_artifact_store_rejects_path_traversal_id(tmp_path):
     assert store.write("A_1-B2", "p.cs", "y").parent.name == "A_1-B2"
 
 
-from agents.kingdee_plugin_agent.graph.state import Subtask, TaskState, TASK_STATUS
+from agents.kingdee_plugin_agent.graph.state import (METRIC_KEYS, Subtask,
+                                                     TaskState, TASK_STATUS)
 
 
 def test_subtask_status_valid():
@@ -1842,6 +1845,35 @@ def test_cli_requires_env(monkeypatch, capsys):
     assert "环境" in out
 
 
+def test_cli_requires_env_per_env_suffix(monkeypatch, capsys):
+    """按 --env 分套校验:默认套齐但目标套缺 → 报错带 KD_BASE_URL_<ENV> 后缀(exit 1)。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")     # 默认套配了
+    code = run_cli(["给采购单审核加库存校验", "--env", "prod"])
+    assert code == 1                                             # 目标套未配 = 硬门槛退出
+    out = capsys.readouterr().out
+    assert "KD_BASE_URL_PROD" in out                             # 点明带后缀的缺项
+
+
+def test_cli_env_suffix_passes_and_builds_with_env(tmp_path, monkeypatch, capsys):
+    """目标套齐备(KD_*_<ENV>)→ 通过硬门槛;build_graph 收到 env=prod(注入图记录参数)。"""
+    from agents.kingdee_plugin_agent.cli import kingdee_env_vars
+    monkeypatch.setenv("KD_BASE_URL_PROD", "http://kd-prod:8080")
+    captured = {}
+
+    def _fake_build_graph(env=""):
+        captured["env"] = env
+        return build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                           compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                           output_dir=tmp_path)
+
+    monkeypatch.setattr(_cli, "build_graph", _fake_build_graph)
+    answers = iter(["SAL_SaleOrder", "确认"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert run_cli(["给采购单审核加库存校验", "--env", "prod"]) == 0
+    assert captured["env"] == "prod"                             # env 透传到 build_graph
+    assert kingdee_env_vars("prod")["KD_BASE_URL"] == "http://kd-prod:8080"
+
+
 def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
     """有环境(KD_BASE_URL)→ 交互澄清循环 → 确定性流水线跑完 → TodoList + 交付包,返回 0。
 
@@ -1849,14 +1881,14 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
     与 C10 图测试同一注入思路(只注入 LLM/外部服务,不 mock LangGraph 本身)。
     stdin 逐次喂澄清答案(1 个问题 + 1 次确认),capsys 校验各阶段输出。
     """
-    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")
+    monkeypatch.setenv("KD_BASE_URL_TEST", "http://kd-test:8080")   # 目标套(test)配齐
     answers = iter(["SAL_SaleOrder", "确认"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(
         _cli, "build_graph",
-        lambda: build_graph(llm=None, store=ArtifactStore(root=tmp_path),
-                            compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
-                            output_dir=tmp_path))
+        lambda env="": build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                                   compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                                   output_dir=tmp_path))
     code = run_cli(["给采购单审核加库存校验", "--env", "test"])
     out = capsys.readouterr().out
     assert code == 0                                  # 全流程跑完返回 0
@@ -1869,7 +1901,7 @@ def test_cli_runs_to_finish_with_env(tmp_path, monkeypatch, capsys):
 
 def test_cli_env_recorded_in_initial_state(tmp_path, monkeypatch):
     """--env 消费(最小化):env 值进初始 state.environment["env_name"](节点可感知)。"""
-    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")
+    monkeypatch.setenv("KD_BASE_URL_PROD", "http://kd-prod:8080")   # 目标套(prod)配齐
     captured = {}
     real = build_graph(llm=None, store=ArtifactStore(root=tmp_path),
                        compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
@@ -1883,13 +1915,14 @@ def test_cli_env_recorded_in_initial_state(tmp_path, monkeypatch):
                 captured["state"] = state
             return real.invoke(state, cfg)
 
-    monkeypatch.setattr(_cli, "build_graph", lambda: _SpyGraph())
+    monkeypatch.setattr(_cli, "build_graph", lambda env="": _SpyGraph())
     answers = iter(["SAL_SaleOrder", "确认"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     assert run_cli(["给采购单审核加库存校验", "--env", "prod"]) == 0
     assert captured["state"]["environment"] == {"env_name": "prod"}
 
 # ═══════════════════════════ C12 Web API(apikey + SSE + 澄清/验收)═══════════════════════════
+import threading
 import time as _time
 
 from fastapi import HTTPException
@@ -1902,10 +1935,15 @@ _KD_ENV = {"KD_BASE_URL": "http://kd-test:8080", "KD_USERNAME": "u",
 _HEADERS = {"X-API-Key": "k"}
 
 
-def _set_kd_env(monkeypatch):
-    """KD_* 4 项环境齐备(环境硬门槛需全量校验,C11 复审 carry-over)。"""
+def _set_kd_env(monkeypatch, env=""):
+    """KD_* 4 项环境齐备(环境硬门槛需全量校验,C11 复审 carry-over)。
+
+    env 空 = 默认环境(KD_*);非空 = 分套(KD_*_<ENV>),默认套不配 ——
+    Task 4 起硬门槛按 payload["env"] 分套取,默认套不回落。
+    """
+    suffix = f"_{env.upper()}" if env else ""
     for name, value in _KD_ENV.items():
-        monkeypatch.setenv(name, value)
+        monkeypatch.setenv(f"{name}{suffix}", value)
 
 
 def _det_graph_factory(tmp_path):
@@ -1915,10 +1953,27 @@ def _det_graph_factory(tmp_path):
                        output_dir=tmp_path)
 
 
-def _create_task(client, tmp_path, requirement="给采购单审核加库存校验"):
+def _shared_saver_graph_factory(tmp_path):
+    """带共享 SqliteSaver 的确定性图工厂:Task 5 恢复语义测试专用。
+
+    测试注入的图必须与 create_app 的共享 checkpointer 同一实例 —— MemorySaver
+    缺省下「重启恢复」实际是重新从头跑,区分不了重跑/重放;显式注入共享 saver
+    后,恢复任务经 _restore_pending 的 get_state 读回 checkpoint 原 state
+    (started_at/answers 保留),fresh-run 重放挂点,断言才真实。
+    """
+    from agents.kingdee_plugin_agent.api import _make_saver
+
+    saver = _make_saver(str(tmp_path / "checkpoints.db"))
+    return build_graph(llm=None, store=ArtifactStore(root=tmp_path),
+                       compile_client=FakeCompileClient(), smoke_client=_OkSmoke(),
+                       output_dir=tmp_path, checkpointer=saver)
+
+
+def _create_task(client, tmp_path, requirement="给采购单审核加库存校验",
+                 env="test", headers=_HEADERS):
     """建任务(环境齐备 + 确定性图)→ 返回 task_id。"""
-    r = client.post("/tasks", json={"requirement": requirement, "env": "test"},
-                    headers=_HEADERS)
+    r = client.post("/tasks", json={"requirement": requirement, "env": env},
+                    headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["task_id"]
 
@@ -1985,6 +2040,13 @@ def test_api_requires_apikey():
     assert r.status_code == 401
 
 
+def test_api_key_compare_digest():
+    """apikey 用恒定时间比较(时序侧信道防护)。"""
+    import secrets as _s
+    assert _s.compare_digest(b"abc", b"abc") is True
+    assert _s.compare_digest(b"abc", b"abd") is False
+
+
 def test_api_cors_preflight():
     """CORS:跨域 OPTIONS 预检返回 CORS 头(演示页 web/kingdee-demo.html 可跨域的前提)。
 
@@ -2020,20 +2082,117 @@ def test_acceptance_feed(monkeypatch):
 
 
 def test_api_env_gate_lists_all_missing_vars(monkeypatch):
-    """环境硬门槛:缺 KD_USERNAME/PASSWORD/DATA_CENTER 也要 503 并点明(C11 复审 carry-over)。"""
-    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")   # 只给 1 项
+    """环境硬门槛:缺 KD_* 任意一项 → 503 并点明全部缺项(只给 KD_BASE_URL 时 4 项缺 3)。"""
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")   # 只给 1 项(默认套)
     client = TestClient(create_app(api_key="k"))
-    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+    r = client.post("/tasks", json={"requirement": "x"},        # env 空 = 默认套
                     headers=_HEADERS)
     assert r.status_code == 503
     detail = r.json()["detail"]
     for missing in ("KD_USERNAME", "KD_PASSWORD", "KD_DATA_CENTER"):
         assert missing in detail
+    assert "KD_BASE_URL" not in detail                          # 已配置项不点名
+
+
+def test_api_env_missing_503_points_suffix(monkeypatch):
+    """env 分套缺失 → 503 点明带后缀缺项(KD_*_PROD 未配,默认套不回落)。"""
+    import agents.kingdee_plugin_agent.api as api_mod
+    monkeypatch.setenv("KD_BASE_URL", "http://kd-test:8080")    # 默认套配全 4 项
+    monkeypatch.setenv("KD_USERNAME", "u")
+    monkeypatch.setenv("KD_PASSWORD", "p")
+    monkeypatch.setenv("KD_DATA_CENTER", "dc")
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: object()))
+    r = client.post("/tasks", json={"requirement": "x", "env": "prod"},
+                    headers=_HEADERS)
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    for missing in ("KD_BASE_URL_PROD", "KD_USERNAME_PROD",
+                    "KD_PASSWORD_PROD", "KD_DATA_CENTER_PROD"):
+        assert missing in detail
+    assert "KD_LCID_PROD" not in detail                          # LCID 可选,不设门槛
+
+
+def test_api_concurrency_limit_429(tmp_path, monkeypatch):
+    """并发任务数达上限 → 429「并发任务数已达上限」;任务结束线程释放配额 → 恢复可建。
+
+    防泄漏断言:占满配额的信号量被后台线程持有 —— 429 后计数仍为 0(未泄漏归还),
+    任务跑完线程退出 release 后计数回归 1(可再次建任务)。
+    """
+    import agents.kingdee_plugin_agent.api as api_mod
+    _set_kd_env(monkeypatch, env="test")
+    sem = threading.Semaphore(1)
+    sem.acquire()                                                # 占满配额
+    monkeypatch.setattr(api_mod, "_sem", sem)
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _det_graph_factory(tmp_path)))
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code == 429
+    assert "并发任务数已达上限" in r.json()["detail"]
+    assert client.app.state.tasks == {}                          # 429 不建任务
+    assert sem._value == 0                                       # 未释放:配额仍被占用(线程持)
+    sem.release()                                                # 模拟配额归还(上一任务结束)
+    tid = _create_task(client, tmp_path, requirement="x")
+    assert tid
+    _run_to_done(client, tid)                                    # 后台线程结束自动 release
+    assert sem._value == 1                                       # 防泄漏:线程退出归还配额
+
+
+def test_api_production_build_graph_receives_env(tmp_path, monkeypatch):
+    """生产路径(不注入 graph_factory):create_task 调 build_graph(env=payload["env"])。
+
+    回归防护:I-1 —— create_app 曾预置 `graph_factory or (lambda: build_graph())`,
+    使 else 分支恒不可达、env 永不透传到图(生产连错环境)。
+    """
+    import agents.kingdee_plugin_agent.api as api_mod
+    _set_kd_env(monkeypatch, env="prod")
+    captured = {}
+
+    def _spy_build_graph(env="", checkpointer=None):
+        captured["env"] = env
+        captured["checkpointer_is_shared"] = checkpointer is not None
+        return _det_graph_factory(tmp_path)
+
+    monkeypatch.setattr(api_mod, "build_graph", _spy_build_graph)
+    client = TestClient(create_app(api_key="k"))                 # 不注入 graph_factory
+    tid = _create_task(client, tmp_path, env="prod")
+    assert captured["env"] == "prod"                             # env 透传到 build_graph
+    # 生产路径必须把共享 SqliteSaver 作为 checkpointer 注入(否则 MemorySaver
+    # 默认,重启后 checkpoint 会话不可见,持久化恢复失效)
+    assert captured["checkpointer_is_shared"] is True
+    _run_to_done(client, tid)                                    # 后台线程结束释放配额(防泄漏)
+
+
+def test_api_build_graph_error_releases_quota(monkeypatch):
+    """build_graph 抛错(非 HTTPException 异常路径)→ 配额归还。
+
+    回归防护:I-2 —— 早期只 catch HTTPException,构建失败会泄漏信号量配额。
+    验证手法(容量 1 断言):patched `_sem` 为容量 1 空信号量,请求 acquire
+    成功(1→0)→ build_graph 抛错 → 实现正确时 except 归还(0→1);若回退成
+    `except HTTPException`,RuntimeError 不被 catch,配额泄漏 _value 仍为 0,
+    断言失败。模块级默认容量 4 抓不住单次泄漏,必须用容量 1 断言。
+    请求为同步端点,无后台线程参与,无竞态。
+    """
+    import agents.kingdee_plugin_agent.api as api_mod
+    _set_kd_env(monkeypatch, env="test")
+    sem = threading.Semaphore(1)                                 # 容量 1:泄漏即 _value==0
+    monkeypatch.setattr(api_mod, "_sem", sem)
+
+    def _boom_build_graph(env="", checkpointer=None):
+        raise RuntimeError("build_graph boom")
+
+    monkeypatch.setattr(api_mod, "build_graph", _boom_build_graph)
+    client = TestClient(create_app(api_key="k"), raise_server_exceptions=False)
+    r = client.post("/tasks", json={"requirement": "x", "env": "test"},
+                    headers=_HEADERS)
+    assert r.status_code == 500                                  # 未捕获异常 → 500
+    assert sem._value == 1                                       # 配额已归还(泄漏则仍为 0)
 
 
 def test_api_create_state_and_answers(tmp_path, monkeypatch):
     """建任务 → /state 可见澄清 interrupt → answers 恢复 → 全流程 done(确定性图)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2056,7 +2215,7 @@ def test_api_state_rejects_unknown_task():
 
 def test_api_answers_conflict_when_task_done(tmp_path, monkeypatch):
     """任务已结束再答题 → 409(不阻塞、不静默丢答案)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2068,7 +2227,7 @@ def test_api_answers_conflict_when_task_done(tmp_path, monkeypatch):
 
 def test_api_task_creation_sets_started_at(tmp_path, monkeypatch):
     """建任务即打时间戳:started_at 入初始 state,驱动全流程时间预算总闸(设计 §8)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2078,7 +2237,7 @@ def test_api_task_creation_sets_started_at(tmp_path, monkeypatch):
 
 def test_api_initial_state_environment_has_env_name(tmp_path, monkeypatch):
     """--env 消费(API):env 值进初始 state.environment["env_name"](节点可感知)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path, requirement="x")
@@ -2117,7 +2276,7 @@ def test_api_answers_ask_user_ok_after_confirmation():
 
 def test_api_sse_streams_progress(tmp_path, monkeypatch):
     """SSE:todo/interrupt/done 事件流 + 重放;任务结束后流自动关闭(可读到 EOF)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     client = TestClient(create_app(api_key="k",
                                    graph_factory=lambda: _det_graph_factory(tmp_path)))
     tid = _create_task(client, tmp_path)
@@ -2162,7 +2321,7 @@ def _artifacts(rag) -> list[dict]:
 
 def test_api_acceptance_reject_feeds_w7(tmp_path, monkeypatch):
     """拒绝 + 原因 → 真实 w7 经验库入库(proposed 态);接受不新增;验收结论可查。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     from common.rag import ExperienceStore, RagClient
     rag = RagClient(data_dir=tmp_path / "rag")
     exp = ExperienceStore(rag)
@@ -2192,7 +2351,7 @@ def test_api_acceptance_reject_distinct_reasons_accumulate(tmp_path, monkeypatch
     旧实现签名恒为 "ARTIFACT|"(file_pattern 空),ExperienceStore 按签名去重会
     吞掉不同拒绝原因 —— 本测试用真实 ExperienceStore 验证累计与去重。
     """
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     from common.rag import ExperienceStore, RagClient
     rag = RagClient(data_dir=tmp_path / "rag")
     exp = ExperienceStore(rag)
@@ -2246,7 +2405,7 @@ def test_api_feedback_unknown_task_404():
 def test_api_feedback_feeds_experience(tmp_path, monkeypatch):
     """部署后行为错误上报 → 真实经验库 DEPLOY 通道入库(proposed 态);两个不同
     原因各自累计、相同原因去重;沉淀失败不阻塞反馈(never blocks)。"""
-    _set_kd_env(monkeypatch)
+    _set_kd_env(monkeypatch, env="test")
     from common.rag import ExperienceStore, RagClient
     rag = RagClient(data_dir=tmp_path / "rag")
     exp = ExperienceStore(rag)
@@ -2641,3 +2800,506 @@ def test_structured_with_skill_retry_recovers_after_parse_failure():
                                 [("system", "s"), ("human", "h")])
     assert out.questions == ["重试救回?"]
     assert len(llm.seen) == 2                         # 失败 1 次 + 重试成功 1 次
+
+
+# ── JSON Mode 回退路径(fake,不连真实 API)───────────────────────────────
+# 首选形态 with_structured_output(tools, include_raw) 的 invoke 在真实
+# DeepSeek 上被拒(openai SDK strict 校验 ValueError / API 400,2026-08-10
+# 实测)→ loader 自动回退 JSON Mode(bind_tools(strict=True) + json_object)。
+# 以下 fake 验证回退路径的契约:畸形重试 1 次(共 2 次尝试)、工具回合后结果
+# 直接返回不参与解析重试、2 回合上限强制停止、回退触发可观测(结构化日志)。
+
+
+class _RejectingStructuredRunnable:
+    """首选形态的 runnable:invoke 抛 ValueError(模拟 openai SDK 本地 strict
+    校验拒绝,真实 DeepSeek 上首选形态必然走到这里)。"""
+
+    def invoke(self, messages):
+        raise ValueError(
+            "`load_skill` is not strict. Only `strict` function tools "
+            "can be auto-parsed")
+
+
+class _JsonModeLLM(_ToolAwareLLM):
+    """触发回退的 fake:with_structured_output 返回 invoke 即抛异常的首选
+    runnable;回退后经 bind_tools(strict=True).bind(json_object) 的 bound 走
+    invoke。rounds 为回合响应序列(AIMessage),bound_invokes 记录每轮输入。"""
+
+    def __init__(self, rounds):
+        super().__init__()
+        self.rounds = list(rounds)
+        self.bound_invokes = []
+        self.bind_kwargs = {}
+        self.primary = _RejectingStructuredRunnable()
+
+    def with_structured_output(self, schema, **kwargs):
+        self.so_kwargs = kwargs
+        return self.primary                     # 首选形态 runnable(必拒)
+
+    def bind_tools(self, tools, **kwargs):
+        self.bind_kwargs.update(kwargs)
+        return self                             # bound 链:自身即 runnable
+
+    def bind(self, **kwargs):
+        self.bind_kwargs.update(kwargs)
+        return self
+
+    def invoke(self, messages):
+        self.bound_invokes.append(messages)
+        assert self.rounds, "超出预期回合数"
+        return self.rounds.pop(0)
+
+
+def _load_skill_tool_call():
+    """回合响应:模型请求调 load_skill。"""
+    return AIMessage(content="", tool_calls=[
+        {"id": "call_1", "name": "load_skill", "type": "function",
+         "args": {"skill_name": "requirement-clarify"}}])
+
+
+def test_json_mode_fallback_parse_failure_retries_then_returns_none(caplog):
+    """回退路径畸形 JSON:同输入重试 1 次(共 2 次尝试),仍失败 → None。
+
+    首选形态 invoke 抛异常(openai SDK strict 校验)→ 自动回退 JSON Mode;
+    回退后两次产出均无法解析 → None(worker 确定性骨架降级)。
+    同时验证回退触发有结构化日志(Important-3:禁止静默切换)。
+    """
+    llm = _JsonModeLLM([AIMessage(content="not json at all"),
+                        AIMessage(content="still not json")])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.bound_invokes) == 2                    # 2 次尝试(重试 1 次)
+    assert llm.bound_invokes[0] == llm.bound_invokes[1]   # 同输入重试
+    # 回退绑定形态:bind_tools strict=True + response_format json_object
+    assert llm.bind_kwargs.get("strict") is True
+    assert llm.bind_kwargs.get("response_format") == {"type": "json_object"}
+    assert any("event=structured_fallback" in r.message for r in caplog.records)
+
+
+def test_json_mode_fallback_retry_recovers_after_parse_failure():
+    """回退路径解析失败 1 次 → 重试成功:结果返回(重试救回,不进骨架)。"""
+    llm = _JsonModeLLM([AIMessage(content="not json"),
+                        AIMessage(content='{"questions": ["回退重试救回?"]}')])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["回退重试救回?"]
+    assert len(llm.bound_invokes) == 2                    # 失败 1 次 + 重试成功
+
+
+def test_json_mode_fallback_tool_round_then_schema():
+    """回退路径工具回合:回合 1 调 load_skill → 执行喂回 ToolMessage →
+    回合 2 出 schema(与首选形态同一契约)。"""
+    from langchain_core.messages import ToolMessage
+
+    llm = _JsonModeLLM([
+        _load_skill_tool_call(),
+        AIMessage(content='{"questions": ["回退工具回合成功?"]}'),
+    ])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out.questions == ["回退工具回合成功?"]
+    assert len(llm.bound_invokes) == 2                    # 1 工具 + 1 schema
+    second = llm.bound_invokes[1]
+    assert any(isinstance(m, ToolMessage) for m in second)  # 工具结果喂回
+    assert any("金蝶插件需求澄清方法论" in getattr(m, "content", "")
+               for m in second)
+
+
+def test_json_mode_fallback_tool_round_returned_directly_no_retry():
+    """工具回合后的结果直接返回,不参与解析重试:回合 2 产出畸形 JSON →
+    None(恰好 2 次 invoke,无第 3 次重试)。"""
+    from langchain_core.messages import ToolMessage
+
+    llm = _JsonModeLLM([
+        _load_skill_tool_call(),
+        AIMessage(content="bad json after tool round"),
+    ])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.bound_invokes) == 2                    # 无解析重试
+    assert any(isinstance(m, ToolMessage) for m in llm.bound_invokes[1])
+
+
+def test_json_mode_fallback_caps_tool_rounds():
+    """回退路径 2 回合上限:回合 2 仍调工具 → None(防工具调用死循环)。"""
+    llm = _JsonModeLLM([_load_skill_tool_call(), _load_skill_tool_call()])
+    out = structured_with_skill(llm, QuestionsOutput,
+                                [("system", "s"), ("human", "h")])
+    assert out is None
+    assert len(llm.bound_invokes) == 2                    # 回合 1 调工具 + 回合 2 仍调 → 停止
+
+
+# ── Task 5:任务持久化(重启恢复,SqliteSaver + 元数据表)─────────────────
+
+
+def test_restore_pending_task(tmp_path, monkeypatch):
+    """建任务 → 模拟重启(新 app + 同 DB)→ 未完成任务恢复;任务结束落盘终态。
+
+    重启语义:同一 db_path 构造新 app,create_app 启动时 _restore_pending 扫
+    tasks 表 status='created' 的任务,重建 handle + 后台线程续跑。
+    - 恢复任务按原 env 重建图(注入 graph_factory 断言 env 透传)
+    - 恢复线程阻塞 acquire 配对(不 429 拒绝)
+    - 恢复任务可正常答澄清 → done → 元数据表终态置位(重启不再恢复)
+
+    注入共享 SqliteSaver 图(见 _shared_saver_graph_factory):恢复语义的真实
+    路径(get_state 读回 checkpoint state 续跑)需要共享 checkpointer。
+    """
+    from agents.kingdee_plugin_agent.api import (_pending_task_rows,
+                                                 _update_task_status)
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+
+    # 等首个澄清 interrupt 挂起(checkpoint 已落盘:thread_id 会话存在)
+    _wait_state(app1, tid, lambda s: s["interrupt"])
+    assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]
+
+    # —— 模拟重启:新 app(同 DB),恢复逻辑在 create_app 内执行 ——
+    captured = {}
+
+    def _factory():
+        captured["env"] = _factory.env
+        return _shared_saver_graph_factory(tmp_path)
+
+    _factory.env = "test"
+    app2 = TestClient(create_app(api_key="k", graph_factory=_factory,
+                                 db_path=str(db)))
+    assert tid in app2.app.state.tasks            # 恢复的任务可被端点访问
+    assert captured["env"] == "test"              # 按元数据表 env 重建图
+
+    # 恢复任务续跑:回答澄清 → 全流程 done(fresh-run 重放挂点语义)。
+    # 注意:恢复后不能直接用 _run_to_done(两条 answers 间无等待,resume 投递
+    # 后图仍在跑,第二答会 409「未等待输入」)—— 与恢复路径一致的时序是:
+    # 等挂起 → 投递 → 等下一挂起(confirm)→ 投递 → 等终态。
+    st = _wait_state(app2, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "SAL_SaleOrder"},
+                  headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    st = _wait_state(app2, tid,
+                     lambda s: s["interrupt"] and s["interrupt"]["type"] == "confirm")
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "确认"}, headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    _wait_state(app2, tid, lambda s: s["done"], timeout=30)
+
+    # 任务结束 → 元数据表置 done → 再次重启不再恢复
+    assert _pending_task_rows(str(db)) == []
+    _update_task_status(str(db), tid, "created")  # 手工复位制造"未完成"场景
+    assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]
+    app3 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    # 注:app3 恢复的是终态 checkpoint(spec_confirmed/todo 全 delivered)→
+    # 重放直接走完(无 interrupt),无需 answers,自动 done;终态由 _run_loop
+    # finally 置位。恢复机制生效断言 = app3 持有 handle + 任务自动跑完。
+    assert tid in app3.app.state.tasks
+    _wait_state(app3, tid, lambda s: s["done"], timeout=30)
+    assert _pending_task_rows(str(db)) == []      # 终态再次落盘
+
+
+def test_restore_recovers_task_hung_at_interrupt(tmp_path, monkeypatch):
+    """重启恢复精确语义:任务挂在澄清 interrupt(checkpoint 落盘)→ 重启后
+    fresh-run 重放挂点,不重跑、started_at 保留原值(时间预算不重置)。
+
+    注入共享 SqliteSaver 图(见 _shared_saver_graph_factory):恢复任务经
+    _restore_pending 的 get_state 读回 checkpoint 原 state。断言三件套:
+    - 已答答案出现在恢复后 state(clarify_answers=["SAL_SaleOrder"],重跑则为空)
+    - 挂点类型推进到 confirm(重跑则还在 question round 0)
+    - started_at 保留原值(重跑则被新 time.time() 覆盖,时间预算重新计时)
+
+    三阶段重启(B-1 回归):恢复后的任务再次挂起(恢复最常见结果)DB 停留
+    running、claimed_at 为上次启动时间 —— 修复前 _pending_task_rows 只扫
+    created,第 3 次重启扫不到该任务,handle 永久丢失(数据丢失)。修复后
+    扫 IN('created','running') + claimed_at 陈旧回收(早于本次 boot_ts 可
+    重认领),第 3 次重启任务仍在且挂点/answers/started_at 全保留。
+    """
+    from agents.kingdee_plugin_agent.api import _pending_task_rows
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+    st = _wait_state(app1, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    assert st["interrupt"]["round"] == 0
+    started1 = app1.app.state.tasks[tid].state["started_at"]   # 完整 state dict(建任务写入)
+
+    # 答第 1 问(唯一问题,确定性图)→ 挂起在确认摘要(checkpoint 记录已答答案)。
+    # 等 type 从 question 变为 confirm(不能只等 interrupt 存在:resume 投递后
+    # 图仍在跑,interrupt 字段还是旧的 question,轮询会立即返回旧值)
+    r = app1.post(f"/tasks/{tid}/answers", json={"answer": "SAL_SaleOrder"},
+                  headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    st = _wait_state(app1, tid, lambda s: s["interrupt"]
+                     and s["interrupt"]["type"] == "confirm")
+
+    app2 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    # 恢复后仍挂在确认摘要(confirm,非重新开始),已答答案在 checkpoint state 中,
+    # started_at 保留原值(时间预算不重置)—— 区分重跑/重放的关键断言
+    st = _wait_state(app2, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "confirm"                # 重跑则回到 question round 0
+    h2 = app2.app.state.tasks[tid]
+    assert h2.state["clarify_answers"] == ["SAL_SaleOrder"]    # 重跑则为空
+    assert h2.state["started_at"] == started1                  # 重跑则被新时间戳覆盖
+
+    # 第 3 次重启:恢复后的任务再次挂起在 confirm(未答完,DB 停留 running +
+    # claimed_at=app2 启动时间)。陈旧回收:claimed_at 早于本次 boot_ts →
+    # 仍可认领恢复 —— 修复前 running 不扫描,此任务被永久丢弃(B-1)。
+    app3 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    st = _wait_state(app3, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "confirm"                # 第 2 次恢复重放同一挂点
+    h3 = app3.app.state.tasks[tid]
+    assert h3.state["clarify_answers"] == ["SAL_SaleOrder"]    # 答案仍保留
+    assert h3.state["started_at"] == started1                  # 时间预算仍不重置
+    _run_to_done(app3, tid)                                    # 答完 → done
+    assert _pending_task_rows(str(db)) == []                   # 终态落盘
+
+
+def test_restore_metrics_nonzero_not_doubled(tmp_path, monkeypatch):
+    """metrics 非零时重启恢复不翻倍(re-review 新 Critical 回归)。
+
+    背景:恢复输入 = checkpoint 原 state(fresh-run 重放),metrics 通道是求和
+    reducer(_merge_metrics),输入带 checkpoint 当前值会被 operator(current, v)
+    再算一次 —— 双计(compile_pass_count 等五计数器恢复后翻倍,多次重启逐次
+    累计)。修复:恢复输入排除 metrics 键(该通道不产生更新 → 保留 checkpoint
+    原值)。
+
+    场景设计:确定性图默认只在 w1 澄清 interrupt 处挂起,此时 metrics 全 0
+    (0+0=0 掩盖双计)。本测试在 w1 挂起会话里用 update_state 注入 metrics=1
+    (等价「任务跑到位后崩溃重启」的中间态),再走恢复路径 —— 恢复后 metrics
+    仍 =1,而非 2/3;继续答完整个流程,各计数器保持注入值不被重复累计。
+    """
+    from langgraph.types import Overwrite
+    from agents.kingdee_plugin_agent.api import _pending_task_rows
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+    _wait_state(app1, tid, lambda s: s["interrupt"])           # w1 澄清挂起
+
+    # 注入 metrics=1(checkpoint 已落盘,重启可见);Overwrite 跳过求和 reducer
+    # 直接覆写(与 langgraph 内部 _get_overwrite 同一语义,公开 API)
+    g1 = app1.app.state.tasks[tid].graph
+    cfg1 = app1.app.state.tasks[tid].cfg
+    g1.update_state(cfg1, {"metrics": Overwrite(
+        {"compile_pass_count": 1, "compile_fail_count": 1, "smoke_pass_count": 1,
+         "smoke_fail_count": 1, "rework_rounds": 1})})
+
+    # —— 模拟重启:恢复任务读回 checkpoint 原 state(metrics 排除,不双计)——
+    app2 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    # 等恢复线程跑完第一轮(fresh-run 重放挂点):此时 handle.state 已是图结果
+    # (metrics 通道从 checkpoint 原值 1 起步 —— 修复前输入同值会被求和 reducer
+    # 再算一次 → 2;修复后排除 metrics 键 → 1)
+    st = _wait_state(app2, tid, lambda s: s["interrupt"])
+    assert st["interrupt"]["type"] == "question"
+    h2 = app2.app.state.tasks[tid]
+    assert h2.state["metrics"] == {"compile_pass_count": 1, "compile_fail_count": 1,
+                                   "smoke_pass_count": 1, "smoke_fail_count": 1,
+                                   "rework_rounds": 1}        # 非 2/3(双计则翻倍)
+
+    # 继续走完整流程 → 指标在注入值上增量(w5 编译 +1 是合法增量),不重复累计
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "SAL_SaleOrder"},
+                  headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    st = _wait_state(app2, tid,
+                     lambda s: s["interrupt"] and s["interrupt"]["type"] == "confirm")
+    r = app2.post(f"/tasks/{tid}/answers", json={"answer": "确认"}, headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    _wait_state(app2, tid, lambda s: s["done"], timeout=30)
+    assert h2.state["metrics"] == {"compile_pass_count": 2,   # 1(注入)+ 1(w5 合法增量)
+                                   "compile_fail_count": 1,
+                                   "smoke_pass_count": 1,
+                                   "smoke_fail_count": 1,
+                                   "rework_rounds": 1}        # 注入值不被重复加回
+    assert _pending_task_rows(str(db)) == []                   # 终态落盘
+
+
+def test_restore_skip_when_capacity_full(tmp_path, monkeypatch):
+    """C-1 回归:挂起任务数 > KINGDEE_MAX_CONCURRENT 时 create_app 不阻塞(恢复死锁修复)。
+
+    修复前:恢复路径阻塞 acquire(create_app 主线程),恢复线程挂在 interrupt
+    等用户回答不释放配额 —— 挂起任务数 > 容量时,第 N+1 个任务永久阻塞,
+    API 整个起不来(实测复现:服务挂了 → 用户睡觉 → 早上 5 个挂起任务 +
+    默认容量 4 → 起不来)。
+    修复后:非阻塞 acquire(blocking=False),配额不足跳过该任务(元数据回写
+    created 保持可恢复,下轮重启再试)。
+    断言:create_app 秒回(修复前卡死)+ 容量内任务恢复 + 超限任务仍 pending。
+    """
+    from agents.kingdee_plugin_agent.api import _insert_task, _pending_task_rows
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+
+    # 直接落库 5 个 created 任务(等价「服务崩溃时 5 个任务未完成」,默认容量 4)
+    tids = [f"capfull{i}" for i in range(5)]
+    for tid in tids:
+        _insert_task(str(db), tid, "test", "挂起任务")
+
+    start = _time.time()
+    app = TestClient(create_app(api_key="k",
+                                graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                db_path=str(db)))
+    assert _time.time() - start < 5                      # 修复前:第 5 个 acquire 永久阻塞
+    assert set(app.app.state.tasks) == set(tids[:4])     # 容量内恢复
+    # B-1 语义:超限任务回 created,仍 pending;容量内已恢复的任务停在 running
+    # (未答完挂起),也在扫描范围 —— 5 个任务全部可恢复,无一丢失
+    rows = {row[0]: row[1:] for row in _pending_task_rows(str(db))}
+    assert rows == {tid: ("test", "挂起任务") for tid in tids}
+
+
+def test_restore_claim_idempotent_skip_running(tmp_path, monkeypatch):
+    """C-2 回归:恢复前占位幂等 —— 已被别实例置 running 的任务跳过,不双跑。
+
+    修复前:同一 DB 双实例并发扫描都读到 status='created' → 同一任务双线程
+    invoke(同 thread_id checkpoint 竞态/双倍计费)。修复后:占位 UPDATE
+    created→running 条件更新,影响行数 0 = 已被认领,直接跳过。
+    """
+    from agents.kingdee_plugin_agent.api import (_claim_pending_task,
+                                                 _pending_task_rows,
+                                                 _update_task_status)
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    boot_ts = _time.time()
+
+    def _hang_task():
+        client = TestClient(create_app(api_key="k",
+                                       graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                       db_path=str(db)))
+        tid = _create_task(client, tmp_path)
+        _wait_state(client, tid, lambda s: s["interrupt"])
+        return tid
+
+    tid = _hang_task()
+    _update_task_status(str(db), tid, "created")   # 手工复位,模拟重启前状态
+
+    # 实例 A 认领成功(created → running + claimed_at,影响 1 行);实例 B 再认领
+    # (同 boot_ts 并发窗口)→ claimed_at 新鲜,跳过防双跑
+    assert _claim_pending_task(str(db), tid, boot_ts) is True
+    assert _claim_pending_task(str(db), tid, boot_ts) is False
+    # B-1 语义:running 任务仍在扫描范围(陈旧回收用),防双跑靠 claimed_at
+    # 新鲜而非「不在列表」—— 列表含该任务,但并发窗口内重认领被拒
+    rows = _pending_task_rows(str(db))
+    assert rows == [(tid, "test", "给采购单审核加库存校验")], f"running 任务应仍在扫描范围: {rows}"
+    _update_task_status(str(db), tid, "created")   # 复位,恢复可再认领
+
+
+def test_restore_claim_unknown_task_returns_false(tmp_path):
+    """C-2 边界:认领不存在的任务返回 False(不抛错,扫描继续)。"""
+    from agents.kingdee_plugin_agent.api import _claim_pending_task
+    db = tmp_path / "tasks.db"
+    assert _claim_pending_task(str(db), "nope", _time.time()) is False
+
+
+def test_restore_claim_reclaim_after_stale_claimed_at(tmp_path, monkeypatch):
+    """B-1 回收:running + claimed_at 陈旧(上个进程崩溃遗留)→ 重启可回收认领。
+
+    恢复后的任务再次挂起(恢复最常见结果)DB 停留 running + claimed_at=上次
+    启动 —— 修复前只扫 created,下次重启不扫描,任务永久丢失。修复后:
+    - _pending_task_rows 扫 IN('created','running'),running 任务进入扫描;
+    - _claim_pending_task 认领条件加 claimed_at < boot_ts(早于本次启动 =
+      上个进程遗留,可回收重认领;新鲜 = 并发实例刚认领,跳过防双跑)。
+    三组 boot_ts:陈旧(过去)→ 可认领;等于占位时间(同一实例并发窗口)→
+    跳过;未来(本次启动比认领早,时钟不回溯的快速重启)→ 可认领。
+    """
+    from agents.kingdee_plugin_agent.api import (_claim_pending_task,
+                                                 _insert_task, _pending_task_rows)
+    db = tmp_path / "tasks.db"
+    _insert_task(str(db), "t1", "test", "挂起任务")
+
+    past = _time.time() - 3600                     # 上个进程遗留
+    assert _claim_pending_task(str(db), "t1", past) is True
+    # B-1 语义:认领后任务停在 running,仍在扫描范围(陈旧回收用)——
+    # 防双跑靠 claimed_at 新鲜,不是靠排除 running
+    assert _pending_task_rows(str(db)) == [("t1", "test", "挂起任务")]
+    assert _claim_pending_task(str(db), "t1", past) is False   # 并发窗口,跳过
+    assert _pending_task_rows(str(db)) == [("t1", "test", "挂起任务")]  # 仍可回收
+
+    future = _time.time() + 3600                   # 新的 boot_ts 晚于认领时间
+    assert _claim_pending_task(str(db), "t1", future) is True  # 陈旧回收,重启可恢复
+
+
+def test_restore_reclaims_running_with_stale_claimed_at(tmp_path, monkeypatch):
+    """B-1 回归:上次崩溃遗留的 running 任务(claimed_at 陈旧)→ 重启恢复不丢。
+
+    场景:恢复线程在「认领成功」与「启动成功」之间崩溃(或任务在恢复后再次
+    挂起)DB 停留 running + 旧 claimed_at。新进程重启:扫描含 running +
+    陈旧回收 → 任务被认领重建,继续挂起在 checkpoint 挂点(不重跑)。
+    修复前:只扫 created,此任务被永久丢弃(数据丢失)。
+    """
+    from agents.kingdee_plugin_agent.api import _pending_task_rows, _update_task_status
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    app1 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    tid = _create_task(app1, tmp_path, env="test")
+    _wait_state(app1, tid, lambda s: s["interrupt"])
+    _update_task_status(str(db), tid, "created")   # 模拟崩溃前状态
+    assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]
+
+    # 手工构造「上个进程认领后崩溃」:置 running + claimed_at 陈旧(过去 1 小时)
+    from agents.kingdee_plugin_agent.api import _task_conn
+    with closing(_task_conn(str(db))) as conn:
+        conn.execute("UPDATE tasks SET status='running', claimed_at=? WHERE id=?",
+                     (_time.time() - 3600, tid))
+        conn.commit()
+    assert _pending_task_rows(str(db)) == [(tid, "test", "给采购单审核加库存校验")]  # 扫描含 running
+
+    app2 = TestClient(create_app(api_key="k",
+                                 graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                 db_path=str(db)))
+    assert tid in app2.app.state.tasks            # 陈旧 running 任务被恢复
+    _run_to_done(app2, tid)                       # 正常答完
+    assert _pending_task_rows(str(db)) == []      # 终态落盘
+
+
+def test_cancel_persists_terminal_status(tmp_path, monkeypatch):
+    """C-2 回归:cancel 路径落终态 —— 重启不重放已取消任务。
+
+    修复前:_run_loop 的 finally 只 catch _update_task_status 的异常,不处理
+    cancel 路径(handle.cancelled 直接 return 不落终态)→ 任务在 DB 里永远
+    created,每次重启都重建 handle + 重放 checkpoint(重复执行副作用)。
+    修复后:finally 按 cancelled → 'cancelled' 落终态,重启恢复扫描不到。
+    """
+    from agents.kingdee_plugin_agent.api import _pending_task_rows, _task_conn
+    _set_kd_env(monkeypatch, env="test")
+    db = tmp_path / "tasks.db"
+    client = TestClient(create_app(api_key="k",
+                                   graph_factory=lambda: _shared_saver_graph_factory(tmp_path),
+                                   db_path=str(db)))
+    tid = _create_task(client, tmp_path)
+    _wait_state(client, tid, lambda s: s["interrupt"])   # 挂起在澄清 interrupt
+
+    handle = client.app.state.tasks[tid]
+    handle.cancelled = True                    # 模拟取消(实际由运维/关闭路径置位)
+    with handle._cond:
+        handle._cond.notify_all()              # 唤醒 _run_loop 等恢复的 wait
+
+    # cancel 线程退出后终态落盘:cancelled(修复前 = created,重启会重放)。
+    # 注意 cancel 不置 done/error 快照(既有语义),直接轮询 DB 终态
+    deadline = _time.time() + 10
+    status = None
+    while _time.time() < deadline:
+        with closing(_task_conn(str(db))) as conn:
+            rows = conn.execute("SELECT status FROM tasks WHERE id=?",
+                                (tid,)).fetchall()
+        if rows:
+            status = rows[0][0]
+            if status != "created":
+                break
+        _time.sleep(0.05)
+    assert status == "cancelled", f"cancel 应落 cancelled 终态,实际: {status}"
+    assert _pending_task_rows(str(db)) == []   # 终态非 created,重启不再恢复

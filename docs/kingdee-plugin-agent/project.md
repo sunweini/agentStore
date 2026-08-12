@@ -71,17 +71,17 @@
 
 以下均为**未验证/未达成**项,上线前需推进:
 
-- **真实金蝶 WebAPI 联调**:编译侧 E2E 门已达成(Windows 原生部署,见 [windows-deployment.md](windows-deployment.md));但 WebAPI 客户端(FormId/字段/操作查询)与冒烟客户端的端点路径、响应结构目前是**文档化初始契约(占位)**,需在真实实例上对照金蝶文档验证调整 —— 需要真实金蝶环境的 **WebAPI 登录凭证**(KD_* 4 项)。
+- ~~**真实金蝶 WebAPI 联调**~~(**✅ 已达成 2026-08-10**,10.33.17.130 真实实例:ValidateUser 登录 / ExecuteBillQuery / QueryBusinessInfo 三端点可用,`get_form_fields` 真实返回 337 字段,会话失效自动重登;官方 SDK 无 GetFormOperations/QueryBusinessObjects,占位方法已删,见 tech.md §11)。
 - **RAG 内容**:guide/api_ref 已接真实资料 —— 内部 skill 文档 + 金蝶官方 9 页已灌入(RAG 导入管线 `tools/ingest.py`,2026-08-09,guide 65 chunks / api_ref 4 chunks,检索冒烟通过,见 CHANGELOG v1.14.0);剩余:**standards 规范库目录**仍以模板要点为主,待接真实编码规范;外部导入文档暂无 plugin_type 元数据,类型过滤检索需扩展导入口令。
-- **线上 DeepSeek 验证 load_skill 绑定**:w1-w5 的 `structured_with_skill`(tools + json_schema 组合)未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 smoke,被 API 拒绝则回退 JSON Mode 模式(见 `agents/kingdee_plugin_agent/CLAUDE.md` 约束)。
-- **v1 已知债务**(见 tech.md §11):API 内存任务存储重启即丢、线程无并发上限、apikey 非 timing-safe、`--env` 部分消费(v1.11:记录进 requirement_spec + `state.environment["env_name"]`,节点可感知;未做环境级差异化,单环境 v1)、CLI 门控仅查 KD_BASE_URL。
+- ~~**线上 DeepSeek 验证 load_skill 绑定**~~(**✅ 已达成 2026-08-10**:首选 `with_structured_output(schema, tools=[load_skill])` 形态被 DeepSeek 拒绝后自动回退 JSON Mode,回退路径实测可用,见 tech.md §11)。
+- **v1 已知债务**(见 tech.md §11):内存任务存储 / apikey timing-safe / msgpack 白名单已清偿(v1.21.0);剩余:**`--env` 部分消费**(进 requirement_spec + `state.environment["env_name"]` + 凭证分套,未做节点级环境差异化,单环境 v1)、CLI 门控仅查 KD_BASE_URL。
 
 ## 6. 后续规划
 
 - **知识自生长**:经验库"种子 + w7 沉淀 + 人工 review"滚动运转,proposed → verified 流转,编译修复命中率持续提升;错误映射单一来源经验库(动态),skill 只含方法论。
 - **多环境支持**:`--env` 已记录进 requirement_spec + `state.environment["env_name"]`(v1.11,节点可感知),未做环境级差异化(单环境 v1);后续按环境隔离金蝶配置与数据目录。
 - **交付包合并**:多子任务 v1 逐包交付,后续合并为单一 zip。
-- **任务持久化与限流**:内存任务存储换持久化(如 AsyncSqliteSaver + DB),API 加线程池/并发闸门。
+- ~~**任务持久化与限流**~~(**✅ 已达成 v1.21.0**:任务落盘 SQLite(同步 SqliteSaver + 元数据表)重启恢复 + 并发闸门 Semaphore(429),恢复路径非阻塞 acquire 防死锁)。
 - **其他 ERP 扩展方向**:金蝶能力已封装在 `tools/kingdee_api.py`(客户端)+ `templates/`(类型模板)+ `compile_service`(编译容器),agent 编排层与金蝶细节解耦,具备向同类 ERP(BOS 系)或新插件类型横向扩展的形态;扩展时优先补模板/检索库而非改图。
 
 ## 7. 技术栈

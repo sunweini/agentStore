@@ -4,7 +4,7 @@
   kingdee-cli "给采购单审核加库存校验" --env test
 
 流程:
-  1. 环境硬门槛:未配置 KD_BASE_URL → 报错退出(exit 1),不进入图执行
+  1. 环境硬门槛:按 --env 取凭证套(KD_*_<ENV>,空回落 KD_*),缺 KD_BASE_URL → 报错退出(exit 1),不进入图执行
   2. 图执行:interrupt 交互澄清循环(Q/A:澄清问题 / 确认摘要 / 中途询问)
   3. 结束后打印 TodoList 摘要 + 交付包路径;全部交付返回 0,失败/中止返回 1
 
@@ -14,13 +14,13 @@ agents.kingdee_plugin_agent.cli.build_graph 注入确定性模式(build_graph(ll
 不 mock LangGraph 本身。
 """
 import argparse
-import os
 import time
 import uuid
 
 from langgraph.types import Command
 
 from agents.kingdee_plugin_agent.agent import build_graph, default_recursion_limit
+from common.config import kingdee_env_vars
 
 
 def _field(item, name: str) -> str:
@@ -33,17 +33,21 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("requirement", help="需求描述")
     parser.add_argument("--env", required=True, help="金蝶目标环境名(env 配置)")
     args = parser.parse_args(argv)
-    # 环境硬门槛:无 KD_BASE_URL 退出(真实实现读 .env 环境配置)
-    if not os.getenv("KD_BASE_URL"):
-        print("错误:未配置金蝶环境(KD_BASE_URL),先配置环境再使用")
+    # 环境硬门槛:按目标环境取凭证套(优先 KD_*_<ENV>,回落 KD_*),
+    # 无 KD_BASE_URL 退出(真实实现读 .env 环境配置)
+    env_vars = kingdee_env_vars(args.env)
+    if not env_vars.get("KD_BASE_URL"):
+        suffix = f"_{args.env.upper()}" if args.env else ""
+        print(f"错误:未配置金蝶环境(KD_BASE_URL{suffix}),先配置环境再使用")
         return 1
 
     print(f"需求: {args.requirement}")
     print(f"目标环境: {args.env}")
 
     # 生产缺省:真实 LLM 由 env 接线(build_graph() 内部 get_chat_model());
+    # env 透传:凭证按 <VAR>_<ENV> 分套取(空 = 默认 KD_*);
     # 测试路径 monkeypatch 本模块 build_graph 注入确定性模式(llm=None)。
-    app = build_graph()
+    app = build_graph(env=args.env)
     # thread_id 每次运行唯一(隔离 checkpointer 会话)。recursion_limit 按子任务数
     # 预算(设计 §6.2:100 + 20×n);CLI 澄清期还不知道子任务数(拆解发生在一次
     # invoke 内),按上限 10 给足 —— 300 超步覆盖澄清 + 全流水线 + 返工重跑

@@ -118,7 +118,8 @@ def _send_payload(state: TaskState, subtask: Subtask) -> dict:
 
 def build_graph(store=None, compile_client=None, rag=None, standards=None,
                 api_client=None, llm=_UNSET, smoke_client=None, experience=None,
-                package_builder=None, output_dir=None, checkpointer=None):
+                package_builder=None, output_dir=None, checkpointer=None,
+                env: str = ""):
     """构建 kingdee-plugin-agent 主管图。所有依赖可注入(测试传 fake),缺省生产默认。
 
     Args:
@@ -131,7 +132,9 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
         smoke_client: 冒烟客户端(缺省基于 api_client/环境构造,无环境则 None)
         experience: 经验库(w2 设计历史坑参考 / w5 修复检索 / w7 沉淀;None = 跳过)
         package_builder/output_dir: 交付包构建(缺省 PackageBuilder(output_dir))
-        checkpointer: 缺省 MemorySaver(interrupt 必需);生产可换 AsyncSqliteSaver
+        checkpointer: 缺省 MemorySaver(interrupt 必需);生产 API 换同步 SqliteSaver
+            (api.py 共享连接,重启恢复用;同步版贴合后台线程 graph.invoke 架构)
+        env: 金蝶目标环境名(凭证 <VAR>_<ENV> 分套,空 = 默认 KD_*)
 
     Returns:
         CompiledStateGraph(langgraph.json 注册入口 build_graph)
@@ -139,7 +142,7 @@ def build_graph(store=None, compile_client=None, rag=None, standards=None,
     llm = get_chat_model() if llm is _UNSET else llm
     store = store or ArtifactStore()
     compile_client = compile_client or compile_client_from_env()
-    api = api_client or KingdeeApiClient.client_from_env_or_none()
+    api = api_client or KingdeeApiClient.client_from_env_or_none(env=env)
     smoke_client = smoke_client or (SmokeClient(api) if api else None)
 
     workers = {

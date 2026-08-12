@@ -58,6 +58,122 @@
 
 ---
 
+## v1.21.1 — 2026-08-10(kingdee-plugin-agent:终审修复 —— 恢复死锁 + 重复恢复 + 文档一致性)
+
+### 修复
+
+- **恢复死锁(C-1,终审 Critical)**:`_restore_pending` 原在主线程对每个恢复任务
+  「先启线程再阻塞 acquire」—— 恢复线程挂在 interrupt 等用户回答不释放配额,
+  挂起任务数 > `KINGDEE_MAX_CONCURRENT`(默认 4)时第 N+1 个任务永久阻塞,
+  create_app 起不来(实证:服务挂了 → 用户睡觉 → 早上 5 个挂起任务 → 起不来)。
+  改为非阻塞 acquire(blocking=False),配额不足跳过该任务(元数据回写 created,
+  留待下次重启恢复)—— 恢复语义是「不漏任务」而非「限制恢复」。补测试
+  `test_restore_skip_when_capacity_full`(5 个 created 任务 + 容量 4 → create_app
+  秒回、容量内恢复、超限跳过仍 pending)。
+- **恢复任务被重复恢复(C-2,终审 Critical)**:① 恢复前占位幂等 ——
+  `UPDATE tasks SET status='running' WHERE id=? AND status='created'`,影响行数
+  0 = 已被别实例认领,跳过(防同一 DB 双实例并发扫描同 thread_id 双线程 invoke,
+  checkpoint 竞态/双倍计费);② cancel 路径也落终态(`cancelled`,原直接 return
+  不落盘 → DB 永远 created 每次重启重放)。补测试
+  `test_restore_claim_idempotent_skip_running`(二次认领返回 False + 不在待恢复
+  列表)、`test_restore_claim_unknown_task_returns_false`、
+  `test_cancel_persists_terminal_status`(cancel → 'cancelled' 落盘)。
+- **加载期 int() 容错(I-5)**:`KINGDEE_MAX_CONCURRENT` 非数字配置 import 即崩
+  (500 全 API),改解析失败回落默认 4 + warning 结构化日志;`.env.example` 补
+  `KINGDEE_MAX_CONCURRENT` / `KINGDEE_TASKS_DB` 注释(运维可见性)。
+- **文档一致性(I-1~I-4)**:CLAUDE.md 债务清单改「已清偿(v1.21.0)+ 剩余项」
+  两段式;manual.md §7「未线上验证」整段更新(load_skill/WebAPI 均已实测);
+  tech.md §9 故障表 L25 改持久化语义 + §7 安全段 apikey 债务移除 + §11 债务
+  列表同步;project.md 待办勾销(WebAPI 联调 / load_skill 验证 / 任务持久化);
+  agent.py `checkpointer` 注释 AsyncSqliteSaver → 同步 SqliteSaver;loader.py
+  docstring 旧节名修正;api.py 注释「KD_* 5 项」→ 4 项。
+- 测试:新增 5 个回归测试(上述),终审修复后全量 kingdee 测试全绿。
+
+---
+
+## v1.21.0 — 2026-08-10(kingdee-plugin-agent:任务持久化 —— SQLite checkpointer + 重启恢复)
+
+### 行为变更
+
+- **API 任务不再内存存储,重启不丢**(清偿 v1 债务「内存任务存储」):create_app
+  统一用同步 `SqliteSaver`(共享连接,`check_same_thread=False` + 内部锁,官方
+  docstring 确认线程安全)替换每任务 MemorySaver —— 同步版贴合后台线程
+  `graph.invoke` 架构(AsyncSqliteSaver 需 ainvoke/asyncio.run 包装,不用);
+  checkpointer 存 `data/kingdee-tasks.db`(KINGDEE_TASKS_DB 可覆盖,data/ 已
+  gitignore)。
+- **启动恢复**:`create_app` 启动扫描 tasks 元数据表(id/env/status/created_at/
+  requirement)status='created' 的任务,按 env 重建图 + 后台线程续跑;
+  checkpoint 已落盘的任务用 `get_state` 读回 checkpoint 原 state 作输入,
+  **fresh-run 重放挂点**(挂起处 interrupt 原样返回,挂起等用户回答;started_at
+  保留原值,时间预算不重置,设计 §8「挂起 resume 不重置」—— 用新 time.time()
+  会从重启时刻重新计时,违反冻结语义);checkpoint 缺失(建任务后线程未跑即
+  崩溃)的任务才用元数据表构造初始 state 从头跑;任务结束/失败落盘终态,
+  重启不再恢复。
+- **恢复输入排除 metrics 键**(re-review Critical):metrics 是求和 reducer
+  (`_merge_metrics`),恢复输入带 checkpoint 当前值会被 `operator(current, v)`
+  再算一次 —— compile_pass_count/compile_fail_count/smoke_pass_count/
+  smoke_fail_count/rework_rounds 五计数器恢复后翻倍(多次重启逐次累计)。
+  去掉 metrics 键 = 该通道不产生输入更新,保留 checkpoint 原值;其余 reducer
+  通道(todo 按 id 合并 / rework_events 替换 / final_deliverables 去重追加)
+  对同值输入幂等,无此问题。
+- **恢复任务配额语义**:恢复任务 `_sem.acquire()` 阻塞等待(重启场景不 429
+  拒绝),`_run_loop` finally 统一 release 配对;元数据写入用短生命周期连接 +
+  INSERT OR IGNORE(恢复幂等,首建记录为准)。
+- **msgpack 序列化兼容**(清偿 v1 债务「msgpack 反序列化警告」):TaskState/
+  Subtask dataclass 经 JsonPlusSerializer 显式白名单
+  (`allowed_msgpack_modules`),消除 unregistered-type 反序列化警告 —— 默认
+  宽松模式未来版本会收紧,提前显式登记。
+- 生产路径 `build_graph(env=..., checkpointer=app.state.saver)` 显式注入共享
+  checkpointer(MemorySaver 默认换掉,重启后 checkpoint 会话可见)。
+
+### 测试
+
+- 新增 `test_restore_pending_task`:建任务 → 等 interrupt 挂起 → 同 DB 新 app
+  恢复(env 透传断言)→ 答澄清(等 confirm 挂起再投递,防恢复后 409)→ done →
+  终态落盘 → 复位 created → 再次恢复(终态 checkpoint 重放自动 done)。
+- 新增 `test_restore_recovers_task_hung_at_interrupt`:恢复语义三件套断言
+  (注入共享 SqliteSaver 图,与 create_app 共享 checkpointer 同实例):恢复后
+  挂 confirm 挂点(重跑则回 question round 0)/ `clarify_answers` 保留已答
+  答案(重跑则空)/ `started_at` 保留原值(重跑则被新时间戳覆盖)。
+- 新增 `test_restore_metrics_nonzero_not_doubled`:metrics 非零时重启恢复不
+  翻倍(w1 挂起会话 `update_state` 注入 metrics=1 → 重启 → 断言仍 =1,非 2/3;
+  无修复时 FAIL)。
+- `test_api_production_build_graph_receives_env` 增补 checkpointer 透传断言
+  (生产路径必须注入共享 saver,否则持久化失效)。
+- conftest:新增 autouse `_reset_api_concurrency_sem` —— 模块级 Semaphore 跨
+  测试残留,前面测试的挂起任务线程(30s 超时)占满配额后,后续恢复任务的
+  `_sem.acquire()` 主线程阻塞 → 全量套件死锁(单跑不复现);每测试重置满配额。
+- 全量 164 测试全绿(agent 146 + api 18;审查修复后复跑 164 passed 95.80s)。
+
+---
+
+
+### 文档
+
+- **code-generator 强化「禁止编造 API(签名必须有来源)」**(skill-creator 评估
+  发现:无 skill 时 LLM 编造 InvServiceHelper.QueryInvQty / InvQueryParam /
+  InvQueryResult.AvailableQty 等看似真实的 API,编译必挂):
+  - 新增坏例/好例对比:坏例 = 编造的 API 调用(带看似真实的参数/返回类型
+    注释);好例 = 显式 TODO 骨架 + return 默认值 + 注释"签名未在元数据/
+    guide 确认,禁止编造";
+  - 明确标准:库存查询/服务调用等外部 API,签名必须有来源(guide 检索命中/
+    元数据确认/模板);无来源一律 TODO 占位,禁止凭记忆补全;
+  - 说明为什么:编造 API 编译必挂,烧掉整条编译-修复循环(吃 w5 轮次与返工
+    预算);TODO 占位编译通过,由后续元数据接线补全;
+  - references/bill.md 补「服务调用不编造」要点与自检项;loader 摘要同步
+    强化(无来源外部 API 一律 TODO 占位,禁止编造)。
+- **knowledge-steward 强化 verify 建议必填**(评估发现:无 skill 蒸馏无
+  proposed/verified 两态纪律):
+  - 沉淀条目格式增加验证字段:proposed 态必填 —— 复现方式或人工确认人;
+  - 明确无 verify 路径的沉淀不要写(一次性/无法复现的观察不沉淀);
+  - 解释为什么:proposed 无 verify 路径 = 污染风险(幻觉修复被当知识),
+    验证建议是防污染的收口(propose 时填的验证字段 = 后续 review 的作业清单);
+  - references/distillation.md 条目模板/好例坏例/判据同步;loader 摘要补
+    "proposed 必带验证建议"。
+- 全量测试:272 全绿(契约断言短语未变,仅内容增强)。
+
+---
+
 ## v1.21.0 — 2026-08-10(sentiment-query-agent:生产部署方案落地 —— Docker Compose + 并发加固)
 
 ### 部署

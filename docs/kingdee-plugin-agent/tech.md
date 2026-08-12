@@ -218,8 +218,7 @@ w3 确定性骨架保证全部 `{{TOKEN}}` 渲染,防 w4 把未渲染占位符�
 
 - **摘要层**:`_AVAILABLE_SKILLS` 6 个摘要;`skill_summary()`(摘要 JSON)仅注入 w1 澄清问题生成(`generate_questions` 系统提示,帮助 LLM 选题),其余 worker 不注入摘要;`SKILL_HINT`(load_skill 提示)逐节点注入(w1 拆解、w2~w5),告诉 LLM 可调 `load_skill(skill_name)` 拿方法论;supervisor 决策无 skill 注入。
 - **工具层**:`load_skill` 按 agent → common 顺序查找 skill 目录,返回 `{skill, summary, references(name→content 映射,模板正文全量交付 —— agent 的 LLM 没有文件工具,只给文件名等于没给), scripts(恒空), content}`;非法 skill 名返回 error JSON 与可用列表。
-- **绑定形态**:`structured_with_skill(schema, messages)` = `with_structured_output(schema, tools=[load_skill], include_raw=True)`(**必须用官方 tools 参数;bind_tools 后再 with_structured_output 会经 `__getattr__` 委派丢失 tools**,loader docstring 注明)。模型回合 1 调 load_skill → 执行喂回 ToolMessage → 回合 2 出 schema JSON,最多 2 回合;parsed 仍空 → None → worker 确定性骨架降级。**畸形 JSON 重试(设计 §8,v1.10)**:解析失败(parsed=None 且无 tool_calls)→ 同一输入重试 1 次(共 2 次尝试),仍失败返回 None;重试与工具 2 回合上限**正交** —— 工具回合后的结果直接返回(成功出 schema / 又调工具强制停止),不参与解析重试。不传 strict(worker 输出 schema 含默认值字段,OpenAI strict json_schema 禁止默认值)。脚本/fake LLM(无 bind_tools)自动跳过绑定。
-- **⚠️ 未线上验证**:该绑定形态未对真实 DeepSeek 线上验证;首次真实环境联调先跑 w1 `generate_questions` smoke,被 API 拒绝则改用 sentiment 的 JSON Mode 模式(见 CLAUDE.md 约束)。
+- **绑定形态**:`structured_with_skill(schema, messages)` 真实模型双形态(✅ 2026-08-10 真实 DeepSeek 实测,Task 2):首选 `with_structured_output(schema, tools=[load_skill], include_raw=True)`(**必须用官方 tools 参数;bind_tools 后再 with_structured_output 会经 `__getattr__` 委派丢失 tools**,loader docstring 注明);该形态在 DeepSeek 上 invoke 即被拒(不传 strict:openai SDK 本地校验「Only strict function tools can be auto-parsed」;传 strict=True:API 400 不支持),异常自动回退 JSON Mode(`bind_tools([load_skill], strict=True).bind(response_format={"type": "json_object"})` + `PydanticOutputParser` 格式指令注入系统提示 + 手动 `parser.parse(content)`,注意 langchain-core 1.5+ 无 `parse_prompt_value`)。两形态同一契约:模型回合 1 调 load_skill → 执行喂回 ToolMessage → 回合 2 出 schema JSON,最多 2 回合;parsed 仍空 → None → worker 确定性骨架降级。**畸形 JSON 重试(设计 §8,v1.10)**:解析失败(parsed=None 且无 tool_calls)→ 同一输入重试 1 次(共 2 次尝试),仍失败返回 None;重试与工具 2 回合上限**正交** —— 工具回合后的结果直接返回(成功出 schema / 又调工具强制停止),不参与解析重试。不传 strict(worker 输出 schema 含默认值字段,OpenAI strict json_schema 禁止默认值)。脚本/fake LLM(无 bind_tools)自动跳过绑定,`with_structured_output(schema)` 原样返回。
 
 ### 4.3 prompt 变薄原则(单源)
 
@@ -289,13 +288,13 @@ w2/w3/w4 的类型分支要点**不在 prompts/,单源在 `skills/<skill>/refere
 | 22 | 时间预算 | 编译单轮 ≤120s(httpx timeout);msbuild 后端 180s 超时(首次冷启动较慢);answers 端点等图挂起 ≤30s 否则 409;单任务编译阶段 ≤15min(5 轮 × 180s 上限,w5 内部覆盖);**全流程 ≤30min 图级总闸**:`started_at` 距今 >1800s 且有未交付工作 → 剩余标记 failed → `fail:时间预算耗尽`(LLM 决策上下文摘要表含"已用/总闸"时长,可自行选择 fail) |
 | 23 | 需求版本冻结 | spec 确认(`spec_confirmed`)即冻结:`spec_version=1` 盖章,requirement_spec 此后无任何写路径(w1 只在未确认时改 spec);API answers 确认后仅接受 ask_user 类型恢复(409 拒绝 question/confirm 残留输入,防回归);修改需求须开新任务;w6 打包把 `spec_version` + 冻结 spec 快照写入交付包 `records/spec.json` |
 | 24 | 澄清无限循环 | 逐问 ≤10 轮;确认最多 1 次补充,仍不确认带假设强制收口 |
-| 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 中断后内存任务存储重启即丢(v1 债务),重建任务重跑 |
+| 25 | 任务中断(CLI) | stdin EOF → 提示并 exit 1;API 任务落盘 `data/kingdee-tasks.db`(KINGDEE_TASKS_DB 可配),重启自动恢复:挂起任务经 checkpoint 续跑(时间预算不重置),恢复前占位置 running 防双实例重复恢复;恢复线程非阻塞 acquire,配额不足跳过留待下次重启(不阻塞 create_app) |
 | 26 | 非法 skill 名 | load_skill 返回 error JSON + 可用列表 |
 | 27 | 反馈端点沉淀失败(`POST /tasks/{id}/feedback`) | 部署后行为错误手动上报 → 经验库 `propose("DEPLOY", sha256(reason)[:12], …)`(proposed 态,签名去重,不同原因各自累计);沉淀失败不阻塞反馈(记录 warning 日志,SSE 发 `feedback` 事件);404 未知任务 / 401 无有效 apikey |
 
 ## 7. 安全
 
-- **apikey 鉴权**(api.py):`X-API-Key` 头;来源优先级 `create_app(api_key=...)` 显式参数 > 环境 `KINGDEE_API_KEY` > `API_KEYS_JSON` 首个 key(复用 sentiment auth.py 数据源);未配置有效 key 默认拒绝(401)。⚠️ 已知债务:字符串直接比较,未用 `secrets.compare_digest`。
+- **apikey 鉴权**(api.py):`X-API-Key` 头;来源优先级 `create_app(api_key=...)` 显式参数 > 环境 `KINGDEE_API_KEY` > `API_KEYS_JSON` 首个 key(复用 sentiment auth.py 数据源);未配置有效 key 默认拒绝(401);校验用 `secrets.compare_digest` 恒定时间比较(v1.21.0 已修复,防时序侧信道)。
 - **环境凭证**:`KD_USERNAME/KD_PASSWORD/KD_DATA_CENTER` 等只经 `.env` 注入(`.env` 在 .gitignore,不提交),随请求体携带到金蝶 WebAPI(该 API 的登录方式之一)。
 - **CORS**:演示放开 `allow_origins=["*"]`(web/kingdee-demo.html 跨域访问),注释标注"生产按需收紧"。
 - **路径白名单**:ArtifactStore 子任务 id 正则白名单,拒绝 `..`/`/` 等路径穿越;load_skill 名必须 ∈ `_AVAILABLE_SKILLS` 才读盘。
@@ -375,8 +374,10 @@ default_recursion_limit(n) = 100 + 20 × n
 
 ## 11. 已知债务与未验证项(与 CLAUDE.md 同步)
 
-**v1 已知债务**(上线前需决策):API 任务存 `app.state.tasks` 进程内内存,重启即丢、无持久化/恢复;API 每任务一个后台 daemon 线程,无线程池/并发闸门;apikey 字符串比较非 timing-safe;TaskState/Subtask 经 checkpointer(msgpack)序列化,升级 LangGraph 版本需验证兼容(api.py `_subtask_dict` 已兼容实例/dict 两形态);CLI `--env` 部分消费(进 requirement_spec + `state.environment["env_name"]` 记录,未做环境级差异化,单环境 v1);CLI 门控仅 KD_BASE_URL(API 已全校验 4 项)。
+**v1 已知债务**(上线前需决策)。已清偿(v1.21.0):内存任务存储(改 SQLite 持久化 + 重启恢复:checkpointer 用同步 SqliteSaver 共享连接,元数据表驱动启动恢复,恢复输入 = get_state 原 state 重放挂点、metrics 键排除防求和 reducer 双计;恢复前占位置 running 防双实例重复恢复;恢复路径非阻塞 acquire 防挂起任务超容量时 create_app 死锁);apikey 非 timing-safe(改 `secrets.compare_digest`);msgpack 反序列化警告(JsonPlusSerializer 显式白名单 `[Subtask, TaskState]`)。剩余项:CLI `--env` 部分消费(进 requirement_spec + `state.environment["env_name"]` 记录 + 凭证分套,未做节点级环境差异化,单环境 v1);CLI 门控仅 KD_BASE_URL(API 已全校验 4 项)。
 
 **反馈通道(设计 §12)**:`POST /tasks/{id}/feedback {reason}` 部署后行为错误手动上报 → 经验库 propose("DEPLOY", sha256(reason)[:12], reason, …)(proposed 态,同验收拒绝沉淀模式,失败不阻塞);API 端点契约见 api.py 模块 docstring 与 manual.md §4 端点表。
 
-**未验证项**:线上 DeepSeek 验证 load_skill 绑定(见 §4.2);真实金蝶环境 WebAPI 端点/响应结构(编译侧已真实验证,E2E 门 ✅;元数据/冒烟侧仍为文档化初始契约占位,见 tools/kingdee_api.py 头部警告);Linux 容器 BOS 编译兼容性(实际采用 Windows 原生部署,见 windows-deployment.md,容器方案保留);规范库(standards)目录与文档导入尚未接真实资料。
+**未验证项**:真实金蝶环境 WebAPI(✅ 2026-08-10 已实测:ValidateUser 登录 / ExecuteBillQuery / QueryBusinessInfo 三端点可用,`get_form_fields` 真实返回 337 字段,会话失效自动重登;官方 SDK 无 GetFormOperations/QueryBusinessObjects,占位方法已删,见 tools/kingdee_api.py);Linux 容器 BOS 编译兼容性(实际采用 Windows 原生部署,见 windows-deployment.md,容器方案保留);规范库(standards)目录与文档导入尚未接真实资料。
+
+**load_skill 绑定(✅ 2026-08-10 真实 DeepSeek 实测,Task 2)**:首选形态 `with_structured_output(schema, tools=[load_skill], include_raw=True)` 被拒 —— 不传 strict 时 openai SDK 本地校验抛 `ValueError: 'load_skill' is not strict. Only 'strict' function tools can be auto-parsed`(langchain_openai 1.4.1 的 tools 参数在 strict=None 时不带 strict 标记,openai/lib/_parsing/_completions.py validate_input_tools 拒绝);传 strict=True 则 DeepSeek API 报 400「This response_format type is unavailable now」(json_schema response_format 不支持)。已按 CLAUDE.md 回退方案实现 JSON Mode(`bind_tools([load_skill], strict=True).bind(response_format={"type": "json_object"})` + `PydanticOutputParser` 格式指令注入系统提示 + 手动 parse,loader.py `_run_json_mode_rounds`),真实 DeepSeek 实测:回合 1 LLM 主动调 load_skill(返回方法论 JSON)→ 执行喂回 ToolMessage → 回合 2 出合法 JSON,2 回合上限与畸形重试契约不变(见 §4.2 与 smoke 脚本 `scripts/smoke_structured_with_skill.py`)。发现 langchain-core 1.5+ 移除 `parse_prompt_value`,JSON 解析用 `parser.parse(content)`。

@@ -1,17 +1,19 @@
 """金蝶云星空 WebAPI 元数据客户端(只读,不写业务数据)。
 
 调用流:
-  查询 ──► 登录获取凭证(请求体携带 userName/password/dc,免预登录)──► 调元数据接口 ──► 解析 FieldInfo
-  429/5xx/超时 ──► 指数退避(2 次重试)──► KingdeeApiUnavailable
+  预登录 ValidateUser(acctID/userName/password/lcid)→ 得 KDSVCSessionId
+  ──► 元数据请求(form-urlencoded `data=JSON` + Cookie kdservice-sessionid)
+  ──► 会话失效自动重登一次 ──► 429/5xx/超时指数退避(2 次重试)──► KingdeeApiUnavailable
 
-⚠️ 端点路径与响应结构 = 初始契约(占位):
-  本环境无真实金蝶实例,端点路径与响应字段以本文件为准作为文档化初始契约,
-  需在团队环境可用后对照金蝶 WebAPI 文档/真实实例验证并调整 —— 见设计文档
-  docs/superpowers/specs/2026-08-08-kingdee-plugin-agent-design.md §13 风险与待确认
-  (金蝶官方文档可爬性/API 行为无法在本环境验证)。
-  单元测试基于 mock 响应,不依赖真实环境。
+⚠️ 端点验证状态(2026-08-10 真实实例 10.33.17.130,星空 9.0.252.12 实测):
+  - ValidateUser 登录       ✅ 可用(响应顶层 KDSVCSessionId)
+  - ExecuteBillQuery        ✅ 可用(响应为数组的数组,如 [["XSDD000019","2021-11-09"],...])
+  - QueryBusinessInfo       ✅ 可用(字段元数据,Result.NeedReturnData.Entrys[])
+  官方 SDK 支持列表(2024-06 手册)无 GetFormOperations / QueryBusinessObjects,
+  已移除这两个占位方法。旧式「请求体携带 userName/password/dc」认证在本实例
+  已失效(报「会话信息已丢失」),必须走 ValidateUser 预登录;httpx 0.28+ 默认
+  HTTP/2 金蝶不支持,须显式 http1=True。
 """
-import os
 import time
 from dataclasses import dataclass
 
@@ -19,7 +21,7 @@ import httpx
 
 
 class KingdeeApiUnavailable(RuntimeError):
-    """金蝶 API 不可用(网络/超时/429 重试超限/业务错误)。"""
+    """金蝶 API 不可用(网络/超时/429 重试超限/登录失败/业务错误)。"""
 
 
 @dataclass
@@ -32,28 +34,72 @@ class FieldInfo:
 class KingdeeApiClient:
     """金蝶云星空 WebAPI 客户端(只读元数据查询)。
 
-    凭证随每个请求体携带(`userName`/`password`/`dc`),无需预登录接口
-    (Kingdee WebAPI 支持的登录方式之一;若真实实例要求 acctID/session
-    方式,在 §13 风险验证时调整)。
+    认证:ValidateUser 预登录拿 KDSVCSessionId,后续请求带 Cookie
+    `kdservice-sessionid=<session>`,请求体为 form-urlencoded 的 `data=JSON`。
+    旧式请求体带凭证方式已弃用(实测被服务端拒绝)。
     """
 
-    #: 字段查询服务(ExecuteBillQuery):初始契约路径,待真实环境验证
+    #: 登录端点(✅ 实测可用):parameters=[acctID, userName, password, lcid]
+    _LOGIN = "/K3Cloud/Kingdee.BOS.WebApi.ServicesStub.AuthService.ValidateUser.common.kdsvc"
+    #: 数据查询端点(✅ 实测可用):响应为数组的数组
     _EXECUTE_BILL_QUERY = "/K3Cloud/Kingdee.BOS.WebApi.ServicesStub.DynamicFormService.ExecuteBillQuery.common.kdsvc"
-    #: 元数据服务(列表 FormId 查询):初始契约路径,待真实环境验证
-    _METADATA_SERVICE = "/K3Cloud/Kingdee.BOS.WebApi.ServicesStub.MetadataService.QueryBusinessObjects.common.kdsvc"
-    #: 表单操作查询(按钮/操作):初始契约路径,待真实环境验证
-    _FORM_OPERATIONS = "/K3Cloud/Kingdee.BOS.WebApi.ServicesStub.DynamicFormService.GetFormOperations.common.kdsvc"
+    #: 字段元数据端点(✅ 实测可用):Result.NeedReturnData.Entrys[]
+    _QUERY_BIZ_INFO = "/K3Cloud/Kingdee.BOS.WebApi.ServicesStub.DynamicFormService.QueryBusinessInfo.common.kdsvc"
 
-    def __init__(self, base_url: str, username: str, password: str, data_center: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, acct_id: str, username: str, password: str,
+                 lcid: int = 2052, timeout: float = 120.0):
+        # KD_BASE_URL 允许带 /k3cloud/ 前缀或裸主机,统一归一到主机根(路径自带 /K3Cloud/)
         self.base_url = base_url.rstrip("/")
-        self.session = httpx.Client(timeout=timeout)
-        self._auth = {"userName": username, "password": password, "dc": data_center}
+        for suffix in ("/k3cloud", "/K3Cloud"):
+            if self.base_url.lower().endswith(suffix):
+                self.base_url = self.base_url[: -len(suffix)]
+                break
+        # http1=True:金蝶不支持 HTTP/2,httpx 0.28+ 默认 HTTP/2 会全 502/超时
+        self.session = httpx.Client(timeout=timeout,
+                                    transport=httpx.HTTPTransport(http1=True))
+        self._acct_id = acct_id
+        self._username = username
+        self._password = password
+        self._lcid = lcid
+        self._session_id: str | None = None
 
+    # ── 认证 ──────────────────────────────────────────────────────────────
+    def _login(self) -> str:
+        """ValidateUser 预登录,返回 KDSVCSessionId;失败抛 KingdeeApiUnavailable。"""
+        r = self.session.post(self.base_url + self._LOGIN,
+                              json={"parameters": [self._acct_id, self._username,
+                                                   self._password, self._lcid]})
+        if r.status_code != 200:
+            raise KingdeeApiUnavailable(f"金蝶登录失败:HTTP {r.status_code}")
+        try:
+            data = r.json()
+        except ValueError:
+            raise KingdeeApiUnavailable("金蝶登录响应非 JSON") from None
+        if data.get("LoginResultType") != 1:
+            raise KingdeeApiUnavailable(f"金蝶登录失败:{data.get('Message', '未知错误')}")
+        self._session_id = data["KDSVCSessionId"]
+        return self._session_id
+
+    def _session_cookie(self) -> str:
+        if not self._session_id:
+            self._login()
+        return f"kdservice-sessionid={self._session_id}"
+
+    # ── 请求 ──────────────────────────────────────────────────────────────
     def _post(self, path: str, body: dict) -> dict:
-        """POST 元数据接口:1 次请求 + 2 次指数退避重试(429/5xx/超时)。"""
+        """POST 元数据接口:会话失效自动重登 1 次 + 2 次指数退避(429/5xx/超时)。
+
+        金蝶 WebAPI 请求体为 form-urlencoded 的 `data=JSON 字符串`;
+        响应可能为 JSON(数组/对象)或 `response_error:` 纯文本(服务端异常)。
+        """
+        cookie = self._session_cookie()
         for attempt in range(3):
             try:
-                r = self.session.post(f"{self.base_url}{path}", json={**self._auth, **body})
+                r = self.session.post(
+                    self.base_url + path,
+                    data={"data": _dumps(body)},
+                    headers={"Cookie": cookie},
+                )
             except httpx.TransportError:  # 超时/连接失败
                 if attempt < 2:
                     time.sleep(2 ** attempt)
@@ -63,60 +109,114 @@ class KingdeeApiClient:
                 if attempt < 2:
                     time.sleep(2 ** attempt)
                     continue
-                raise KingdeeApiUnavailable("金蝶 API 重试超限(429/5xx)")
+                raise KingdeeApiUnavailable(f"金蝶 API 重试超限(HTTP {r.status_code})")
             if r.status_code != 200:
                 raise KingdeeApiUnavailable(f"金蝶 API 错误:HTTP {r.status_code}")
+            text = r.text
+            # 会话失效(报错文本含"会话"/session)→ 重登一次再发,仅 1 次
+            if "会话" in text or "session" in text.lower():
+                self._login()
+                cookie = self._session_cookie()
+                r = self.session.post(self.base_url + path,
+                                      data={"data": _dumps(body)},
+                                      headers={"Cookie": cookie})
+                if r.status_code != 200:
+                    raise KingdeeApiUnavailable(f"金蝶 API 错误:HTTP {r.status_code}")
+                text = r.text
+            # 服务端异常以纯文本返回(response_error:...),非 JSON
+            if text.startswith("response_error") or not text.lstrip().startswith(("{", "[")):
+                raise KingdeeApiUnavailable(f"金蝶 API 服务端异常:{text[:200]}")
             try:
                 data = r.json()
             except ValueError:
-                # 200 但响应体非 JSON(如网关 HTML 错误页)→ 统一按不可用处理,
-                # 不向调用方泄漏裸 ValueError
-                raise KingdeeApiUnavailable(f"金蝶 API 响应非 JSON(HTTP {r.status_code})") from None
-            status = data.get("Result", {}).get("ResponseStatus", {})
-            if not status.get("IsSuccess", False):
-                raise KingdeeApiUnavailable(str(status.get("Errors", "未知错误")))
+                raise KingdeeApiUnavailable("金蝶 API 响应非 JSON") from None
+            # 归一化:ExecuteBillQuery 等成功时最外层是数组;失败时是
+            # [{"Result":{"ResponseStatus":{...}}}] 或 {"Result":{"ResponseStatus":{...}}}
+            if isinstance(data, list):
+                inner = data[0] if data and isinstance(data[0], dict) else {}
+                if "Result" in inner:
+                    data = inner["Result"]
+                else:
+                    return data  # 纯数据数组(如查询结果行),无 ResponseStatus 可查
+            elif isinstance(data, dict):
+                data = data.get("Result", data)
+            status = data.get("ResponseStatus", {})
+            if not status.get("IsSuccess", True):
+                errors = status.get("Errors") or []
+                msg = "; ".join(str(e.get("Message", e)) for e in errors) or "未知错误"
+                raise KingdeeApiUnavailable(msg)
             return data
 
-    def list_formids(self) -> list[str]:
-        """查询可用业务对象 FormId 列表。
-
-        ⚠️ 初始契约:元数据服务 `QueryBusinessObjects` 响应按
-        `Result.ValidationResults[].FieldName` 取值;真实端点/响应结构
-        需在真实金蝶实例上验证后调整(设计文档 §13)。
-        """
-        data = self._post(self._METADATA_SERVICE, {})
-        return [f["FieldName"] for f in data["Result"]["ValidationResults"]]
-
+    # ── 元数据查询 ────────────────────────────────────────────────────────
     def get_form_fields(self, form_id: str) -> list[FieldInfo]:
-        """查询单据字段元数据(只读)。
+        """查询单据字段元数据(✅ 实测可用,QueryBusinessInfo)。
 
-        ⚠️ 初始契约:经 ExecuteBillQuery 取 1 行,字段名从结果头推断;
-        真实实现按 MCP 文档/金蝶 API 文档调整(设计文档 §13 风险验证)。
+        解析 Result.NeedReturnData.Entrys[]:
+        - FBillHead(主表)→ 字段平铺为顶层(field_name=字段 Key)
+        - 其余 Entry(分录/子单头)→ 字段带 `EntryKey.FieldName` 前缀
+        - ParentKey 非空的子分录暂不展开
         """
-        data = self._post(self._EXECUTE_BILL_QUERY, {
-            "formid": form_id, "fieldKeys": "*", "topRowCount": 1,
-        })
-        return [FieldInfo(f["FieldName"], f.get("FieldLabel", ""), f.get("DataType", ""))
-                for f in data["Result"]["ValidationResults"]]
-
-    def get_operations(self, form_id: str) -> list[str]:
-        """查询表单可用操作(提交/审核/反审核等)列表。
-
-        ⚠️ 初始契约:响应按 `Result.ValidationResults[].OperationName` 取值;
-        真实端点/响应结构需在真实金蝶实例上验证后调整(设计文档 §13)。
-        """
-        data = self._post(self._FORM_OPERATIONS, {"formid": form_id})
-        return [f.get("OperationName", "") for f in data["Result"]["ValidationResults"]
-                if f.get("OperationName")]
+        data = self._post(self._QUERY_BIZ_INFO, {"formid": form_id})
+        nrd = data.get("NeedReturnData", {}) or {}
+        fields: list[FieldInfo] = []
+        for ent in nrd.get("Entrys", []) or []:
+            key = ent.get("Key")
+            if not key or ent.get("ParentKey"):
+                continue
+            prefix = "" if key == "FBillHead" else f"{key}."
+            for f in ent.get("Fields", []) or []:
+                fkey = f.get("Key")
+                if not fkey:
+                    continue
+                fields.append(FieldInfo(
+                    field_name=f"{prefix}{fkey}",
+                    field_label=_zh_name(f.get("Name", [])),
+                    data_type=_field_type_label(f),
+                ))
+        return fields
 
     @classmethod
-    def client_from_env_or_none(cls) -> "KingdeeApiClient | None":
+    def client_from_env_or_none(cls, env: str = "") -> "KingdeeApiClient | None":
         """从环境变量构造客户端;缺 KD_BASE_URL 返回 None(无环境 = 硬门槛信号)。
 
-        环境变量:KD_BASE_URL / KD_USERNAME / KD_PASSWORD / KD_DATA_CENTER
+        env: 环境名(凭证 <VAR>_<ENV> 分套,空 = 默认 KD_* 5 项)。
+        环境变量:KD_BASE_URL(主机,可带 /k3cloud/ 前缀)/ KD_USERNAME / KD_PASSWORD
+        / KD_DATA_CENTER(账套 ID,即 ValidateUser 的 acctID)/ KD_LCID(可选,默认 2052)
         """
-        base = os.getenv("KD_BASE_URL")
+        from common.config import kingdee_env_vars
+        vars_ = kingdee_env_vars(env)
+        base = vars_.get("KD_BASE_URL", "")
         if not base:
             return None
-        return cls(base, os.getenv("KD_USERNAME", ""), os.getenv("KD_PASSWORD", ""),
-                   os.getenv("KD_DATA_CENTER", ""))
+        return cls(base, vars_.get("KD_DATA_CENTER", ""), vars_.get("KD_USERNAME", ""),
+                   vars_.get("KD_PASSWORD", ""), int(vars_.get("KD_LCID", "2052") or 2052))
+
+
+def _dumps(body: dict) -> str:
+    """请求体 JSON 序列化(ensure_ascii=False 保中文用户名)。"""
+    import json
+    return json.dumps(body, ensure_ascii=False)
+
+
+def _zh_name(name_list: list) -> str:
+    """从多语言 Name 数组提取中文名(LocaleId=2052),失败取第一个。"""
+    if not isinstance(name_list, list):
+        return ""
+    for item in name_list:
+        if isinstance(item, dict) and item.get("Key") == 2052:
+            return item.get("Value", "") or ""
+    if name_list and isinstance(name_list[0], dict):
+        return name_list[0].get("Value", "") or ""
+    return ""
+
+
+def _field_type_label(f: dict) -> str:
+    """字段类型语义:关联字段标 BaseField->FormId;其余保留 FieldType 数字编码。"""
+    lookup = f.get("LookUpObjectFormId")
+    if lookup:
+        return f"BaseField->{lookup}"
+    ft = f.get("FieldType")
+    et = f.get("ElementType")
+    if ft is None:
+        return ""
+    return f"FieldType={ft}" + (f",ElementType={et}" if et is not None else "")
