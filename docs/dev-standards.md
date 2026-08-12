@@ -44,7 +44,10 @@
 2. 骨架阶段只建目录+占位文档(不写实现代码),用户确认后填实现。
 3. **按 §6 模板生成 `agents/<agent>/CLAUDE.md`**。
 4. 实现后测试:`pytest`,三层测试(工具单测/图单测 mock LLM/端到端)。
-5. **每次开发收尾必须更新 [CHANGELOG.md](../CHANGELOG.md)**:按版本追加新功能/修复/变更,测试通过 + commit 推送后完成。版本号递增规则:功能新增 = 次版本(+0.1.0),修复 = 补丁(+0.0.1),正式里程碑 = 主版本。
+5. **每次开发收尾必须更新 CHANGELOG**:改动归属哪个 agent → 更新该 agent 的
+   `agents/<agent>/CHANGELOG.md` 并 bump 该 agent 版本号(当前最大号 +1,次版本递增);
+   纯项目级(common/compile_service/依赖)→ 根 `CHANGELOG.md` 项目级区。
+   测试通过 + commit 推送后完成。
 
 ## 5. 质量要求
 
