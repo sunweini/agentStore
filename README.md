@@ -107,7 +107,7 @@ pytest tests/   # 272 个测试:kingdee 图全链路/CLI/API/RAG/模板/编译�
 
 ## 文档
 
-- [版本更新说明](CHANGELOG.md)(当前 v1.23.0:sentiment 生产部署/stop/status 接口 + kingdee 系列)
+- [版本更新说明](CHANGELOG.md)(agent 索引 + 项目级;sentiment v1.24.0 / kingdee v1.26.0,各自 CHANGELOG 见索引)
 - [AI Agent 开发规范](docs/dev-standards.md)(所有 agent 开发必须依据 LangChain 官方文档与 API 指引;§7 通用开发经验必读)
 - [API 接口文档](agents/sentiment_query_agent/API.md)(sentiment 9 接口:提交/进度/status/方案/勾选/stop/入库/导出 + health,全真实返回示例)
 - [AI 对接规范](agents/sentiment_query_agent/INTEGRATION.md)(调用方 agent 可直接阅读的对接契约)

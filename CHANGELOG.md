@@ -26,4 +26,16 @@
 
 ### v0.1.0 — 2026-08-06(项目初始化)
 
+#### 新增
+
+- 项目骨架:common 共享层(LLM 工厂 / 配置 / prompt 加载)+ agents/agent1 通用骨架(占位文档)
+- 多供应商模型工厂:供应商注册表,换供应商改 `.env` 不改代码
+- CLAUDE.md 项目指南 + 开发规范(必须依据 langchain MCP 文档/API 开发)
+- 每个 agent 独立 CLAUDE.md 约定(§6 模板)
+
+#### 文档
+
+- 设计文档:agent1 目录架构设计(LangGraph)
+- 开发规范初版:开发铁律 / 架构约定 / 开发流程 / CLAUDE.md 模板
+
 (自 v0.1.0 后,agent 功能版本全归各 agent CHANGELOG,根文件仅记项目级。)
