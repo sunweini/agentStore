@@ -707,7 +707,9 @@
 
 ---
 
-## v1.24.0 — 2026-08-11(多用户配额管理与资费统计)
+## v1.24.0 — 2026-08-12(多用户配额管理 + 资费统计,**已部署生产 10.33.17.72**)
+
+> 发布:2026-08-12 全链路测试通过(配额流程 12 项验证)。生产 MySQL(agentstore 库)建表 + 数据迁移(6 方案组 owner 用户标识→apikey)+ 管理员(sk-demo-hefangyuan20260810,额度 99999999)初始化。
 
 ### 新增功能
 
@@ -725,7 +727,13 @@
 - **存储迁移**:计费 JSON 文件 → MySQL(agentstore 库,api_keys + billing_records 两表)
 - **鉴权改造**:API_KEYS_JSON 废弃,apikey 存 MySQL;owner = apikey 本身;管理员放行 assert_owner
 - **数据库抽象**:common/db.py 双后端(MySQL 生产 / SQLite 测试),事务 + 占位符适配
-- **数据迁移脚本**:migrate_legacy.py(JSON 计费 → MySQL、方案组 owner 迁移、api_keys 初始化,支持 dry-run)
+- **数据迁移脚本**:migrate_legacy.py(JSON 计费 → MySQL、方案组 owner 迁移、api_keys 初始化,支持 dry-run/--apply)
+
+### 部署修复(2026-08-12 发布)
+
+- **pymysql 依赖缺失**:生产 requirements-agent.txt 补 `pymysql>=1.1,<2`(配额 MySQL 驱动)
+- **容器跨网络**:api 容器(deploy_default)连不上 MySQL(在 deploy_mcp-net),compose 加 `deploy_mcp-net` 外部网络
+- **迁移脚本路径**:容器内根探测(本地/容器兼容)+ DATA_DIR 环境变量(容器 /app/data)+ `--apply` 触发实际写库
 
 ### 修复
 
