@@ -1,13 +1,14 @@
 # 海外舆情检索方案生成 Agent — 接口文档
 
-版本:v1.2.0(2026-08-11)
+版本:v1.24.0(2026-08-11)
 生产地址:`http://10.33.17.72`(API 端口 `8000`,演示页端口 `80`)
 
 ## 0. 版本历史
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
-| v1.2.0 | 2026-08-11 | 生产三错修复(bad_json/token超限/terms缺失);max_tokens=32768(4倍余量);去掉 thinking disabled(服务端对 disabled 强制 8192 输出上限);step6 risk 字段修复 |
+| v1.24.0 | 2026-08-11 | **多用户配额与资费**:apikey 即用户,免费/付费额度,apikey 管理(创建/修改/删除),管理员,8 新接口,MySQL 存储(未部署,feature 分支) |
+| v1.2.0 | 2026-08-11 | 生产三错修复(bad_json/token超限/terms缺失);max_tokens=32768;去掉 thinking disabled;step6 risk 字段修复 |
 | v1.1.0 | 2026-08-07 | load_skill 方法论接入(每步 LLM 可调方法论,2 回合上限) |
 | v0.1.0 | 2026-08-10 | 生产部署,9 接口全链路验证 |
 
@@ -41,7 +42,9 @@ GET  /api/v1/groups/{id}/export    导出 Excel(勾选的轨 → 任务行)
 Authorization: Bearer <apikey>
 ```
 
-apikey 由服务方分配(`.env` 的 `API_KEYS_JSON` 配置 apikey→用户映射)。用户标识决定**资源归属**(只能访问自己创建的方案组)与**计费**。
+**v1.24.0 起**:apikey 即用户,存 MySQL(api_keys 表),由管理员通过 `POST /api/v1/apikeys` 创建(默认免费额度 10 次)。apikey 决定**资源归属**(只能访问自己创建的方案组)与**额度**(commit 扣减)。管理员 apikey(`ADMIN_APIKEY`)额度 99999999,不受归属限制。
+
+**v1.24.0 前**:apikey 由 `.env` 的 `API_KEYS_JSON` 配置 apikey→用户映射(已废弃)。
 
 ### 通用约定
 
@@ -349,24 +352,182 @@ curl -OJ http://10.33.17.72:8000/api/v1/groups/4c777cadc3844a94/export \
 
 **错误**:`404`、`403`
 
+---
+
+### 2.9 POST /api/v1/apikeys — 创建 apikey(v1.24.0,仅管理员)
+
+创建后默认免费额度 10 次、付费额度 0 次。
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `apikey` | string | 是 | 新 apikey,格式 `sk-` 开头 + 6-64 位字母数字 |
+
+**请求示例**:
+```bash
+curl -X POST http://10.33.17.72:8000/api/v1/apikeys \
+  -H "Authorization: Bearer <管理员apikey>" \
+  -H "Content-Type: application/json" \
+  -d '{"apikey": "sk-newuser001"}'
+```
+
+**响应 200**:
+```json
+{"apikey": "sk-newuser001", "free_quota": 10, "paid_quota": 0}
+```
+
+**错误**:`400`(格式错)、`409`(已存在)、`403`(非管理员)
+
+---
+
+### 2.10 PUT /api/v1/apikeys — 修改 apikey(v1.24.0,仅管理员)
+
+旧 key → 新 key,资费继承(免费/付费额度、已用量、计费记录、方案组归属全部迁移到新 key)。
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `old_apikey` | string | 是 | 原 apikey |
+| `new_apikey` | string | 是 | 新 apikey(格式同创建) |
+
+**响应 200**:
+```json
+{"old_apikey": "sk-olduser001", "new_apikey": "sk-newuser002", "migrated": true}
+```
+
+**错误**:`404`(原 key 不存在)、`409`(新 key 已存在)、`403`(非管理员/原 key 是管理员)、`400`(原 key 已删除)
+
+---
+
+### 2.11 DELETE /api/v1/apikeys/{apikey} — 删除 apikey(v1.24.0,仅管理员)
+
+软删除:该 apikey 立即无法调用任何接口;历史数据保留但不可访问(不迁移、不清理)。
+
+**响应 200**:
+```json
+{"apikey": "sk-newuser001", "deleted": true}
+```
+
+**错误**:`404`(不存在)、`403`(非管理员/管理员 key 不可删)
+
+---
+
+### 2.12 GET /api/v1/apikeys/list — 查所有普通用户额度(v1.24.0,仅管理员)
+
+**响应 200**:
+```json
+{
+  "users": [
+    {"apikey": "sk-a", "free": {"total": 10, "used": 3, "remaining": 7},
+     "paid": {"total": 5, "used": 1, "remaining": 4}},
+    {"apikey": "sk-b", "free": {"total": 10, "used": 0, "remaining": 10},
+     "paid": {"total": 0, "used": 0, "remaining": 0}}
+  ]
+}
+```
+
+---
+
+### 2.13 GET /api/v1/apikeys/pending — 查当前 apikey 的 pending 任务
+
+**响应 200**:
+```json
+{
+  "apikey": "sk-a",
+  "pending": [
+    {"group_id": "4c777cadc3844a94", "created_at": "2026-08-11 10:00:00"}
+  ]
+}
+```
+
+---
+
+### 2.14 GET /api/v1/billing/usage — 资费查询(v1.24.0)
+
+普通用户查自己;管理员查全部。
+
+**普通用户响应 200**:
+```json
+{
+  "role": "normal",
+  "apikey": "sk-a",
+  "free": {"total": 10, "used": 3, "remaining": 7},
+  "paid": {"total": 5, "used": 1, "remaining": 4},
+  "pending_count": 2
+}
+```
+
+**管理员响应 200**:
+```json
+{
+  "role": "admin",
+  "users": [
+    {"apikey": "sk-a", "free": {...}, "paid": {...}},
+    {"apikey": "sk-b", "free": {...}, "paid": {...}}
+  ]
+}
+```
+
+---
+
+### 2.15 POST /api/v1/billing/quota/paid — 增加付费额度(v1.24.0,仅管理员)
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `apikey` | string | 是 | 目标普通用户 apikey |
+| `count` | int | 是 | 增加次数(正数) |
+
+**响应 200**:
+```json
+{"apikey": "sk-a", "paid_added": 5}
+```
+
+**错误**:`400`(count ≤ 0)、`403`(非管理员)
+
+---
+
+### 2.16 POST /api/v1/billing/quota/free — 增加免费额度(v1.24.0,仅管理员)
+
+同 2.15,增加免费额度。
+
+**响应 200**:
+```json
+{"apikey": "sk-a", "free_added": 5}
+```
+
+---
+
 ## 3. 错误码汇总
 
 | HTTP | detail | 场景 |
 |---|---|---|
 | 400 | company_name 必填 | 提交时公司名为空 |
+| 400 | apikey 格式:sk- 开头 + 6-64 位字母数字 | 创建/修改 apikey 格式错 |
+| 400 | count 必须为正数 | 调额度时 count ≤ 0 |
 | 401 | 缺少 Authorization: Bearer <apikey> | 未带鉴权头 |
-| 401 | apikey 无效 | apikey 未在服务端注册 |
-| 403 | 无权访问该方案组 | 访问其他用户的方案组 |
+| 401 | apikey 无效或已删除 | apikey 未注册/已软删 |
+| 403 | 无权访问该方案组 | 访问其他用户的方案组(管理员放行) |
+| 403 | 仅管理员可操作 | 非管理员调管理接口 |
+| 403 | 额度不足,请联系管理员充值 | 免费+付费额度用尽 |
+| 403 | 不可删除管理员 apikey | 删管理员 |
 | 404 | 方案组不存在 | group_id 错误 |
+| 404 | 计费记录不存在 | commit 无 pending 记录 |
 | 409 | 方案组已入库冻结,不可改勾选 | commit 后调 selection |
 | 409 | 已入库 | 重复 commit |
+| 409 | apikey 已存在 | 创建重复 apikey |
 | 429 | 并发 pending 超限,请先完成或取消未入库的方案组 | 同用户未完成方案组 > 5 |
 
-## 4. 计费规则
+## 4. 计费规则(v1.24.0 起)
 
-- 提交任务 = 记 1 条 `pending` 记录;`commit` = 转正式计费(1 单位)
-- 未 commit 的方案组(失败/放弃)不计费;pending 超 24 小时自动视为放弃
-- 同用户最多 5 个 pending(防刷)
+- **额度体系**:每个 apikey 免费额度(初始 10)+ 付费额度(充值)。提交时校验剩余额度 > 0,不足 403
+- **扣减时机**:`commit` 扣 1 次,先扣免费额度,免费用完扣付费额度
+- **并发**:同 apikey 最多 5 个 pending;stop 释放
+- **未 commit 不计费**:失败/停止/放弃的 pending 不扣额度
+- **管理员**:额度 99999999,不受权限控制,可查全部/增减额度
 
 ## 5. 性能参考(生产实测,2026-08-10)
 

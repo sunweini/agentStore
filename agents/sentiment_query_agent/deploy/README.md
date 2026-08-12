@@ -22,10 +22,18 @@
    LLM_API_KEY=<生产 key>
    MCP_GATEWAY_URL=http://10.33.17.72:8082/mcp
    MCP_GATEWAY_TOKEN=<token>
-   API_KEYS_JSON={"<生产 apikey>": "<用户名>"}
+   API_KEYS_JSON={"<生产 apikey>": "<用户名>"}   # v1.24.0 起废弃,apikey 存 MySQL
+   MYSQL_URL=mysql://mcp:<pass>@deploy-mysql-1:3306/agentstore   # v1.24.0+ 配额/资费
+   ADMIN_APIKEY=sk-demo-hefangyuan20260810                       # v1.24.0+ 管理员
    CORS_ORIGINS=http://10.33.17.72
    # OTEL_ENDPOINT 可选
    ```
+
+2. **v1.24.0+ 配额前置**(一次性):
+   - 生产 MySQL 建库建表:`mysql -umcp -p<pass> agentstore < agents/sentiment_query_agent/deploy/init_tables.sql`(库 agentstore 需先建,mcp 用户授权)
+   - 迁移旧数据:先 dry-run 再执行 `python3 agents/sentiment_query_agent/scripts/migrate_legacy.py`(加 `--apply` 实际写库;需配 MYSQL_URL/ADMIN_APIKEY/API_KEYS_JSON 环境变量)
+
+3. 本地仓库根执行:`bash agents/sentiment_query_agent/deploy/deploy.sh`
 
 2. 本地仓库根执行:`bash agents/sentiment_query_agent/deploy/deploy.sh`
 

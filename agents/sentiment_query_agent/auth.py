@@ -1,52 +1,57 @@
-"""鉴权:apikey 校验 + 资源归属校验。
+"""鉴权:apikey 校验 + 管理员校验 + 资源归属校验。
 
-设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §8。
+设计见 docs/superpowers/specs/2026-08-11-quota-billing-stats-design.md §5/§7。
 
-- apikey:`Authorization: Bearer <apikey>`,合法 key 列表配 .env(JSON 格式)。
-- 归属:每个 group 记录 owner(apikey 标识的用户),越权 403。
+- apikey 即用户,存 MySQL api_keys 表;`Authorization: Bearer <apikey>`。
+- 管理员:role='admin'(.env ADMIN_APIKEY 启动时写入),不受权限控制。
+- 归属:group.owner = apikey;跨 apikey 403,管理员放行。
+- API_KEYS_JSON 废弃(apikey 全在 MySQL)。
 """
 
 from __future__ import annotations
 
-import json
-
 from fastapi import HTTPException, Request
 
-from common import config
+from common import config, db
 
 
-def _valid_keys() -> dict[str, str]:
-    """apikey → 用户标识 映射(从 .env API_KEYS_JSON 读,JSON 格式)。"""
-    raw = config.get_env("API_KEYS_JSON")
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+def _get_apikey(apikey: str) -> dict | None:
+    rows = db.query("SELECT * FROM api_keys WHERE apikey=%s", (apikey,))
+    return rows[0] if rows else None
 
 
 def authenticate(request: Request) -> str:
-    """校验 Bearer apikey,返回用户标识。无效 → 401。
-
-    用法(FastAPI 依赖):
-        from fastapi import Depends
-        def _auth(request: Request) -> str:
-            return authenticate(request)
-        @app.get(...)
-        def x(user: str = Depends(_auth)): ...
-    """
+    """校验 Bearer apikey(存在且 active),返回 apikey 本身。无效 → 401。"""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="缺少 Authorization: Bearer <apikey>")
     apikey = auth[7:].strip()
-    user = _valid_keys().get(apikey)
-    if not user:
-        raise HTTPException(status_code=401, detail="apikey 无效")
-    return user
+    row = _get_apikey(apikey)
+    if row is None or row["status"] != "active":
+        raise HTTPException(status_code=401, detail="apikey 无效或已删除")
+    return apikey
+
+
+def require_admin(apikey: str) -> None:
+    """管理接口校验:role='admin',否则 403。"""
+    row = _get_apikey(apikey)
+    if row is None or row["role"] != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作")
+
+
+def is_admin(apikey: str) -> bool:
+    row = _get_apikey(apikey)
+    return bool(row and row["role"] == "admin")
 
 
 def assert_owner(user: str, group: dict) -> None:
-    """资源归属校验:group.owner 必须等于 user,否则 403。"""
+    """资源归属校验:group.owner 必须等于 user;管理员放行。"""
+    if is_admin(user):
+        return
     if group.get("owner") != user:
         raise HTTPException(status_code=403, detail="无权访问该方案组")
+
+
+def admin_apikey() -> str:
+    """管理员 apikey(.env ADMIN_APIKEY)。"""
+    return config.get_env("ADMIN_APIKEY", "")

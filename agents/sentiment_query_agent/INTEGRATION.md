@@ -145,9 +145,21 @@ export(可选)
 失败:409 = 重复 commit(视为已成功,不报错给用户)。
 **注意**:commit 产生计费(1 单位),执行前必须已获得用户确认。
 
+**额度规则(v1.24.0)**:提交任务时校验剩余额度(免费+付费)> 0,不足返回 403「额度不足,请联系管理员充值」。commit 扣 1 次,先扣免费额度,免费用完扣付费。查询额度:`GET /api/v1/billing/usage`(返回 free/paid 的 total/used/remaining + pending_count)。
+
 ### 3.6 GET /api/v1/groups/{group_id}/export — 导出 Excel
 
 响应:二进制 xlsx(`Content-Type: application/octet-stream`,文件名 `<group_id>_tasks.xlsx`)。每个勾选的轨 = Excel 一行任务。无勾选轨时导出空任务表。保存文件并告知用户路径。
+
+### 3.8 配额/资费接口(v1.24.0,管理员)
+
+- `POST /api/v1/apikeys`:创建 apikey(默认免费 10/付费 0)。仅管理员。
+- `PUT /api/v1/apikeys`:修改 apikey(旧 key→新 key,资费继承 + 历史迁移)。仅管理员。
+- `DELETE /api/v1/apikeys/{apikey}`:删除(软删,数据保留)。仅管理员。
+- `GET /api/v1/apikeys/list`:查所有普通用户额度。仅管理员。
+- `GET /api/v1/apikeys/pending`:查当前 apikey 的 pending 任务。
+- `POST /api/v1/billing/quota/paid` / `free`:增加付费/免费额度(apikey + count)。仅管理员。
+- 管理员 apikey:额度 99999999,不受归属限制;普通用户只能查自己的 usage。
 
 ### 3.7 GET /health — 健康检查(无需鉴权)
 
@@ -243,6 +255,7 @@ with open(f"{group_id}_tasks.xlsx", "wb") as f:
 | 400 | company_name 必填 | 参数错误,修正后重试 |
 | 401 | apikey 无效 / 缺少 Authorization | 停止,向用户索要有效 apikey |
 | 403 | 无权访问该方案组 | 停止,该组属于其他用户,不可重试 |
+| 403 | 额度不足,请联系管理员充值(v1.24.0) | 免费+付费额度用尽,提示用户联系管理员 |
 | 404 | 方案组不存在 | group_id 错误,停止 |
 | 409 | 已入库 / 方案组已入库冻结 | 视为终态,不重试 selection/commit |
 | 429 | 并发 pending 超限 | 等待用户处理未完成方案组后再试 |
