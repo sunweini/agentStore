@@ -23,13 +23,27 @@ import json
 import sys
 from pathlib import Path
 
-# 允许从仓库根直接运行
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent))
+# 允许从仓库根直接运行(scripts/ → agents/ → sentiment_query_agent/ → agents/ → 根)
+# 容器内:scripts/ → sentiment_query_agent/ → agents/ → 根(/app)
+import os
+
+_root_candidates = [
+    Path(__file__).resolve().parent.parent.parent.parent.parent,   # 本地仓库根
+    Path(__file__).resolve().parent.parent.parent.parent,          # 容器内 /app(脚本在 agents/xxx/scripts/)
+    Path(os.getcwd()),                                             # 当前目录(直接 cd 到根跑)
+]
+for _c in _root_candidates:
+    if (_c / "common").is_dir():
+        sys.path.insert(0, str(_c))
+        _PROJECT_ROOT = _c
+        break
+else:
+    _PROJECT_ROOT = _root_candidates[0]
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from common import config, db  # noqa: E402
 
 # 数据目录:优先 DATA_DIR 环境变量(容器内 /app/data),否则项目根 data/
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 _DATA_DIR = Path(config.get_env("DATA_DIR", str(_PROJECT_ROOT / "data")))
 _DRY_RUN = "--apply" not in sys.argv  # 默认 dry-run;传 --apply 才实际写库
 
