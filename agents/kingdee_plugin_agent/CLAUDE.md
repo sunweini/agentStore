@@ -46,6 +46,9 @@ w1 是交互节点(interrupt 挂起,不参与 Send 派发);其余 worker 与 sup
 - **可观测与指标(设计 §9/§12)**:指标计数随 State 统计 —— `TaskState.metrics`(reducer 求和,键见 `METRIC_KEYS`):w5/w5_5 每次编译/冒烟结果计数、rework_rounds 由主管按返工事件累计;分支 worker 只上报**增量**(执行前后差值),并行分支不重复累计。otel spans 打主管决策(`kingdee.supervisor.decide`,action 只记动作类型)/ worker 状态变迁(`kingdee.worker.<name>`,subtask_id/plugin_type/status)/ 编译轮次(`kingdee.w5.compile_round`,round/success)三处,属性全为**低基数**,遵循 OBS-CORE-003 —— 用户问题文本/需求原文等自由文本绝不进 span;无 collector(no-op tracer)不崩,`api.py` 启动时 `init_otel()`。
 - **改 skill**:`skills/<skill>/` 下 SKILL.md(方法论:目标/输入/流程/输出契约/踩坑)+ `references/`(类型要点;requirement-clarify 老形态模板直放 skill 目录,无 references/),`skills/loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要(渐进式披露);**方法论只写进 skill,不要写回 prompts** —— w2/w3/w4 的 worker TYPE_PROMPTS 与 load_skill 都从 `skills/<skill>/references/` 取同一份内容(单源)。改 LLM 侧工具提示:loader 的 `SKILL_HINT`(每步注入)+ `structured_with_skill`(绑定形态:官方 tools 参数,勿用 bind_tools 再 with_structured_output —— `__getattr__` 委派会丢 tools,已在 loader docstring 注明)。注意:prompts/ 与 skill references 被 worker 拼进系统提示后都经 ChatPromptTemplate f-string 解析,含 `{...}` 的样例(如 JSON 契约)必须转义 `{{...}}`(dev-standards §7.2);作为 load_skill JSON 交付时保持文本原样 —— 转义是模板安全,不是内容变更。
 - **跑测试**:`pytest tests/test_kingdee_agent.py -v`(图全链路 + CLI + API,确定性注入 llm=None + fake 编译/冒烟)+ `pytest tests/test_kingdee_api.py`;全量 `pytest tests/ -q`。
+- **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
+  `agents/kingdee_plugin_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v1.26.0 → 下版 v1.27);
+  纯项目级(common/compile_service/依赖)→ 根 `CHANGELOG.md` 项目级区。
 - **启动 CLI**:`python -m agents.kingdee_plugin_agent.cli "给采购单审核加库存校验" --env test`。
 - **启动 API**:`uvicorn "agents.kingdee_plugin_agent.api:create_app" --factory --reload`(演示页 web/kingdee-demo.html)。
 

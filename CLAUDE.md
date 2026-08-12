@@ -14,7 +14,10 @@
 1. **先设计后实现**:新 agent/新功能先讨论设计,用户确认后才动手。设计文档存档 `docs/superpowers/specs/`。
 2. **骨架阶段只建目录+文档,不写实现代码**:架构确定后先创建目录结构和占位文档(docstring 写明职责/待实现/设计文档引用),用户说"继续"才写实现。
 3. 实现完成后跑测试验证(`pytest`),通过后 commit。
-4. **每次开发收尾必须更新 CHANGELOG.md**(详见 dev-standards §4):按版本追加变更,测试通过后 commit 推送。
+4. **每次开发收尾必须更新 CHANGELOG**(详见 dev-standards §4):改动归属哪个
+   agent → 更新该 agent 的 `agents/<agent>/CHANGELOG.md` 并 bump 该 agent 版本号
+   (当前最大号 +1);纯项目级(common/compile_service/依赖)→ 根 `CHANGELOG.md`
+   项目级区。测试通过后 commit 推送。
 
 ## 架构约定
 

@@ -44,6 +44,9 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - **配配额存储(v1.24.0)**:`.env` 的 `MYSQL_URL`(agentstore 库)+ `ADMIN_APIKEY`(管理员,额度 99999999)。apikey 由管理员用 `POST /api/v1/apikeys` 创建,不再用 API_KEYS_JSON。
 - **配额开发**:`billing.py`(扣减逻辑)+ `apikey_mgmt.py`(apikey 管理)+ `common/db.py`(MySQL/SQLite 双后端)。
 - **跑测试**:`pytest tests/test_sentiment_query_agent.py`(脚本/store/配额/鉴权/计费单测,SQLite 后端;图/端到端需外部服务)。
+- **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
+  `agents/sentiment_query_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v1.24.0 → 下版 v1.25);
+  纯项目级(common/依赖)→ 根 `CHANGELOG.md` 项目级区。
 - **启动 API**:`uvicorn agents.sentiment_query_agent.api:app --reload`(配额功能需配 MYSQL_URL)。
 
 ## 发布流程(生产 10.33.17.72)
