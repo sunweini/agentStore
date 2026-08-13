@@ -96,19 +96,29 @@ class Document(BaseModel):
 
 - **docx**:`python-docx` 遍历段落,识别标题样式(`Heading 1/2/3` 或 `w:outlineLvl`),正文段落挂到最近章节。
 - **pdf**:`pypdf` 提取文本层。按字号/行文启发式分章(第一版:无目录结构的 PDF 若无法可靠分章,降级为单章全文,审核粒度仍可用)。
-- **无文本层 pdf**:检测提取文本为空/过短 → 标记需 OCR,走 PaddleOCR。
+- **无文本层 pdf**:检测提取文本为空/过短 → 标记需 OCR。
 - **大小校验**:解析前校验文件 ≤2MB;解析后校验总字数 ≤5 万字,超限报错 `CONTRACT_TOO_LONG`。
 
 OCR 策略:
 
-- OCR 独立依赖(`requirements-ocr.txt`),独立容器或可选镜像层,不进主镜像。
-- 第一版 OCR 用 PaddleOCR(CPU 可跑)。检测到扫描件时,`/contract/review` 走 OCR 增强路径。
-- OCR 结果同样走章节化(按空白行/标题启发式)。
+- **走云端接口,不下本地模型**:OCR 用百度智能云通用文字识别 API,经 `.env` 配置百度凭据(`BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`),`utils/ocr_client.py` 封装调用。主镜像零 OCR 依赖。
+- 检测到扫描件时,`/contract/review` 走 OCR 路径:图片页上传百度 OCR → 识别文本 → 章节化。
+- OCR 失败 → 报错 `OCR_FAILED`,提示重传清晰扫描件。
 
 ### 4.2 法条库(`store/law_store.py` + `scripts/seed_laws.py`)
 
-- **存储**:复用 `common/rag.py` 模式,Chroma collection `contract_law`。
-- **元数据**:`{law_name, article_no}`。
+**双存储,职责分离**:
+
+1. **法条源文件**:`agents/contract_review_agent/data/laws/*.md`(如 `labor_law.md` / `labor_contract_law.md` / `civil_code_contract.md`)。人工采集的权威原文,**权威真源**,可人工核对。
+2. **向量库**:Chroma `data/contract-rag/`,collection `contract_law`。seed 脚本解析 md(每条 = 条号 + 原文)灌库,每条元数据 `{law_name, article_no, source_url, collected_date}`。语义检索用。
+
+**查询两条路径**:
+
+- **语义检索**(审核节点):章节文本 → BM25 + 向量混合检索(RRF 融合,复用 `common/rag.py` 现成实现)→ top-K 相关法条片段 → 注入审核 prompt。例:合同"违约金 5%"命中《民法典》第五百八十五条。
+- **精确核验**(校验层):按 `law_name + article_no` 读源文件 md 取**精确原文** → fuzzy match 核验 LLM 引文。不依赖向量近似。
+
+**为什么 Chroma 不是 MySQL**:审核要找语义关联("违约金过高"→条款),向量+关键词混合检索才找得到;MySQL 只能精确匹配。校验层读源文件保证引文精确,防幻觉。
+
 - **内置种子(第一版)**:
   - 《中华人民共和国劳动法》全文(107 条)
   - 《中华人民共和国劳动合同法》全文(98 条)
@@ -261,16 +271,13 @@ OCR 策略:
 
 - 复用:Python + LangChain/LangGraph + DeepSeek(`common/llm.py`)+ `common/rag.py`(BM25+RRF)+ `common/db.py`(存储访问)。
 - 独立实现:计费/鉴权(`agents/contract_review_agent/` 内),不复用 sentiment 的 billing/auth。
-- 新增依赖:
-  - `python-docx`(docx 解析)
-  - `pypdf`(pdf 文本层)
-  - `paddleocr` + `paddlepaddle`(独立 `requirements-ocr.txt`,不进主镜像)
+- 新增依赖:`python-docx`(docx 解析)、`pypdf`(pdf 文本层)。OCR 走百度云端 API(httpx,零新增模型依赖)。
 
 ## 11. 部署
 
 - 复刻 sentiment 部署套件:`agents/contract_review_agent/deploy/`(Dockerfile/compose/deploy.sh/init_tables.sql)。
 - `init_tables.sql` 建独立计费表 `contract_api_keys` / `contract_billing_records`。
-- OCR 容器独立服务或镜像层,主服务启动时探测 OCR 服务可用性。
+- OCR 走百度云端 API,主服务无本地 OCR 依赖,部署仅需配置百度凭据(.env,不进 git)。
 - 端口/日志/回滚按 sentiment 惯例。
 
 ## 12. 目录结构
@@ -288,7 +295,8 @@ agents/contract_review_agent/
 │   ├── verify.py         # 引用校验层(核心)
 │   └── flows.py          # 图构建
 ├── utils/
-│   ├── document_parser.py# docx/pdf/OCR 解析
+│   ├── document_parser.py# docx/pdf 解析
+│   ├── ocr_client.py      # 百度 OCR 云端接口封装
 │   └── chapterizer.py    # 章节树构建
 ├── store/
 │   ├── law_store.py      # 法条库(Chroma)
@@ -306,6 +314,6 @@ agents/contract_review_agent/
 
 ## 13. 开放问题(实现前确认)
 
-1. OCR 引擎最终选型:PaddleOCR CPU 版(慢,~每页数秒)vs 对接已有 OCR 服务。默认 PaddleOCR。
+1. ~~OCR 引擎选型~~ 已定:百度智能云通用文字识别 API,经 `.env` 配凭据,不下本地模型。
 2. F1 prompt 优化是否计费。默认不计费。
 3. ~~法条 seed 文本采集~~ 已定:劳动两法全文 + 合同编高频条款,人工从权威来源采集,来源 URL 记入元数据。
