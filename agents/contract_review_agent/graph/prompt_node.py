@@ -24,7 +24,9 @@ def optimize_review_prompt(contract_type: str, user_prompt: str, llm=None) -> st
     resp = llm.invoke([
         {"role": "system",
          "content": "把审核要求优化为结构化、可直接执行的合同审核 prompt。保留用户原有要点,"
-                    "补充类型常见风险与引用法规指引。只输出优化后的 prompt 本身,不要解释。"},
+                    "补充类型常见风险与引用法规指引。只输出优化后的 prompt 本身,不要解释。"
+                    "输出的 prompt 必须包含一条明确的引用指引:法律依据只允许引用法条库"
+                    "片段原文,禁止编造;没有可依据的条款时标注'仅提示,非强制'。"},
         {"role": "user", "content": f"合同类型:{contract_type}\n原始要求:{user_prompt}"},
     ])
     out = resp.content if isinstance(resp.content, str) else str(resp.content)

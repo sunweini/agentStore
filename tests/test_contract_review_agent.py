@@ -273,3 +273,13 @@ def test_optimize_review_prompt_returns_text():
     out = optimize_review_prompt("劳动合同", "重点看违约金", llm=fake)
     assert "审核" in out
     assert fake.invoke.call_args is not None
+
+
+def test_optimize_review_prompt_keeps_ref_guidance():
+    fake = MagicMock()
+    fake.invoke.return_value.content = (
+        "引用指引:法律依据只允许引用法条库片段原文,禁止编造;"
+        "没有可依据的条款时标注'仅提示,非强制'。")
+    out = optimize_review_prompt("劳动合同", "重点看违约金", llm=fake)
+    assert "禁止编造" in out
+    assert "引用指引" in out
