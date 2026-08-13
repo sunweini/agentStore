@@ -5,9 +5,10 @@
 
 - create_apikey(name, role):生成随机 apikey(sk- 前缀 + 32 位十六进制),
   默认 free_quota=10 / paid_quota=0。name 是创建时的标签,仅返回不落库
-  (表结构照 brief 无 name 列)。
+  (表结构照 brief 无 name 列);role 仅允许 normal/admin,非法值抛 ValueError。
 - admin_list(apikey):管理员查询全部 apikey 的额度使用。
-- deactivate_apikey(apikey, admin):管理员软删(status='deleted'),鉴权即拒绝。
+- deactivate_apikey(apikey, admin):管理员软删(status='deleted'),鉴权即拒绝;
+  放开对 admin 目标的停用(调用方经 require_admin 授权),仅保留"不可停用自己"守卫。
 - 存储访问统一走 common/db.py(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。
 
 设计见 docs/superpowers/specs/2026-08-13-contract-review-agent-design.md。
@@ -25,6 +26,7 @@ from agents.contract_review_agent.auth import require_admin
 
 _DEFAULT_FREE_QUOTA = 10
 _DEFAULT_PAID_QUOTA = 0
+_ALLOWED_ROLES = ("normal", "admin")
 
 
 def _gen_apikey() -> str:
@@ -36,8 +38,11 @@ def create_apikey(name: str, role: str = "normal") -> dict:
     """创建 apikey(默认免费 10 / 付费 0),返回 {apikey, name, free_quota, paid_quota}。
 
     name 作为创建时标签仅出现在返回值中(表结构无 name 列,不落库)。
+    role 仅允许 normal/admin,非法值抛 ValueError(防任意调用方铸 admin 后门)。
     随机 apikey 冲突(理论极小)时递归重试一次。
     """
+    if role not in _ALLOWED_ROLES:
+        raise ValueError(f"非法 role: {role}(仅允许 {'/'.join(_ALLOWED_ROLES)})")
     apikey = _gen_apikey()
     try:
         db.execute(
@@ -80,13 +85,17 @@ def admin_list(apikey: str) -> list[dict]:
 
 
 def deactivate_apikey(apikey: str, admin: str) -> None:
-    """管理员软删 apikey:status='deleted',鉴权即拒绝,数据保留。"""
+    """管理员软删 apikey:status='deleted',鉴权即拒绝,数据保留。
+
+    放开对 admin 目标的停用(调用方已经 require_admin 授权,堵住"被铸 admin
+    永不可停用"的后门),仅保留"不可停用自己"守卫,防止管理员误删自身凭据。
+    """
     require_admin(admin)
+    if apikey == admin:
+        raise HTTPException(status_code=403, detail="不可停用自己")
     row = db.query("SELECT * FROM contract_api_keys WHERE apikey=%s", (apikey,))
     if not row:
         raise HTTPException(status_code=404, detail="apikey 不存在")
-    if row[0]["role"] == "admin":
-        raise HTTPException(status_code=403, detail="不可停用管理员 apikey")
     db.execute(
         "UPDATE contract_api_keys SET status='deleted' WHERE apikey=%s",
         (apikey,),

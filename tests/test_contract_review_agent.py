@@ -314,6 +314,39 @@ def test_commit_then_cancel_frees_pending(tmp_path, monkeypatch):
     assert usage(key)["pending_count"] == 0
 
 
+# ---- Task 11 安全加固(审查 Important):create_apikey role 校验 + 允许停用 admin ----
+
+from fastapi import HTTPException  # noqa: E402
+from agents.contract_review_agent.apikey_mgmt import (  # noqa: E402
+    create_apikey, deactivate_apikey)
+from agents.contract_review_agent.auth import check_apikey  # noqa: E402
+
+
+def test_create_apikey_rejects_bad_role(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test3.db"))
+    init_db()
+    with pytest.raises(ValueError):
+        create_apikey("hacker", role="superadmin")
+
+
+def test_admin_can_deactivate_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test4.db"))
+    init_db()
+    admin1 = create_apikey("admin1", role="admin")["apikey"]
+    admin2 = create_apikey("admin2", role="admin")["apikey"]
+    # 管理员可软删另一个管理员(堵住"被铸 admin 永不可停用"的后门)
+    deactivate_apikey(admin2, admin1)
+    with pytest.raises(HTTPException) as exc:
+        check_apikey(admin2)
+    assert exc.value.status_code == 401
+    # 但不能停用自己
+    with pytest.raises(HTTPException) as exc2:
+        deactivate_apikey(admin1, admin1)
+    assert exc2.value.status_code == 403
+
+
 # ---- Task 10 图构建:build_graph + run_review 全流水线(设计 §4.6) ----
 
 from agents.contract_review_agent.graph.flows import build_graph  # noqa: E402
