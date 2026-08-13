@@ -170,3 +170,58 @@ def test_review_chapter_with_mock_llm():
         "title": "第一章", "text": "违约赔 5%。"}, review_prompt="请审核")
     assert review["chapter"] == "第一章"
     assert review["findings"][0]["confidence"] == "suggestion"
+
+
+# ---- Task 7 引用校验层:逐条核验法律依据可回溯源文件原文(设计 §4.4,核心反幻觉) ----
+
+from agents.contract_review_agent.graph.verify import verify_reviews  # noqa: E402
+
+# 注:MD 常量名用 VERIFY_MD 避免覆盖本文件上方供 LawStore 其它测试使用的 MD
+VERIFY_MD = """# 测试法
+来源: u
+采集日期: 2026-08-13
+领域: labor
+
+## 第一条
+违约金不得超过实际损失的百分之三十。"""
+
+
+def _verify_law(tmp_path: Path) -> LawStore:
+    s = LawStore(data_dir=tmp_path / "rag")
+    s.seed(VERIFY_MD)
+    return s
+
+
+def test_verify_keeps_exact_ref(tmp_path):
+    reviews = [{"chapter": "A", "findings": [{
+        "原文引用": "赔 5%", "风险类型": "合规", "问题描述": "x", "改进建议": "y",
+        "法律依据": [{"law_name": "测试法", "article_no": "第一条",
+                       "article_text": "违约金不得超过实际损失的百分之三十。"}],
+        "confidence": "statutory"}]}]
+    out = verify_reviews(reviews, _verify_law(tmp_path))
+    assert out[0]["findings"][0]["confidence"] == "statutory"
+    assert len(out[0]["findings"][0]["法律依据"]) == 1
+
+
+def test_verify_drops_nonexistent_article(tmp_path):
+    reviews = [{"chapter": "A", "findings": [{
+        "原文引用": "q", "风险类型": "漏洞", "问题描述": "x", "改进建议": "y",
+        "法律依据": [{"law_name": "测试法", "article_no": "第九百条",
+                       "article_text": "编造的。"}],
+        "confidence": "statutory"}]}]
+    out = verify_reviews(reviews, _verify_law(tmp_path))
+    f = out[0]["findings"][0]
+    assert f["confidence"] == "suggestion"
+    assert f["法律依据"] == []
+    assert "未能核验" in f["问题描述"]
+
+
+def test_verify_replaces_rewritten_text(tmp_path):
+    reviews = [{"chapter": "A", "findings": [{
+        "原文引用": "q", "风险类型": "权益", "问题描述": "x", "改进建议": "y",
+        "法律依据": [{"law_name": "测试法", "article_no": "第一条",
+                       "article_text": "违约金不超过损失30%。"}],
+        "confidence": "statutory"}]}]
+    out = verify_reviews(reviews, _verify_law(tmp_path))
+    ref = out[0]["findings"][0]["法律依据"][0]
+    assert ref["article_text"] == "违约金不得超过实际损失的百分之三十。"
