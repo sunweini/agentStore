@@ -386,3 +386,57 @@ def test_review_requires_apikey():
     r = c.post("/api/v1/contract/review", files=files,
                data={"contract_type": "劳动合同", "prompt": "审"})
     assert r.status_code in (401, 422)
+
+
+# ---- Task 12 审查修复:后台线程异常兜底 + 任务归属校验(审查 Critical/Important) ----
+
+
+def test_review_background_exception_fallback(tmp_path, monkeypatch):
+    """run_review 抛异常 → 任务转 failed(不 stuck running)+ cancel_pending 被调(审查 Critical #1)。"""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "api.db"))
+    init_db()
+    key = create_apikey("api_tester")["apikey"]
+
+    import agents.contract_review_agent.api as api_module  # noqa: E402
+    with patch("agents.contract_review_agent.agent.run_review",
+               side_effect=RuntimeError("llm boom")), \
+         patch.object(api_module.billing, "cancel_pending",
+                      wraps=cancel_pending) as m:
+        c = TestClient(app)
+        files = {"file": ("x.docx", b"fake docx", "application/octet-stream")}
+        r = c.post("/api/v1/contract/review", headers={"apikey": key},
+                   files=files, data={"contract_type": "劳动合同", "prompt": "审"})
+        assert r.status_code == 200
+        assert m.called, "run_review 抛异常后应调用 cancel_pending"
+        task_id = m.call_args[0][1]
+
+    s = TestClient(app).get(f"/api/v1/contract/status?task_id={task_id}",
+                            headers={"apikey": key})
+    assert s.status_code == 200
+    assert s.json()["status"] == "failed"
+    assert s.json()["progress"] == 1.0
+
+
+def test_status_ownership_enforced(tmp_path, monkeypatch):
+    """非本人 apikey 读他人任务 → 404(审查 Important #7,不泄露任务存在性)。"""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "api2.db"))
+    init_db()
+    owner = create_apikey("owner")["apikey"]
+    other = create_apikey("other")["apikey"]
+
+    import agents.contract_review_agent.api as api_module  # noqa: E402
+    api_module._tasks["t_own"] = {"status": "running", "progress": 0.0,
+                                  "result": None, "error": "",
+                                  "apikey": owner, "request_id": "r1"}
+    try:
+        c = TestClient(app)
+        # 他人 apikey → 404(与任务不存在同响应,不泄露)
+        assert c.get("/api/v1/contract/status?task_id=t_own",
+                     headers={"apikey": other}).status_code == 404
+        # 主人 → 200
+        assert c.get("/api/v1/contract/status?task_id=t_own",
+                     headers={"apikey": owner}).status_code == 200
+    finally:
+        api_module._tasks.pop("t_own", None)
