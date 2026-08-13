@@ -130,3 +130,24 @@ def test_parse_too_large():
         p = f.name
     with pytest.raises((ContractTooLongError, Exception)):
         parse_document(p, max_bytes=1024)
+
+
+# ---- Task 5 百度 OCR 云端客户端:mock HTTP,不真调百度(设计 §4.1) ----
+
+from unittest.mock import patch  # noqa: E402
+from agents.contract_review_agent.utils import ocr_client  # noqa: E402
+
+
+def test_get_baidu_token():
+    with patch("httpx.post") as m:
+        m.return_value.status_code = 200
+        m.return_value.json.return_value = {"access_token": "tok123"}
+        assert ocr_client.get_baidu_token("ak", "sk") == "tok123"
+
+
+def test_ocr_image_bytes_joins_lines():
+    with patch("httpx.post") as m:
+        m.return_value.status_code = 200
+        m.return_value.json.return_value = {
+            "words_result": [{"words": "第一条"}, {"words": "甲方应付款。"}]}
+        assert ocr_client.ocr_image_bytes(b"img", "tok") == "第一条 甲方应付款。"
