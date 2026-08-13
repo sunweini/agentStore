@@ -394,4 +394,4 @@ curl -X DELETE http://localhost:8000/api/v1/apikeys/sk-9f3c2b1a4d5e6f7a \
 - 单次审核耗时取决于文件章节数与 LLM 响应,典型几十秒至数分钟
 - `review` SSE 每 0.5s 推一次进度;也可用 `status`/`result` 轮询替代
 - 文件解析上限:≤2MB 且正文 ≤5 万字(超限报错并提示分段;暂不支持超长文分段)
-- 扫描件(无文本层 pdf)走百度云端 OCR;OCR 失败报 `OCR_FAILED`
+- 扫描件(无文本层 pdf)当前返回 `needs_ocr` 错误(流水线未接线 OCR);`utils/ocr_client.py` 已封装百度云端 OCR,**接线为后续版本**
