@@ -13,6 +13,10 @@ def test_embedding_model_huggingface_default(monkeypatch):
     """无 EMBEDDING_* env:走 huggingface 默认(BAAI/bge-small-zh-v1.5,离线本地)。"""
     from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 
+    # conftest 会注入 .env 的 openai-compatible 配置;本测试验证"完全未配置"分支,须清掉。
+    for key in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL",
+                "EMBEDDING_BASE_URL", "EMBEDDING_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
     model = _embedding_model()
     assert isinstance(model, HuggingFaceEmbeddings)
     assert model.model_name == "BAAI/bge-small-zh-v1.5"
@@ -69,6 +73,7 @@ def test_embedding_model_openai_compatible_custom(monkeypatch):
 def test_embedding_model_openai_compatible_missing_base_url(monkeypatch):
     """openai-compatible 缺 EMBEDDING_BASE_URL:抛清晰错误(不静默回退)。"""
     monkeypatch.setenv("EMBEDDING_PROVIDER", "openai-compatible")
+    monkeypatch.delenv("EMBEDDING_BASE_URL", raising=False)  # 覆盖 conftest 注入的 base_url
     with pytest.raises(RagError, match="EMBEDDING_BASE_URL"):
         _embedding_model()
 
@@ -300,8 +305,9 @@ def test_propose_carries_category(tmp_path):
     store = ExperienceStore(RagClient(data_dir=tmp_path))
     store.propose("CS1056", "", "插值语法", "配置 Roslyn", category="env")
     store.propose("CS0103", "", "名称不存在", "核对字段名")  # 默认 code
-    assert store.search_related("CS1056", "插值")[0]["metadata"].get("category") == "env"
-    assert store.search_related("CS0103", "名称")[0]["metadata"].get("category") == "code"
+    # 用完整错误消息做查询,保证跨嵌入模型排序稳定(短词"插值"在部分模型下区分度低)
+    assert store.search_related("CS1056", "插值语法")[0]["metadata"].get("category") == "env"
+    assert store.search_related("CS0103", "名称不存在")[0]["metadata"].get("category") == "code"
 
 
 def test_experience_confidence_marking(tmp_path):
