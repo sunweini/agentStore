@@ -225,3 +225,36 @@ def test_verify_replaces_rewritten_text(tmp_path):
     out = verify_reviews(reviews, _verify_law(tmp_path))
     ref = out[0]["findings"][0]["法律依据"][0]
     assert ref["article_text"] == "违约金不得超过实际损失的百分之三十。"
+
+
+# ---- Task 8 汇总节点:风险分级 + markdown 报告 + 结构化 JSON(设计 §4.5) ----
+
+from agents.contract_review_agent.graph.report import build_report, risk_level, build_report_json  # noqa: E402
+
+
+def test_risk_level_mapping():
+    assert risk_level({"风险类型": "合规", "confidence": "statutory"}) == "高风险"
+    assert risk_level({"风险类型": "漏洞", "confidence": "statutory"}) == "中风险"
+    assert risk_level({"风险类型": "合规", "confidence": "suggestion"}) == "提示"
+
+
+def test_build_report_includes_sections():
+    reviews = [{"chapter": "第一章", "findings": [{
+        "原文引用": "q", "风险类型": "合规", "问题描述": "问题", "改进建议": "建议",
+        "法律依据": [{"law_name": "测试法", "article_no": "第一条",
+                       "article_text": "违约金不得超过实际损失的百分之三十。"}],
+        "confidence": "statutory"}]}]
+    report = build_report(reviews, {"合同名称": "a.docx", "法条库版本": "v1",
+                                    "审核时间": "2026-08-13"})
+    assert "合同审核报告" in report
+    assert "高风险" in report
+    assert "测试法" in report
+
+
+def test_build_report_json_stats():
+    reviews = [{"chapter": "A", "findings": [
+        {"原文引用": "q", "风险类型": "合规", "问题描述": "x", "改进建议": "y",
+         "法律依据": [], "confidence": "suggestion"}]}]
+    data = build_report_json(reviews)
+    assert data["stats"]["高风险"] == 0
+    assert data["stats"]["提示"] == 1
