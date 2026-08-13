@@ -285,6 +285,35 @@ def test_optimize_review_prompt_keeps_ref_guidance():
     assert "引用指引" in out
 
 
+# ---- Task 11 独立计费/鉴权:SQLite 临时库,不碰生产 MySQL(设计 §5) ----
+
+from agents.contract_review_agent.billing import (  # noqa: E402
+    init_db, create_pending, commit, cancel_pending, check_quota, usage)
+from agents.contract_review_agent.apikey_mgmt import create_apikey  # noqa: E402
+
+
+def test_billing_flow(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test.db"))
+    init_db()
+    key = create_apikey("tester")["apikey"]
+    create_pending(key, "task1")
+    commit(key, "task1")
+    u = usage(key)
+    assert u["free"]["used"] == 1
+    assert u["pending_count"] == 0
+
+
+def test_commit_then_cancel_frees_pending(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test2.db"))
+    init_db()
+    key = create_apikey("tester2")["apikey"]
+    create_pending(key, "t2")
+    cancel_pending(key, "t2")
+    assert usage(key)["pending_count"] == 0
+
+
 # ---- Task 10 图构建:build_graph + run_review 全流水线(设计 §4.6) ----
 
 from agents.contract_review_agent.graph.flows import build_graph  # noqa: E402

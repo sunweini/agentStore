@@ -24,6 +24,14 @@
 
 ## 项目级历史
 
+### 2026-08-13(common/db.py 加 contract 独立计费表)
+
+#### 变更
+
+- `common/db.py init_tables()` 追加建 `contract_api_keys` / `contract_billing_records`
+  两表(contract-review-agent 独立计费/鉴权用,与 sentiment 的 api_keys/billing_records
+  完全隔离;生产 MySQL 建表走 deploy/init_tables.sql)
+
 ### v0.1.0 — 2026-08-06(项目初始化)
 
 #### 新增

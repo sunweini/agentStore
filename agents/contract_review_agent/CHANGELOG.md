@@ -5,6 +5,25 @@
 
 ---
 
+## v0.2.0 — 2026-08-13(Task 11:独立计费/鉴权/配额)
+
+### 新增
+
+- **auth.py**:独立 apikey 鉴权(contract 独立体系,不复用 sentiment)
+  - `check_apikey(apikey)`:contract_api_keys 存在 + active 校验,无效/删除 → 401
+  - `require_admin(apikey)`:role != 'admin' → 403
+- **billing.py**:独立配额与计费(contract_api_keys / contract_billing_records)
+  - `init_db()`(建全表)/ `check_quota`(免费+付费剩余 ≤0 → 403)/
+    `create_pending`(并发 pending 上限 5 → 429)/ `commit`(扣 1 单位,先免费后付费,事务原子)/
+    `cancel_pending` / `usage`
+- **apikey_mgmt.py**:独立 apikey 管理
+  - `create_apikey(name, role)`(生成随机 sk- apikey,默认免费 10 / 付费 0)/
+    `admin_list(apikey)`(管理员)/ `deactivate_apikey(apikey, admin)`(软删)
+- **测试**:`test_billing_flow` / `test_commit_then_cancel_frees_pending`(SQLite 临时库,不碰生产 MySQL)
+- common/db.py 新增 contract_ 两表(项目级改动,记根 CHANGELOG)
+
+---
+
 ## v0.1.0 — 2026-08-13(项目初始化:目录结构 + 占位文档 + langgraph 注册)
 
 ### 新增

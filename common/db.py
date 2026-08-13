@@ -161,6 +161,31 @@ def init_tables() -> None:
               committed_at DATETIME NULL
             )
         """))
+        # ---- contract-review-agent 独立计费/鉴权表(与 sentiment 表隔离,Task 11) ----
+        cur.execute(_sql("""
+            CREATE TABLE IF NOT EXISTS contract_api_keys (
+              apikey      VARCHAR(128) PRIMARY KEY,
+              role        VARCHAR(10) NOT NULL DEFAULT 'normal',
+              status      VARCHAR(10) NOT NULL DEFAULT 'active',
+              free_quota  INT NOT NULL DEFAULT 10,
+              paid_quota  INT NOT NULL DEFAULT 0,
+              free_used   INT NOT NULL DEFAULT 0,
+              paid_used   INT NOT NULL DEFAULT 0,
+              created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        cur.execute(_sql("""
+            CREATE TABLE IF NOT EXISTS contract_billing_records (
+              id          INTEGER PRIMARY KEY AUTOINCREMENT,
+              apikey      VARCHAR(128) NOT NULL,
+              task_id     VARCHAR(64) NOT NULL UNIQUE,
+              status      VARCHAR(10) NOT NULL DEFAULT 'pending',
+              quota_type  VARCHAR(10) NULL,
+              created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              committed_at DATETIME NULL
+            )
+        """))
         conn.commit()
     finally:
         conn.close()
