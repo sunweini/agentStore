@@ -6,7 +6,8 @@
 #     服务经 langchain-openai 的 OpenAIEmbeddings 接入),不装 sentence-transformers/torch;
 #     langchain-huggingface 仅 base 依赖(huggingface-hub/tokenizers,无 torch),common/rag.py
 #     顶层 import 该包但 HuggingFaceEmbeddings 的 sentence_transformers 是懒加载。
-#   - OCR 走百度云端 API(httpx),无本地 OCR 依赖。
+#   - OCR 识别走百度云端 API(httpx);扫描件 pdf 需 pymupdf 本地逐页渲染成图
+#     再调云端(无 pymupdf 则扫描件稳定 ocr_failed,文本层 pdf/docx 不受影响)。
 #   - 法条向量库需要 Chroma:比 sentiment 镜像多 langchain-chroma/chromadb(必要,去掉即检索崩)。
 #   - 运行时路径无裸 `import langchain`,故不装 langchain 元包。
 langchain-core==1.5.3
@@ -24,3 +25,4 @@ httpx==0.28.1
 python-docx==1.2.0
 pypdf==6.15.0
 pymysql==1.2.0
+pymupdf==1.28.2

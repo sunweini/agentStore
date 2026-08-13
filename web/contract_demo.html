@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>合同审核 Agent · 测试页</title>
+<style>
+:root{
+  --pri:#5B5BD6; --pri-2:#4A56E2; --pri-bg:#EEF0FD;
+  --ok:#16A34A; --ok-bg:#E7F8ED;
+  --warn:#B45309; --warn-bg:#FFF7EA;
+  --err:#E1483A; --err-bg:#FCEBEB;
+  --t1:#1F2329; --t2:#5F6672; --t3:#9AA0A6;
+  --line:#E4E6EB; --line2:#C9CDD4; --bg:#F5F6F8;
+  --r:6px; --r2:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--t1);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6}
+.top{background:#fff;border-bottom:1px solid var(--line);padding:14px 28px;font-weight:700;color:var(--pri-2);font-size:15px}
+.wrap{max-width:980px;margin:24px auto;padding:0 20px}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r2);padding:22px 26px;margin-bottom:20px}
+.card h3{font-size:15px;font-weight:600;margin-bottom:14px}
+.row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:14px;margin-bottom:14px;align-items:start}
+.lab{font-size:13px;color:var(--t2);text-align:right;padding-top:8px}
+.lab i{color:var(--err);font-style:normal;margin-right:2px}
+input[type=text],textarea,select{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 12px;font:inherit;font-size:14px;outline:0}
+textarea{min-height:64px;resize:vertical}
+input:focus,textarea:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-bg)}
+.btn{border:1px solid var(--line);background:#fff;border-radius:var(--r);padding:9px 20px;font:inherit;font-size:14px;cursor:pointer;transition:.15s}
+.btn:hover{border-color:var(--line2)}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:#fff}
+.btn.pri:hover{background:var(--pri-2)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.hint{font-size:12px;color:var(--t3);margin-top:6px}
+.status{font-size:13px;margin-top:12px}
+.status .ok{color:var(--ok)} .status .err{color:var(--err)} .status .run{color:var(--pri)}
+pre.out{background:#0B1030;color:#D6DAF5;border-radius:10px;padding:16px 18px;overflow:auto;max-height:480px;font-size:12.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+pre.out .md h1{color:#fff;font-size:16px;border-bottom:1px solid #2A3160;padding-bottom:6px;margin-bottom:10px}
+pre.out .md h2{color:#6E7BFF;font-size:14px;margin:14px 0 6px}
+pre.out .md h3{color:#33E1C6;font-size:13px;margin:10px 0 4px}
+pre.out .md b{color:#FFD77A}
+.tabs{display:flex;gap:8px;margin-bottom:10px}
+.tab{border:1px solid var(--line);background:#fff;border-radius:var(--r);padding:6px 14px;font-size:13px;cursor:pointer;color:var(--t2)}
+.tab.on{background:var(--pri);border-color:var(--pri);color:#fff}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="top">合同审核 Agent · 测试页(contract_review_agent)</div>
+<div class="wrap">
+
+  <div class="card">
+    <h3>F1 · 审核 prompt 优化</h3>
+    <div class="row"><div class="lab">合同类型</div>
+      <div><input id="f1_type" type="text" value="劳动合同" /><div class="hint">如:劳动合同 / 买卖合同 / 租赁合同</div></div>
+    </div>
+    <div class="row"><div class="lab">原始要求</div>
+      <div><textarea id="f1_prompt">重点审核违约金比例、试用期约定、解除条款</textarea>
+      <div class="hint">你的审核要求,agent 会结合合同类型优化为结构化审核 prompt</div></div>
+    </div>
+    <div class="row"><div class="lab"></div>
+      <div><button class="btn pri" id="f1_btn">生成优化 prompt</button>
+        <span class="status" id="f1_status"></span></div>
+    </div>
+    <div id="f1_out" class="hidden"><h3 style="margin-top:14px">优化结果</h3><pre class="out"><code id="f1_code"></code></pre></div>
+  </div>
+
+  <div class="card">
+    <h3>F2 · 合同审核</h3>
+    <div class="row"><div class="lab">apikey <i>*</i></div>
+      <div><input id="apikey" type="text" placeholder="sk-... 测试环境 apikey" /></div>
+    </div>
+    <div class="row"><div class="lab">合同文件 <i>*</i></div>
+      <div><input id="file" type="file" accept=".docx,.pdf" />
+      <div class="hint">word(docx)或 pdf(≤2MB/≤5万字)。扫描件 pdf 走百度云端 OCR。</div></div>
+    </div>
+    <div class="row"><div class="lab">合同类型</div>
+      <div><input id="type" type="text" value="劳动合同" /></div>
+    </div>
+    <div class="row"><div class="lab">审核要求</div>
+      <div><textarea id="prompt">请审核违约金、试用期、解除条款,并检查权利义务是否对等</textarea></div>
+    </div>
+    <div class="row"><div class="lab"></div>
+      <div><button class="btn pri" id="run_btn">开始审核</button>
+        <button class="btn" id="stop_btn" disabled>停止</button>
+        <span class="status" id="run_status"></span></div>
+    </div>
+    <div id="progress" class="hidden" style="margin-top:14px">
+      <div style="background:#E4E6EB;border-radius:6px;height:6px;overflow:hidden"><div id="pbar" style="height:100%;width:0;background:linear-gradient(90deg,#5B5BD6,#33E1C6);transition:width .4s"></div></div>
+      <div class="status" id="pstep" style="margin-top:8px;color:var(--t2)">等待开始…</div>
+    </div>
+    <div id="result" class="hidden" style="margin-top:16px">
+      <div class="tabs"><button class="tab on" data-t="md">报告(markdown)</button><button class="tab" data-t="json">JSON</button></div>
+      <pre class="out" id="res_md"></pre>
+      <pre class="out hidden" id="res_json"></pre>
+    </div>
+  </div>
+
+</div>
+<script>
+const API = location.port ? `http://${location.hostname}:8001` : location.origin;
+let curTaskId = null;
+
+function $(id){ return document.getElementById(id); }
+
+async function readSSE(resp, onEvent){
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, {stream:true});
+    const parts = buf.split("\n\n");
+    buf = parts.pop();
+    for(const part of parts){
+      const dataLine = part.split("\n").find(l => l.startsWith("data:"));
+      if(dataLine){ try{ onEvent(JSON.parse(dataLine.slice(5).trim())); }catch(e){} }
+    }
+  }
+}
+
+async function postSSE(path, body, onEvent){
+  const resp = await fetch(`${API}${path}`, {method:"POST", headers:body instanceof FormData?{}:{"Content-Type":"application/json"}, body});
+  if(!resp.ok){
+    let msg = resp.statusText;
+    try{ const j = await resp.json(); msg = j.detail || JSON.stringify(j); }catch(e){}
+    throw new Error(`${resp.status} ${msg}`);
+  }
+  if(resp.headers.get("content-type")?.includes("text/event-stream")){
+    await readSSE(resp, onEvent);
+  } else {
+    onEvent(await resp.json());
+  }
+}
+
+$("f1_btn").onclick = async function(){
+  const btn = this; btn.disabled = true;
+  const st = $("f1_status"); st.className = "status"; st.textContent = "优化中…"; st.classList.add("run");
+  try{
+    const fd = new FormData();
+    fd.append("contract_type", $("f1_type").value);
+    fd.append("prompt", $("f1_prompt").value);
+    const key = $("apikey").value.trim();
+    const resp = await fetch(`${API}/api/v1/contract/prompt`, {method:"POST", headers:key?{apikey:key}:{}, body:fd});
+    if(!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+    const j = await resp.json();
+    $("f1_code").textContent = j.prompt || JSON.stringify(j);
+    $("f1_out").classList.remove("hidden");
+    st.textContent = "完成"; st.className = "status ok";
+  }catch(e){
+    st.textContent = "失败: " + e.message; st.className = "status err";
+  }finally{ btn.disabled = false; }
+};
+
+$("run_btn").onclick = async function(){
+  const btn = this, stopBtn = $("stop_btn");
+  const file = $("file").files[0];
+  const key = $("apikey").value.trim();
+  if(!file){ alert("请选择合同文件"); return; }
+  if(!key){ alert("请填 apikey"); return; }
+  btn.disabled = true; stopBtn.disabled = false;
+  $("progress").classList.remove("hidden");
+  $("pbar").style.width = "0%";
+  $("pstep").textContent = "提交中…";
+  const st = $("run_status"); st.className = "status"; st.classList.add("run"); st.textContent = "审核中";
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("contract_type", $("type").value);
+  fd.append("prompt", $("prompt").value);
+  try{
+    let started = null;
+    await postSSE("/api/v1/contract/review", fd, (ev) => {
+      if(ev.event === "started"){ started = ev.data; curTaskId = ev.data; $("pstep").textContent = "已提交,审核中…"; }
+      else if(ev.event === "progress"){ $("pbar").style.width = Math.min(95, Math.round(Number(ev.data)*100)) + "%"; }
+      else if(ev.event === "done"){ $("pbar").style.width = "100%"; $("pstep").textContent = "审核完成"; st.textContent = "完成"; st.className = "status ok"; }
+      else if(ev.event === "failed"){ $("pbar").style.width = "100%"; $("pstep").textContent = "失败: " + ev.data; st.textContent = "失败: " + ev.data; st.className = "status err"; }
+      else if(ev.event === "cancelled"){ $("pstep").textContent = "已取消"; st.textContent = "已取消"; st.className = "status err"; }
+    });
+    await loadResult(started);
+  }catch(e){
+    st.textContent = "失败: " + e.message; st.className = "status err"; $("pstep").textContent = "请求出错";
+  }finally{ btn.disabled = false; stopBtn.disabled = true; }
+};
+
+async function loadResult(taskId){
+  if(!taskId) return;
+  const key = $("apikey").value.trim();
+  const resp = await fetch(`${API}/api/v1/contract/result?task_id=${taskId}`, {headers:{apikey:key}});
+  if(!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  const j = await resp.json();
+  const res = j.result || {};
+  $("res_md").innerHTML = renderMD(res.report || "");
+  $("res_json").textContent = JSON.stringify(res, null, 2);
+  $("result").classList.remove("hidden");
+  const stats = res.report_json && res.report_json.stats;
+  if(stats) $("pstep").textContent = `完成 — 高风险 ${stats["高风险"]||0} / 中风险 ${stats["中风险"]||0} / 提示 ${stats["提示"]||0}`;
+}
+
+function renderMD(md){
+  if(!md) return "(空报告)";
+  const esc = md.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const withH = esc
+    .replace(/^### (.*)$/gm, "<h3>$1</h3>")
+    .replace(/^## (.*)$/gm, "<h2>$1</h2>")
+    .replace(/^# (.*)$/gm, "<h1>$1</h1>")
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  return '<div class="md">' + withH + "</div>";
+}
+
+$("stop_btn").onclick = async function(){
+  if(!curTaskId) return;
+  try{
+    const key = $("apikey").value.trim();
+    const fd = new FormData(); fd.append("task_id", curTaskId);
+    await fetch(`${API}/api/v1/contract/stop`, {method:"POST", headers:{apikey:key}, body:fd});
+  }catch(e){}
+};
+
+document.querySelectorAll(".tab").forEach(t => t.onclick = function(){
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
+  this.classList.add("on");
+  $("res_md").classList.toggle("hidden", this.dataset.t !== "md");
+  $("res_json").classList.toggle("hidden", this.dataset.t !== "json");
+});
+</script>
+</body>
+</html>
