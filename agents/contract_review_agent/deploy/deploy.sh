@@ -18,11 +18,11 @@ SSH_CMD=(ssh -o BatchMode=yes -p "$SSH_PORT" -i "$SSH_KEY" "$REMOTE_USER@$REMOTE
 echo "== 1/5 远端目录 =="
 "${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR /home/logs/contract-review-agent"
 
-echo "== 2/5 rsync 代码(排除 .git/.env/data/缓存;--delete 不动排除项) =="
+echo "== 2/5 rsync 代码(排除 .git/.env/根 data/缓存;--delete 不动排除项) =="
 rsync -az --delete \
   --exclude '.git' \
   --exclude '.env' \
-  --exclude 'data' \
+  --exclude '/data' \
   --exclude '__pycache__' \
   --exclude '.pytest_cache' \
   --exclude '.claude' \
