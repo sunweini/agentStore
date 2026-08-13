@@ -1,0 +1,7 @@
+# data/laws/ 法条源文件目录(权威原文,人工采集)
+
+# 本目录存放内置法条 seed 文本,如 labor_law.md / labor_contract_law.md /
+# civil_code_contract.md。权威真源,可人工核对,严禁 LLM 生成/记忆填充。
+# 采集来源:国家法律法规数据库 flk.npc.gov.cn、全国人大官网,
+# 逐条记录 来源 URL + 采集日期(随 seed_laws.py 元数据入库)。
+# 用法见 scripts/seed_laws.py 与设计文档 §4.2。

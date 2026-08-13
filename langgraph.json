@@ -2,7 +2,8 @@
   "dependencies": ["langchain-openai", "./common", "./agents", "./compile_service"],
   "graphs": {
     "sentiment-query-agent": "./agents/sentiment_query_agent/agent.py:build_agent",
-    "kingdee_plugin_agent": "./agents/kingdee_plugin_agent/agent.py:build_graph"
+    "kingdee_plugin_agent": "./agents/kingdee_plugin_agent/agent.py:build_graph",
+    "contract_review_agent": "./agents/contract_review_agent/agent.py:build_graph"
   },
   "env": "./.env"
 }
