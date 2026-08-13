@@ -32,6 +32,18 @@
   两表(contract-review-agent 独立计费/鉴权用,与 sentiment 的 api_keys/billing_records
   完全隔离;生产 MySQL 建表走 deploy/init_tables.sql)
 
+### 2026-08-13(contract-review-agent 收尾:依赖 + 测试环境 + 部署前置)
+
+#### 变更
+
+- `requirements.txt` 加 `python-docx` / `pypdf`(contract-review-agent docx/pdf 文件解析)
+- `tests/conftest.py` 嵌入 provider:EMBEDDING_* 跟随 .env 注入 os.environ + 清
+  `_embedding_model` 的 lru_cache(测试环境与生产一致,用 openai-compatible 远程嵌入
+  Qwen3-Embedding-8B,不靠 load_dotenv 顺序)
+- **contract-review-agent 部署前置**(套件在 `agents/contract_review_agent/deploy/`):
+  生产需建 `contract_` 两表(init_tables.sql)+ .env 配 MYSQL_URL / ADMIN_APIKEY /
+  BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY / EMBEDDING_*;详见 deploy/README.md
+
 ### v0.1.0 — 2026-08-06(项目初始化)
 
 #### 新增

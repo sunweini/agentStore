@@ -44,11 +44,11 @@ START → parse → review_chapters → verify_refs → summarize → END
 - **接百度 OCR**:`.env` 配 `BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`(凭据不进 git);`utils/ocr_client.py` 封装调用。
 - **配独立计费/鉴权**:`.env` 的 `MYSQL_URL`(agentstore 库,独立表 contract_api_keys/contract_billing_records)+ `ADMIN_APIKEY`;存储访问统一走 `common/db.py`(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。
 - **配 embedding 模型**:`.env` 的 `EMBEDDING_*` 组(默认 huggingface 本地 bge-small-zh-v1.5;换模型后必须 drop `data/contract-rag` 重灌)。
-- **跑测试**:`pytest tests/test_contract_review_agent.py -v`(骨架阶段仅 import 冒烟;解析/校验层/seed/计费单测待实现阶段,设计 §9)。
+- **跑测试**:`pytest tests/test_contract_review_agent.py -v`(解析/校验层/seed/计费/接口单测,SQLite 后端;图/端到端需外部服务)。
 - **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
-  `agents/contract_review_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v0.1.0 → 下版 v0.2);
+  `agents/contract_review_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v0.4.0 → 下版 v0.5);
   纯项目级(common/依赖)→ 根 `CHANGELOG.md` 项目级区。
-- **启动 API**:`uvicorn agents.contract_review_agent.api:create_app --factory --reload`(待 api.py 实现)。
+- **启动 API**:`uvicorn agents.contract_review_agent.api:app --reload`(配额/计费功能需配 MYSQL_URL)。
 
 ## 约束
 

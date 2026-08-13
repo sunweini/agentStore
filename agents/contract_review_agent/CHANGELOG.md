@@ -5,6 +5,39 @@
 
 ---
 
+## v0.4.0 — 2026-08-13(Task 14:文档收尾 + 部署套件 + minor 清理)
+
+### 新增
+
+- **API.md**:全接口文档(仿 sentiment API.md),11 接口逐个请求/鉴权/响应真实示例
+  - F2 章节审核链:POST /api/v1/contract/review(multipart + SSE 进度)/ status / result / stop
+  - F1:POST /api/v1/contract/prompt(不计费)
+  - 法条:GET /api/v1/laws、POST /api/v1/laws/upload(管理员)
+  - apikey 管理 3 接口:POST/GET /api/v1/apikeys、DELETE /api/v1/apikeys/{apikey}(admin 头)
+  - GET /health + 错误码汇总 + 计费规则
+- **deploy/**:部署套件(尚未上机,README 标注)
+  - `Dockerfile`:精简依赖(无 torch/无本地 OCR,嵌入走远程 openai-compatible);含 python-docx/pypdf + langchain-chroma(法条向量库必需)
+  - `requirements-agent.txt`:版本锁自测试环境;langchain-huggingface 仅 base 依赖(懒加载 sentence-transformers,不拉 torch)
+  - `docker-compose.yml`:API 8000,env_file 仓库根 .env(占位:MYSQL_URL/ADMIN_APIKEY/BAIDU_OCR_API_KEY/BAIDU_OCR_SECRET_KEY/EMBEDDING_*)
+  - `deploy.sh`:rsync 上机 → build → compose up → 健康检查(路径 /opt/contract-review-agent,host 参数环境变量可覆盖)
+  - `init_tables.sql`:MySQL 建 contract_api_keys / contract_billing_records 两表(与 common/db.py SQLite 结构对齐)
+  - `README.md`:用法/首次部署前置/端口/回滚/注意
+
+### 修复(minor 清理,controller 定案)
+
+- `graph/flows.py` `_summarize`:审核时间硬编码 `"2026-08-13"` → `datetime.now().strftime("%Y-%m-%d %H:%M")`
+- `graph/flows.py` `_parse_node` 的 `except Exception` 兜底:加结构化日志
+  `event=parse_unexpected_error`(key=value,OBS-CORE-001;只记 error_type 不记 str(exc),防敏感信息)
+- `store/law_store.py` `list_laws()` **source_url 返回首条正文的 bug**:新增 `_source_urls`
+  dict(seed/load_bundled 时按 law_name 填权威源 URL),list_laws 返回真 URL 而非正文首段
+- `CLAUDE.md`:启动命令 `api:create_app --factory` → `uvicorn agents.contract_review_agent.api:app --reload`
+
+### 测试
+
+- `pytest tests/test_contract_review_agent.py -v` 全量绿
+
+---
+
 ## v0.3.0 — 2026-08-13(Task 13:内置法条种子 + 校验层运行时可用性加固)
 
 ### 新增
@@ -35,6 +68,23 @@
 
 ---
 
+## v0.2.1 — 2026-08-13(Task 12:FastAPI 接口)
+
+### 新增
+
+- **api.py**:11 接口 + 独立 apikey 配额计费接线
+  - `POST /api/v1/contract/review`:multipart 上传 docx/pdf(≤2MB 写盘前校验,防公网 DoS)+ SSE 流实时章节进度;后台线程跑 run_review → commit 扣 1 单位
+  - `GET /api/v1/contract/status` / `GET /api/v1/contract/result`(JSON + markdown 报告)/
+    `POST /api/v1/contract/stop`(cancel_pending 释放并发额度,不扣费)
+  - `POST /api/v1/contract/prompt`(F1,不计费)/ `GET /api/v1/laws` / `POST /api/v1/laws/upload`(管理员)
+  - apikey 管理:POST/GET /api/v1/apikeys、DELETE /api/v1/apikeys/{apikey}(仅管理员,admin 头)
+  - `GET /health`
+- **任务生命周期**:running → done(commit 成功)/ failed(异常/错误,兜底 failed + cancel_pending + unlink)/ cancelled(stop,线程完成前标记,跳过 commit 不覆写状态)
+- **安全加固(审查 Critical/Important)**:后台线程异常绝不静默退出(否则 pending 槽位泄漏/临时文件残留);任务归属校验(非本人 apikey → 404,不泄露存在性);commit 失败/解析失败日志只记 error_type 不记 str(exc)(防 apikey/文件内容凭据泄露);apikey 脱敏进日志
+- **测试**:health / 未鉴权 401 / 后台异常兜底 / 任务归属校验
+
+---
+
 ## v0.2.0 — 2026-08-13(Task 11:独立计费/鉴权/配额)
 
 ### 新增
@@ -51,6 +101,62 @@
     `admin_list(apikey)`(管理员)/ `deactivate_apikey(apikey, admin)`(软删)
 - **测试**:`test_billing_flow` / `test_commit_then_cancel_frees_pending`(SQLite 临时库,不碰生产 MySQL)
 - common/db.py 新增 contract_ 两表(项目级改动,记根 CHANGELOG)
+
+---
+
+## v0.1.4 — 2026-08-13(Task 9-10:F1 prompt 优化 + LangGraph 图构建)
+
+### 新增
+
+- **graph/prompt_node.py** F1:合同类型 + 原始审核 prompt → 结构化审核 prompt
+  (temperature 0.2;默认五段式模板,含引用指引"禁止编造/无依据标注仅提示非强制")
+- **graph/flows.py** `build_graph`:parse → review → verify → summarize 顺序图;
+  parse 失败条件路由(needs_ocr / too_long / unsupported → END,不中断整图)
+- **agent.py** `run_review`:同步跑完整图,返回 {report, report_json, error};
+  法条库缺省用 data/contract-rag
+- **测试**:build_graph 冒烟 / run_review 超长文件报错
+
+---
+
+## v0.1.3 — 2026-08-13(Task 6-8:章节审核节点 + 引用校验层 + 汇总报告)
+
+### 新增
+
+- **graph/nodes.py** `review_chapter`:每章检索法条片段(领域过滤,k=5)+ LLM(temperature
+  0.1)强制 JSON,反幻觉系统提示(只能引用法条片段、无依据 confidence=suggestion)
+- **graph/verify.py** 引用校验层(纯代码,无 LLM):条号存在 + 引文 difflib ratio ≥ 0.8;
+  条号不存在 → 移除依据降级 suggestion 追加"(引用未能核验)";引文不符 → 用库内原文替换
+- **graph/report.py** 汇总:风险分级(合规→高风险/权益·漏洞·歧义→中风险/无依据→提示)
+  + markdown 报告(声明法条库版本/审核时间/风险结论)+ 结构化 JSON(stats)
+- **测试**:mock LLM 节点装配 / 校验层精确核验、降级、原文替换 / 报告分级与统计
+
+---
+
+## v0.1.2 — 2026-08-13(Task 4-5:文件解析层 + 百度 OCR 云端)
+
+### 新增
+
+- **utils/chapterizer.py** 章节树:标题层级识别构建章节,无标题降级单章全文
+- **utils/document_parser.py**:docx(python-docx)/ pdf(pypdf 文本层)→ Document{chapters[]};
+  大小限制 ≤2MB / 正文 ≤5 万字(ContractTooLongError);非 docx/pdf → UnsupportedTypeError
+- **utils/ocr_client.py** 百度智能云 OCR(云端接口,零本地模型):get_baidu_token /
+  ocr_image_bytes / ocr_pdf_pages(PyMuPDF 可选,未装返回 None);凭据 BAIDU_OCR_*
+- **测试**:章节构建 / 无标题降级 / 类型拒绝 / 超限 / OCR token 与行拼接(mock HTTP)
+
+---
+
+## v0.1.1 — 2026-08-13(Task 2-3:法条库双存储 + 领域过滤 + md 解析)
+
+### 新增
+
+- **store/law_store.py** LawStore 双存储(设计 §4.2):
+  1. 向量库(collection `contract_law`,Chroma):法条按"条"粒度 embedding 入库,语义检索用
+     (审核节点按领域过滤 + BM25/向量混合);内建 _LawRagClient 子类放开集合名校验
+  2. 源文件精确索引 `_exact`:按 law_name 建 {article_no: 原文} 内存索引,校验层取逐字原文
+- **领域硬过滤**:DOMAIN_ALIASES 合同类型 → 领域(labor/contract),retrieve 按领域筛法条
+- **utils/law_parser.py** `parse_law_md`:md → LawArticle 列表(条号+原文+来源 URL+采集日期+
+  领域);非法条目标记跳过,缺 law_name 记 errors
+- **测试**:seed / list_laws / 领域过滤 / 未知类型不过滤 / verify_ref 精确命中与缺失
 
 ---
 
