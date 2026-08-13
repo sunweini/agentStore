@@ -176,12 +176,18 @@ OCR 策略:
   - 引用法规指引(只允许引用库内法条)
 - 产物可直接作为 F2 的审核要求复用。
 
-## 5. 配额与计费
+## 5. 配额与计费(独立实现)
 
-- 复用 sentiment 的 `billing.py` / `auth.py` / `common/db.py`。
-- **计费单位:按次**。一个合同文件审核完成 = 1 次扣费(commit 时事务原子扣减)。
-- F1 prompt 优化:计费待定,默认不计费或 0.5 次(写 spec 时定,倾向不计费)。
-- 配额:pending 上限复用现有模型(每 apikey 5)。
+**不复用 sentiment 的 billing/auth**,contract agent 自带独立一套,与 sentiment 完全隔离:
+
+- **独立表**:同库(agentstore)独立表 `contract_api_keys` / `contract_billing_records`,表结构参考 sentiment 但独立。
+- **独立 apikey**:contract 用户需单独创建 apikey,额度与 sentiment 互不影响。
+- **独立逻辑**:`agents/contract_review_agent/billing.py` / `auth.py` / `apikey_mgmt.py` 自行实现(apikey 管理/免费付费额度/管理员),复用 `common/db.py`(MySQL/SQLite 双后端)做存储访问。
+- **计费单位:按次**。一个合同文件审核完成 = 1 次扣费(先免费后付费,事务原子)。
+- F1 prompt 优化:默认不计费。
+- 并发:pending 上限每 apikey 5(与 sentiment 相同规则)。
+
+> 决策记录:2026-08-13 用户明确要求"单独做,不复用",计费/鉴权不上提 common/、不跨 agent import。
 
 ## 6. 输出报告格式(markdown 模板)
 
@@ -224,8 +230,9 @@ OCR 策略:
 | `/api/v1/contract/prompt` | POST | F1:合同类型 + 原始 prompt → 优化后 prompt |
 | `/api/v1/laws/upload` | POST | 用户补充法条库 |
 | `/api/v1/laws` | GET | 法条库列表(law_name/条数/版本) |
+| `/api/v1/apikeys` | POST | 独立 apikey 管理:创建(管理员)/修改/删除(参照 sentiment apikey_mgmt 独立实现) |
 
-鉴权:apikey(复用 `auth.py`)。文件上传:multipart,限制 ≤2MB。
+鉴权:独立 apikey 体系(`auth.py` 独立实现)。文件上传:multipart,限制 ≤2MB。
 
 ## 8. 错误处理
 
@@ -252,7 +259,8 @@ OCR 策略:
 
 ## 10. 技术栈与依赖
 
-- 复用:Python + LangChain/LangGraph + DeepSeek(`common/llm.py`)+ `common/rag.py`(BM25+RRF)+ billing/auth/db。
+- 复用:Python + LangChain/LangGraph + DeepSeek(`common/llm.py`)+ `common/rag.py`(BM25+RRF)+ `common/db.py`(存储访问)。
+- 独立实现:计费/鉴权(`agents/contract_review_agent/` 内),不复用 sentiment 的 billing/auth。
 - 新增依赖:
   - `python-docx`(docx 解析)
   - `pypdf`(pdf 文本层)
@@ -261,6 +269,7 @@ OCR 策略:
 ## 11. 部署
 
 - 复刻 sentiment 部署套件:`agents/contract_review_agent/deploy/`(Dockerfile/compose/deploy.sh/init_tables.sql)。
+- `init_tables.sql` 建独立计费表 `contract_api_keys` / `contract_billing_records`。
 - OCR 容器独立服务或镜像层,主服务启动时探测 OCR 服务可用性。
 - 端口/日志/回滚按 sentiment 惯例。
 
@@ -270,6 +279,9 @@ OCR 策略:
 agents/contract_review_agent/
 ├── agent.py              # build_graph 入口
 ├── api.py                # FastAPI 接口
+├── auth.py               # 独立 apikey 鉴权
+├── billing.py            # 独立配额与计费(contract_api_keys/contract_billing_records)
+├── apikey_mgmt.py        # 独立 apikey 管理
 ├── graph/
 │   ├── state.py          # AgentState + finding 模型
 │   ├── nodes.py          # 解析/章节审核/汇总节点
