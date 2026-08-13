@@ -44,7 +44,9 @@ from agents.contract_review_agent import billing, auth
 from agents.contract_review_agent.store.law_store import LawStore
 
 app = FastAPI(title="contract_review_agent")
-_law_store = LawStore(data_dir=Path("data/contract-rag"))
+_law_store = LawStore(
+    data_dir=Path("data/contract-rag"),
+    laws_dir=Path("agents/contract_review_agent/data/laws"))
 _tasks: dict[str, dict] = {}  # task_id -> {status, progress, result, error, apikey, request_id}
 _lock = threading.Lock()
 

@@ -19,6 +19,9 @@ def main(data_dir: Path, laws_dir: Path) -> None:
     for md_path in sorted(laws_dir.glob("*.md")):
         result = store.seed(md_path.read_text(encoding="utf-8"))
         print(f"{result['law_name']}: {result['count']} 条,errors={result['errors']}")
+    print("\n== 精确索引摘要(list_laws,校验层 verify_ref 依据)==")
+    for law in store.list_laws():
+        print(f"  {law['law_name']} [domain={law['domain']}] {law['count']} 条")
 
 
 if __name__ == "__main__":

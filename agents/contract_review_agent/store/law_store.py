@@ -26,6 +26,26 @@ from common.rag import RagClient, _embedding_model
 
 _COLLECTION = "contract_law"
 
+# 嵌入服务单批上限 32(实测 >32 触发 413),取 16 留余量;超出/瞬态 424(CUDA OOM)
+# 退避重试。见 seed() 分批逻辑。
+_BATCH = 16
+_MAX_ATTEMPTS = 6
+_TRANSIENT_STATUS = (413, 424, 429, 500, 502, 503, 504)
+
+
+def _retryable(exc: Exception) -> bool:
+    """瞬态嵌入错误可重试:HTTP 状态码 413/424/429/5xx,或连接层失败。
+
+    永久错误(校验/结构类)不带这些状态码,立即上抛不掩蔽。
+    """
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int) and status in _TRANSIENT_STATUS:
+        return True
+    import httpx  # 延迟导入:仅在异常分支走网络判定
+    return isinstance(exc, httpx.TransportError)
+
 
 class _LawRagClient(RagClient):
     """RagClient 子类:放行 contract_law 集合(基类只允许 api_ref/guide/experience)。
@@ -45,10 +65,33 @@ class _LawRagClient(RagClient):
 
 
 class LawStore:
-    def __init__(self, data_dir: Path = Path("data/contract-rag")):
+    def __init__(self, data_dir: Path = Path("data/contract-rag"),
+                 laws_dir: Path | None = None):
+        """data_dir 管向量库;laws_dir 给定时构造即 load_bundled(填 _exact 精确索引)。
+
+        laws_dir 用于生产运行时(API/run_review)加载内置权威法条源:校验层
+        verify_ref 只依赖 _exact,不依赖向量灌库,杜绝"未 seed 时校验层全降级
+        引用未能核验"的运行时空窗(审查 Critical #1)。
+        """
         self._client = _LawRagClient(data_dir)
         self._exact: dict[str, dict[str, str]] = {}  # law_name -> {article_no: text}
         self._domains: dict[str, str] = {}  # law_name -> domain(领域硬过滤用)
+        if laws_dir is not None:
+            self.load_bundled(laws_dir)
+
+    def load_bundled(self, laws_dir: Path) -> dict[str, dict]:
+        """从内置法条源目录 data/laws/*.md 加载精确索引(_exact/_domains),不灌向量。
+
+        逐条 parse_law_md(条号+原文+来源/领域),校验层按 law_name + article_no
+        取逐字原文,与 seed() 灌库共用同一解析入口,保证"索引原文 == 权威源文本"。
+        """
+        loaded: dict[str, dict] = {}
+        for md_path in sorted(laws_dir.glob("*.md")):
+            articles, meta = parse_law_md(md_path.read_text(encoding="utf-8"))
+            self._exact[meta["law_name"]] = {a.article_no: a.text for a in articles}
+            self._domains[meta["law_name"]] = meta["domain"]
+            loaded[meta["law_name"]] = {"count": len(articles), "errors": meta["errors"]}
+        return loaded
 
     def _law_names(self, contract_type: str) -> list[str]:
         domain = DOMAIN_ALIASES.get(contract_type, "")
@@ -65,10 +108,29 @@ class LawStore:
         docs = [a.text for a in articles]
         metas = [a.model_dump() | {"id": f"{law_name}:{a.article_no}"} for a in articles]
         if docs:
-            self._client.add_documents(_COLLECTION, docs, metas)
+            self._add_batched(docs, metas)
         self._exact[law_name] = {a.article_no: a.text for a in articles}
         self._domains[law_name] = meta["domain"]
         return {"law_name": law_name, "count": len(articles), "errors": meta["errors"]}
+
+    def _add_batched(self, docs: list[str], metas: list[dict]) -> None:
+        """分批 add_documents(嵌入服务单批上限 32,>32 触发 413)+ 瞬态退避重试。
+
+        每批 ≤ _BATCH 条;超限 413 / CUDA OOM 424 / 5xx / 连接失败按
+        0.5/1/2/4/8s 指数退避重试(共 _MAX_ATTEMPTS 次),永久错误立即上抛。
+        """
+        import time
+        for start in range(0, len(docs), _BATCH):
+            batch_docs = docs[start:start + _BATCH]
+            batch_metas = metas[start:start + _BATCH]
+            for attempt in range(_MAX_ATTEMPTS):
+                try:
+                    self._client.add_documents(_COLLECTION, batch_docs, batch_metas)
+                    break
+                except Exception as exc:
+                    if attempt >= _MAX_ATTEMPTS - 1 or not _retryable(exc):
+                        raise
+                    time.sleep(min(0.5 * 2 ** attempt, 8))
 
     def retrieve(self, query: str, contract_type: str = "", k: int = 5) -> list[dict]:
         names = self._law_names(contract_type)

@@ -16,7 +16,9 @@ from agents.contract_review_agent.store.law_store import LawStore
 
 
 def _default_law_store() -> LawStore:
-    return LawStore(data_dir=Path("data/contract-rag"))
+    return LawStore(
+        data_dir=Path("data/contract-rag"),
+        laws_dir=Path("agents/contract_review_agent/data/laws"))
 
 
 def build_agent() -> LawStore:

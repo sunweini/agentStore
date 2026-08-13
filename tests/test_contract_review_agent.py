@@ -92,6 +92,53 @@ def test_verify_ref_exact(tmp_path):
     assert s.verify_ref("测试劳动合同法", "不存在的条") is None
 
 
+def test_load_bundled_from_md_dir(tmp_path):
+    """LawStore(laws_dir=...) 构造即加载 md 精确索引,不 seed 也能 verify_ref(生产运行时关键)。"""
+    laws_dir = tmp_path / "laws"
+    laws_dir.mkdir()
+    (laws_dir / "test_law.md").write_text(MD, encoding="utf-8")
+    s = LawStore(data_dir=tmp_path / "rag", laws_dir=laws_dir)
+    assert s.verify_ref("测试劳动合同法", "第一条") == "用人单位应当依法支付劳动报酬。"
+    assert s.verify_ref("测试劳动合同法", "不存在的条") is None
+    assert s.list_laws()[0]["count"] == 2
+    assert s.list_laws()[0]["domain"] == "labor"
+
+
+def test_load_bundled_builtin_laws(tmp_path):
+    """内置 data/laws 三法:构造 LawStore 即核验通过(api.py/agent.py 生产 wiring 回归)。"""
+    laws_dir = (Path(__file__).resolve().parent.parent
+                / "agents/contract_review_agent/data/laws")
+    s = LawStore(data_dir=tmp_path / "rag", laws_dir=laws_dir)
+    names = {l["law_name"] for l in s.list_laws()}
+    assert names == {"中华人民共和国劳动法", "中华人民共和国劳动合同法", "中华人民共和国民法典"}
+    text = s.verify_ref("中华人民共和国劳动合同法", "第二十五条")
+    assert text and "违约金" in text, "内置源精确核验应返回逐字原文"
+
+
+def test_seed_batching_retry(tmp_path):
+    """_add_batched:>BATCH 条分批灌 + 413 瞬态退避重试(审查 Important #2,嵌入服务单批上限)。"""
+    from agents.contract_review_agent.store.law_store import _BATCH
+    s = LawStore(data_dir=tmp_path / "rag")
+    docs = [f"条款{i}" for i in range(41)]
+    metas = [{"id": f"L:{i}"} for i in range(41)]
+    batches: list[int] = []
+    calls = {"n": 0}
+
+    class Boom(RuntimeError):
+        status_code = 413
+
+    def fake(collection, docs_, metas_):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Boom()  # 首次调用模拟 413 → 应退避重试
+        batches.append(len(docs_))
+
+    s._client.add_documents = fake
+    s._add_batched(docs, metas)
+    assert batches == [_BATCH, _BATCH, 9], f"41 条应分 16+16+9,实测 {batches}"
+    assert all(b <= _BATCH for b in batches)
+
+
 # ---- Task 4 文件解析层:章节构建 + 文件解析(设计 §4.1) ----
 
 from pathlib import Path  # noqa: E402

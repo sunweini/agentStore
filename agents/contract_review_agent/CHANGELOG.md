@@ -5,6 +5,36 @@
 
 ---
 
+## v0.3.0 — 2026-08-13(Task 13:内置法条种子 + 校验层运行时可用性加固)
+
+### 新增
+
+- **data/laws/**:内置权威法条源(人工采集,逐字拷贝,严禁 LLM 生成)
+  - `labor_law.md`(劳动法 107 条,2018-12-29 修正)、`labor_contract_law.md`
+    (劳动合同法 98 条,2012 修正)、`civil_code_contract.md`(民法典合同编高频
+    89 条,2021-01-01 施行);每部含 `来源:` URL + `采集日期:` 可回查
+  - `.gitignore` 放行 `agents/contract_review_agent/data/` 入库(根 `data/` 仍忽略)
+- **`store/law_store.py` `load_bundled(laws_dir)`**:构造即从 `data/laws/*.md`
+  加载 `_exact` 精确索引(不灌向量);`LawStore.__init__(data_dir, laws_dir=None)`
+  新增 `laws_dir` 参数
+- **`seed()` 分批灌库**:> `_BATCH`(16)条自动分批,413/424/5xx/连接失败指数
+  退避重试(`_retryable` 判定,最多 6 次)——修复嵌入服务单批上限 32 撞 413
+- **api.py / agent.py**:`_law_store` / `_default_law_store()` 均传
+  `laws_dir` → 生产运行时校验层 `verify_ref` 不再因未 seed 全降级「引用未能核验」,
+  `GET /api/v1/laws` 返回内置三法
+- **scripts/seed_laws.py**:灌库后打印 `list_laws()` 摘要(核验 `_exact` 填充)
+- **测试**:`test_load_bundled_from_md_dir` / `test_load_bundled_builtin_laws`
+  (不 seed 也核验通过)/ `test_seed_batching_retry`(分批 + 413 重试)
+
+### 说明
+
+- 法条来源 mofcom.gov.cn(劳动/劳动合同法)、bjrd.gov.cn(民法典);
+  flk.npc.gov.cn 对直接 curl 不可达改用上述官方政务源(现行有效文本)。
+- 已知基础设施风险(超出本任务,报告另述):远端嵌入服务向量区分度不足 →
+  违约金等章节检索难以命中对应法条,statutory 结论被检索层阻断。
+
+---
+
 ## v0.2.0 — 2026-08-13(Task 11:独立计费/鉴权/配额)
 
 ### 新增
