@@ -258,3 +258,18 @@ def test_build_report_json_stats():
     data = build_report_json(reviews)
     assert data["stats"]["高风险"] == 0
     assert data["stats"]["提示"] == 1
+
+
+# ---- Task 9 F1 prompt 优化节点:mock LLM,不触真实 LLM(设计 §4.3) ----
+
+from unittest.mock import MagicMock  # noqa: E402
+from agents.contract_review_agent.graph.prompt_node import optimize_review_prompt  # noqa: E402
+
+
+def test_optimize_review_prompt_returns_text():
+    fake = MagicMock()
+    fake.invoke.return_value.content = (
+        "你是合同审核专家。\n一、审核范围…\n二、风险清单…\n三、输出格式…\n四、引用指引…")
+    out = optimize_review_prompt("劳动合同", "重点看违约金", llm=fake)
+    assert "审核" in out
+    assert fake.invoke.call_args is not None
