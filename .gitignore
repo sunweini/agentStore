@@ -7,6 +7,10 @@ data/kingdee-rag/
 data/kingdee-artifacts/
 data/kingdee-deliverables/
 
+# 法条种子数据例外(contract-review-agent 内置权威法条源,需入库)
+!agents/contract_review_agent/data/
+!agents/contract_review_agent/data/laws/
+
 # Python
 __pycache__/
 *.py[cod]
