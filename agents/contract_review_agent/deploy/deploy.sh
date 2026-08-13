@@ -18,8 +18,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 
 SSH_CMD=(ssh -o BatchMode=yes -p "$SSH_PORT" -i "$SSH_KEY" "$REMOTE_USER@$REMOTE_HOST")
 
-# compose 参数:默认生产 compose;COMPOSE_FILE 非空则追加覆盖文件
-_COMPOSE_ARGS=(-f agents/contract_review_agent/deploy/docker-compose.yml)
+# compose 参数:独立项目名 contract-review(避免与同机 sentiment/mcp-gateway 的
+# "deploy" 项目容器名冲突,如 deploy-api-1);默认生产 compose;COMPOSE_FILE 追加覆盖
+_COMPOSE_ARGS=(-p contract-review -f agents/contract_review_agent/deploy/docker-compose.yml)
 if [ -n "$COMPOSE_FILE" ]; then
   _COMPOSE_ARGS+=(-f "agents/contract_review_agent/deploy/$COMPOSE_FILE")
 fi

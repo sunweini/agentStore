@@ -15,6 +15,9 @@ langchain-openai==1.4.1
 langchain-huggingface==1.2.2
 langchain-chroma==1.1.0
 chromadb==1.5.9
+# numpy 钉 1.26(基线 x86-64 wheel):服务器 10.33.17.72 CPU 不支持 AVX2,
+# numpy 2.x 的 v2 基线 wheel 会崩溃(RuntimeError: NumPy built with X86_V2)。
+numpy==1.26.4
 langgraph==1.2.10
 python-dotenv==1.2.2
 fastapi==0.141.1
