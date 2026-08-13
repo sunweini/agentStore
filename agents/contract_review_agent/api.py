@@ -134,15 +134,17 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
     try:
         result = run_review(file_path, contract_type, prompt, law_store=_law_store)
     except Exception as exc:
-        logger.error("service=%s event=task_failed task_id=%s request_id=%s error=%s",
-                     _SERVICE, task_id, request_id, exc)
+        # 只记异常类型不记 str(exc):异常消息可能携带凭据/文件内容等敏感信息,
+        # 直落日志或 t["error"] 会经 result 端点泄露(审查 Important 凭据防护)。
+        logger.error("service=%s event=task_failed task_id=%s request_id=%s error_type=%s",
+                     _SERVICE, task_id, request_id, type(exc).__name__)
         with _lock:
             t = _tasks.get(task_id)
             cancelled = t is not None and t["status"] == "cancelled"
         if not cancelled:
             with _lock:
                 t["status"] = "failed"
-                t["error"] = f"internal_error: {exc}"
+                t["error"] = "internal_error"
                 t["result"] = None
                 t["progress"] = 1.0
         billing.cancel_pending(apikey, task_id)
@@ -175,12 +177,15 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
         billing.commit(apikey, task_id)
     except RuntimeError as exc:
         # commit 事务内 HTTPException(如 pending 不存在)被 common/db.transaction
-        # 吞为 RuntimeError:转失败态,result 置空(不返回成功报告),避免 pending 悬挂
-        logger.error("service=%s event=billing_commit_failed task_id=%s request_id=%s error=%s",
-                     _SERVICE, task_id, request_id, exc)
+        # 吞为 RuntimeError:转失败态,result 置空(不返回成功报告),避免 pending 悬挂。
+        # ⚠️ 只记 error_type、error 字段用通用码,绝不记 str(exc):billing.commit 的
+        # RuntimeError 消息可能含明文 apikey(如 "apikey xxx 不存在"),直落日志或
+        # error 字段即泄露凭据(审查 Important)。
+        logger.error("service=%s event=billing_commit_failed task_id=%s request_id=%s error_type=%s",
+                     _SERVICE, task_id, request_id, type(exc).__name__)
         with _lock:
             t["status"] = "failed"
-            t["error"] = f"commit_failed: {exc}"
+            t["error"] = "billing_commit_failed"
             t["result"] = None
             t["progress"] = 1.0
         Path(file_path).unlink(missing_ok=True)

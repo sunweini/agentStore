@@ -416,6 +416,12 @@ def test_review_background_exception_fallback(tmp_path, monkeypatch):
     assert s.status_code == 200
     assert s.json()["status"] == "failed"
     assert s.json()["progress"] == 1.0
+    # error 字段用通用码,不得含 str(exc)(审查 fix round 2:防凭据/敏感信息泄露)
+    r2 = TestClient(app).get(f"/api/v1/contract/result?task_id={task_id}",
+                             headers={"apikey": key})
+    assert r2.status_code == 200
+    assert r2.json()["result"]["error"] == "internal_error"
+    assert "boom" not in str(r2.json()), "error 字段不得含异常详情(防 apikey/敏感信息泄露)"
 
 
 def test_status_ownership_enforced(tmp_path, monkeypatch):
