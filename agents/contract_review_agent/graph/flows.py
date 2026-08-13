@@ -58,13 +58,20 @@ def _route_after_parse(state: AgentState) -> Literal["review", "end"]:
 
 
 def build_graph(law_store=None) -> Runnable:
-    """返回编译后的 LangGraph 图。law_store 为 None 时审核不注入法条片段(纯 mock 路径)。
+    """返回编译后的 LangGraph 图。law_store 缺省用内置法条库,校验层恒开启。
 
     Args:
-        law_store: LawStore 实例。None 时 review/verify 跳过法条检索与核验
-            (供纯 mock/无法条库环境);生产路径由 run_review 传入默认
-            data/contract-rag 法条库。
+        law_store: LawStore 实例。None 时使用默认 data/contract-rag + 内置
+            data/laws 法条库(等价 agent._default_law_store),保证任何入口
+            (含 langgraph.json 无参注册调用 `agent.py:build_graph`)构造的图
+            都不关闭引用校验层 —— 否则 langgraph server 跑图会静默跳过核验,
+            反幻觉铁律失效(终审 finding #6)。
     """
+    if law_store is None:
+        # 函数体内 import,避免 agent → flows 模块级循环 import
+        # (agent.py 顶层已 from flows import build_graph)。
+        from agents.contract_review_agent.agent import _default_law_store
+        law_store = _default_law_store()
     services = {"law_store": law_store}
 
     def _review(state: AgentState) -> dict:
@@ -73,8 +80,8 @@ def build_graph(law_store=None) -> Runnable:
 
     def _verify(state: AgentState) -> dict:
         from agents.contract_review_agent.graph.verify import verify_reviews
-        if services["law_store"] is None:
-            return {"chapter_reviews": state.get("chapter_reviews", [])}
+        # law_store 由 build_graph 兜底为非 None(默认法条库):不再存在
+        # "无 law_store 透传不核验"路径,任何构造路径校验层均开启。
         return {"chapter_reviews": verify_reviews(
             state.get("chapter_reviews", []), services["law_store"])}
 
