@@ -14,9 +14,10 @@ WORKDIR /app
 COPY agents/contract_review_agent/deploy/requirements-agent.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r /tmp/requirements.txt
 
-# 代码:本 agent + 共享层(common 含 llm/config/rag/db/otel)
+# 代码:本 agent + 共享层(common 含 llm/config/rag/db/otel)+ 测试页
 COPY common/ ./common/
 COPY agents/contract_review_agent/ ./agents/contract_review_agent/
+COPY web/ ./web/
 COPY pyproject.toml langgraph.json ./
 
 # 持久化挂点:data(contract-rag 法条向量库)、logs(LOG_DIR 落盘)

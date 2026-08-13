@@ -1,0 +1,8 @@
+# contract-review-agent 测试环境覆盖:端口 8001(避让线上 sentiment 8000),独立镜像 tag。
+# 用法:COMPOSE_FILE=docker-compose.test.yml IMAGE_TAG=test bash agents/contract_review_agent/deploy/deploy.sh
+# 其余配置(env_file/网络/卷)继承 deploy/docker-compose.yml 同机部署。
+services:
+  api:
+    image: contract-review-agent:${IMAGE_TAG:-test}
+    ports:
+      - "8001:8000"

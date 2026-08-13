@@ -38,6 +38,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, UploadFile, HTTPException
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from agents.contract_review_agent import billing, auth
@@ -48,6 +49,12 @@ _law_store = LawStore(
     data_dir=Path("data/contract-rag"),
     laws_dir=Path("agents/contract_review_agent/data/laws"))
 _tasks: dict[str, dict] = {}  # task_id -> {status, progress, result, error, apikey, request_id}
+
+
+@app.get("/contract-demo")
+def contract_demo():
+    """测试页(web/contract_demo.html),与 API 同源,免 CORS。"""
+    return FileResponse(Path("web/contract_demo.html"))
 _lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
