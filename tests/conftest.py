@@ -1,11 +1,11 @@
 """测试环境隔离。
 
-EMBEDDING_* 清理:真实环境 .env 可能把 EMBEDDING_PROVIDER 配成
-openai-compatible(远程服务),而 common.config 在导入时会把 .env 写入
-os.environ —— 若不清理,RagClient 相关测试会真连远程 embedding 服务
-(慢、依赖网络)。autouse 夹具在**每个测试前**清除 EMBEDDING_* 并清空
-_embedding_model 的 lru_cache,保证全部测试确定性走 huggingface 本地
-默认;env 分支的专项测试在用例内显式设置 EMBEDDING_* 并自行清理。
+嵌入模型跟随 .env:真实环境 EMBEDDING_PROVIDER=openai-compatible(远程
+Qwen3-Embedding-8B,10.33.17.234:32320),测试也用它(用户要求测试环境与
+生产一致)。本夹具把 common.config 读到的 EMBEDDING_* 注入 os.environ
+并清空 _embedding_model 的 lru_cache,保证确定性(不靠 load_dotenv 顺序);
+若 .env 未配 EMBEDDING_*,回落到 huggingface 本地默认。env 分支专项测试
+仍可在用例内显式覆盖并自行清理。
 """
 
 import pytest
@@ -14,15 +14,17 @@ from common import rag
 
 
 @pytest.fixture(autouse=True)
-def _clear_embedding_env(monkeypatch):
-    """清除 EMBEDDING_* 环境变量 + 清空嵌入模型单例缓存。"""
+def _sync_embedding_env(monkeypatch):
+    """注入 .env 的 EMBEDDING_* 配置(跟随生产)+ 清空嵌入模型单例缓存。"""
+    from common import config
+
     for key in (
         "EMBEDDING_PROVIDER",
         "EMBEDDING_MODEL",
         "EMBEDDING_BASE_URL",
         "EMBEDDING_API_KEY",
     ):
-        monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(key, config.get_env(key))
     rag._embedding_model.cache_clear()
     yield
     rag._embedding_model.cache_clear()
