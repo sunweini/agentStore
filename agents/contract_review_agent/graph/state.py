@@ -1,12 +1,38 @@
-"""graph 状态模型:AgentState + finding 数据模型。
+"""图状态与审核数据模型。"""
+from __future__ import annotations
 
-待实现(设计 §4.3):
-  - Finding:原文引用 / 风险类型(合规|权益|漏洞|歧义)/ 问题描述 / 改进建议 /
-            法律依据 list[LawRef(law_name, article_no, article_text)] /
-            confidence(statutory=有法律依据 | suggestion=仅提示)
-  - ChapterFinding:chapter + findings[]
-  - AgentState:文件元数据(名称/类型/大小)/ chapters / chapter_findings /
-               verify_refs 校验结果 / 最终报告(JSON + markdown)
+from typing import Literal, TypedDict
 
-设计见 docs/superpowers/specs/2026-08-13-contract-review-agent-design.md。
-"""
+from pydantic import BaseModel
+
+
+class LegalRef(BaseModel):
+    law_name: str
+    article_no: str
+    article_text: str
+
+
+class Finding(BaseModel):
+    原文引用: str
+    风险类型: Literal["合规", "权益", "漏洞", "歧义"]
+    问题描述: str
+    改进建议: str
+    法律依据: list[LegalRef] = []
+    confidence: Literal["statutory", "suggestion"] = "statutory"
+
+
+class ChapterReview(BaseModel):
+    chapter: str
+    findings: list[Finding]
+
+
+class AgentState(TypedDict):
+    contract_type: str
+    review_prompt: str
+    _file_path: str
+    _file_name: str
+    chapters: list[dict]
+    chapter_reviews: list[dict]
+    report: str
+    report_json: dict
+    error: str

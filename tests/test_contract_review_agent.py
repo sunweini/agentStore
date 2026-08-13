@@ -151,3 +151,22 @@ def test_ocr_image_bytes_joins_lines():
         m.return_value.json.return_value = {
             "words_result": [{"words": "第一条"}, {"words": "甲方应付款。"}]}
         assert ocr_client.ocr_image_bytes(b"img", "tok") == "第一条 甲方应付款。"
+
+
+# ---- Task 6 章节审核节点:mock LLM 返回固定 JSON,验证节点装配(设计 §4.3) ----
+
+from unittest.mock import MagicMock  # noqa: E402
+from agents.contract_review_agent.graph.state import ChapterReview, Finding, LegalRef  # noqa: E402
+from agents.contract_review_agent.graph.nodes import review_chapter  # noqa: E402
+
+
+def test_review_chapter_with_mock_llm():
+    fake = MagicMock()
+    fake.invoke.return_value.content = (
+        '{"chapter": "第一章", "findings": [{"原文引用": "违约赔 5%", '
+        '"风险类型": "合规", "问题描述": "可能超限", "改进建议": "调低", '
+        '"法律依据": [], "confidence": "suggestion"}]}')
+    review = review_chapter(fake, contract_type="劳动合同", chapter={
+        "title": "第一章", "text": "违约赔 5%。"}, review_prompt="请审核")
+    assert review["chapter"] == "第一章"
+    assert review["findings"][0]["confidence"] == "suggestion"
