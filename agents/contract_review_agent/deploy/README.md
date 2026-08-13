@@ -11,7 +11,7 @@
 | `requirements-agent.txt` | 精简依赖(无本地 OCR / 无 torch;含 python-docx/pypdf + Chroma 向量库) |
 | `docker-compose.yml` | api(8000),自包含,不动根 compose |
 | `init_tables.sql` | MySQL 建 `contract_api_keys` / `contract_billing_records` 两表 |
-| `deploy.sh` | rsync 上机 → build → up → 健康检查 |
+| `deploy.sh` | rsync 上机 → build → up → 健康检查 → 法条向量库 seed(空则灌) |
 
 ## 首次部署
 
@@ -43,7 +43,13 @@
 
 4. 本地仓库根执行:`bash agents/contract_review_agent/deploy/deploy.sh`(host/port/key 可用 `REMOTE_HOST=/REMOTE_USER=/SSH_PORT=/SSH_KEY=` 环境变量覆盖)。
 
-> ⚠️ 内置法条源 `agents/contract_review_agent/data/laws/*.md` 随代码 rsync/COPY 进镜像与部署目录(已放行 git),运行时 `LawStore(laws_dir=...)` 构造即加载精确索引;生产**无需**手工 seed。法条向量检索(审核节点的语义检索)依赖远端 embedding 服务可达,不可达时校验层仍可精确核验、审核节点法条片段为空降级 suggestion(不崩)。
+> ⚠️ 法条数据分两类,职责分离:
+> - **精确索引(校验层)**:内置法条源 `agents/contract_review_agent/data/laws/*.md` 随代码
+>   rsync/COPY 进镜像与部署目录(已放行 git),运行时 `LawStore(laws_dir=...)` 构造即加载,**无需 seed**。
+> - **向量库(审核节点语义检索)**:`deploy.sh` 第 6 步健康检查后自动灌库 —— 向量库空则
+>   `seed_laws --if-empty` 灌内置三法(幂等,非空跳过)。依赖远端 embedding 服务
+>   (`EMBEDDING_BASE_URL`)可达;不可达时 deploy 不中断(打警告),校验层仍可精确核验、
+>   审核节点法条片段为空降级 suggestion(不崩)。
 
 ## 端口
 
@@ -53,7 +59,30 @@
 
 - 应用日志:`/home/logs/contract-review-agent/api.log`(容器 `LOG_DIR=/app/logs`)
 - docker 日志:json-file 10MB×3,`docker logs <容器>`
-- 数据:`<部署目录>/data/contract-rag`(法条向量库,容器重启不丢;换 embedding 模型后须 drop 重灌)
+- 数据:`<部署目录>/data/contract-rag`(法条向量库;compose 把仓库根 `data/` bind-mount 到容器 `/app/data`,重启不丢、容器内可写,deploy 可对其 seed);deploy.sh 第 6 步在向量库空时自动灌;换 embedding 模型后须 drop 该目录重灌(deploy 下次检测到空会自动补)
+
+## 法条向量库 seed
+
+法条分两类数据,语义检索(向量)与精确核验(索引)职责分离:
+
+- **精确索引(校验层)**:`LawStore(laws_dir=...)` 构造即从内置 `data/laws/*.md` 加载,随代码分发,无 seed 依赖。
+- **向量库(审核节点语义检索)**:`deploy.sh` 第 6 步健康检查后自动灌库 —— 检测到向量库为空时执行 `seed_laws --if-empty`(幂等:非空跳过),灌内置三法(~294 条)。
+
+可选初始化方案(任选其一,推荐①):
+
+1. **seed(推荐,幂等)**:`deploy.sh` 已内置(第 6 步);也可手动:
+   ```bash
+   docker compose -f agents/contract_review_agent/deploy/docker-compose.yml exec -T api \
+     python -m agents.contract_review_agent.scripts.seed_laws \
+     --data-dir /app/data/contract-rag \
+     --laws-dir /app/agents/contract_review_agent/data/laws --if-empty
+   ```
+2. **直接拷贝 dev 的 `data/contract-rag`**:把 dev 机已灌好的向量目录拷贝到生产
+   `<部署目录>/data/contract-rag`。**前提**:生产 `EMBEDDING_*` 配置与 dev **完全一致**
+   (同模型同 base_url),否则向量空间不匹配、检索无意义,须重灌。
+
+> seed 依赖远端 embedding 服务(`EMBEDDING_BASE_URL`)可达;不可达时 deploy 不中断
+> (第 6 步打警告),校验层仍可精确核验,仅语义检索为空,可修复后重跑 seed。
 
 ## 回滚
 

@@ -150,6 +150,15 @@ class LawStore:
     def verify_ref(self, law_name: str, article_no: str) -> str | None:
         return self._exact.get(law_name, {}).get(article_no)
 
+    def vector_count(self) -> int:
+        """向量库已灌条数(Chroma collection 文档数)。0 表示尚未 seed。
+
+        部署脚本据此判断是否需灌库(seed_laws --if-empty):只调 chromadb
+        公开 API `get()`(空库返回空 ids),不触发嵌入模型/嵌入服务。
+        """
+        store = self._client._store(_COLLECTION)
+        return len(store.get().get("ids") or [])
+
     def list_laws(self) -> list[dict]:
         return [
             {"law_name": name, "domain": domain,
