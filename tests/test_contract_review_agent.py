@@ -38,3 +38,55 @@ def test_parse_law_md_skips_malformed_article():
 def test_domain_aliases_contract_type():
     assert DOMAIN_ALIASES["劳动合同"] == "labor"
     assert DOMAIN_ALIASES["买卖"] == "contract"
+
+
+# ---- 法条库(LawStore):Chroma 向量检索 + 源文件精确核验(设计 §4.2) ----
+
+
+from pathlib import Path  # noqa: E402
+
+from agents.contract_review_agent.store.law_store import LawStore  # noqa: E402
+
+MD = """# 测试劳动合同法
+来源: https://example.com/law
+采集日期: 2026-08-13
+领域: labor
+
+## 第一条
+用人单位应当依法支付劳动报酬。
+
+## 第二十条
+违约金不得超过实际损失。"""
+
+
+def _store(tmp_path: Path) -> LawStore:
+    s = LawStore(data_dir=tmp_path / "rag")
+    s.seed(MD)
+    return s
+
+
+def test_seed_and_list(tmp_path):
+    s = _store(tmp_path)
+    laws = s.list_laws()
+    assert laws[0]["law_name"] == "测试劳动合同法"
+    assert laws[0]["count"] == 2
+    assert laws[0]["domain"] == "labor"
+
+
+def test_retrieve_domain_filter(tmp_path):
+    s = _store(tmp_path)
+    hits = s.retrieve("违约金过高", "劳动合同", k=3)
+    assert hits, "应命中违约金条款"
+    assert any("违约金" in h["text"] for h in hits)
+
+
+def test_retrieve_no_filter_when_unknown_type(tmp_path):
+    s = _store(tmp_path)
+    hits = s.retrieve("违约金", "未知类型", k=3)
+    assert hits
+
+
+def test_verify_ref_exact(tmp_path):
+    s = _store(tmp_path)
+    assert s.verify_ref("测试劳动合同法", "第一条") == "用人单位应当依法支付劳动报酬。"
+    assert s.verify_ref("测试劳动合同法", "不存在的条") is None
