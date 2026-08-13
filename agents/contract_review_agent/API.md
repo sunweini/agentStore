@@ -1,12 +1,13 @@
 # 合同审核 Agent — 接口文档
 
-版本:v0.4.0(2026-08-13)
+版本:v0.5.0(2026-08-13)
 部署:尚未上机生产(部署套件就绪,见 [deploy/README.md](deploy/README.md));本地/服务器 API 端口 `8000`。
 
 ## 0. 版本历史
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.5.0 | 2026-08-13 | **百度 OCR 接线**:扫描件(无文本层 pdf)自动走云端 OCR 分章后照常审核;缺凭据 `ocr_unconfigured`,失败 `ocr_failed`;`ocr_image_bytes` base64 bytes→str 修复 |
 | v0.4.0 | 2026-08-13 | **文档收尾 + 部署套件 + minor 清理**:API 文档、Dockerfile/compose/deploy.sh/init_tables.sql、审核时间动态化、法条 source_url 修正 |
 | v0.3.0 | 2026-08-13 | 内置法条种子(三法 294 条)+ 校验层运行时可用性加固(_exact 构造即加载 + seed 分批退避重试) |
 | v0.2.1 | 2026-08-13 | **FastAPI 接口**:review/status/result/stop/prompt/laws/apikeys + health,SSE 章节进度 + 独立配额鉴权 |
@@ -227,7 +228,7 @@ curl "http://localhost:8000/api/v1/contract/status?task_id=9f3c2b1a4d5e6f7a" \
 | `法律依据` | `[{law_name, article_no, article_text}]`,已核验的逐字原文 |
 | `confidence` | `statutory`(有已核验依据)/ `suggestion`(仅提示,无强制依据) |
 
-**响应 200 — failed**:`result` 为 `{"error": "<错误码>"}`,如 `internal_error` / `too_long` / `unsupported` / `needs_ocr` / `billing_commit_failed`。
+**响应 200 — failed**:`result` 为 `{"error": "<错误码>"}`,如 `internal_error` / `too_long` / `unsupported` / `ocr_unconfigured` / `ocr_failed` / `billing_commit_failed`。
 
 **错误**:`401`、`404`、`409 {"detail":"任务未完成"}`(running/cancelled 时取)
 
@@ -394,4 +395,4 @@ curl -X DELETE http://localhost:8000/api/v1/apikeys/sk-9f3c2b1a4d5e6f7a \
 - 单次审核耗时取决于文件章节数与 LLM 响应,典型几十秒至数分钟
 - `review` SSE 每 0.5s 推一次进度;也可用 `status`/`result` 轮询替代
 - 文件解析上限:≤2MB 且正文 ≤5 万字(超限报错并提示分段;暂不支持超长文分段)
-- 扫描件(无文本层 pdf)当前返回 `needs_ocr` 错误(流水线未接线 OCR);`utils/ocr_client.py` 已封装百度云端 OCR,**接线为后续版本**
+- 扫描件(无文本层 pdf)自动走**百度云端 OCR** 提取文本后照常审核:需在 `.env` 配 `BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`;未配凭据任务返回 `ocr_unconfigured`,OCR 取 token / 识别失败返回 `ocr_failed`

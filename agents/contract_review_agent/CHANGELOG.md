@@ -5,6 +5,43 @@
 
 ---
 
+## v0.5.0 — 2026-08-13(Task 15:百度 OCR 接线)
+
+### 新增
+
+- **`utils/ocr_client.py`**
+  - 修复 `ocr_image_bytes` base64 bytes→str(`base64.b64encode(img).decode("ascii")`;
+    百度 API 需 base64 **字符串**,传 bytes 会 400)
+  - 新增 `get_token()`:从 `common.config` 读 `BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`,
+    缺任一返回空串(调用方据此报 `ocr_unconfigured`);凭据不进 git 不进日志
+- **`graph/flows.py` `_parse_node`**:捕获 `NeedsOcrError` 后接线百度云端 OCR
+  - 无 token(缺凭据)→ `ocr_unconfigured`(不调 OCR)
+  - 有 token → `ocr_pdf_pages(file_path, token)` → 复用 `_looks_like_heading` 启发式
+    分章(标题行 level=1 / 正文 level=0)→ `build_chapters` 产出 chapters
+  - 取 token 失败 / OCR 识别异常 / 返回空文本 → `ocr_failed`(结构化日志只记
+    error_type,不记 str(exc),防文件内容/接口返回敏感信息泄露)
+- **测试**(tests/test_contract_review_agent.py 尾部):`get_token` 缺凭据返回空 /
+  有凭据换 token / base64 str 修复回归 / parse 捕获 NeedsOcrError 后 OCR 产出章节 /
+  无 token 不调 OCR / OCR 抛异常 / OCR 空文本,全 mock 不真调百度
+
+### 说明
+
+- `api.py` 无需改动:错误码路由已通用(error 字符串透传),`ocr_unconfigured` /
+  `ocr_failed` 直接透出前端(result 端点 `{"error": ...}`)。
+- OCR 文本质量调优(识别精度 / 分章)为后续版本,当前仅启发式分章即可。
+- 文档同步:CLAUDE.md / API.md 移除"OCR 待接线"措辞,改为已接线。
+
+### Follow-up(未实现,仅登记)
+
+- **审核节点非 JSON 重试**:`graph/nodes.py` review 节点当前无畸形输出重试;
+  spec §8 承诺"LLM 输出非 JSON → 重试(复用 sentiment 重试预算,上限 3 次)"待实现
+
+### 测试
+
+- `pytest tests/test_contract_review_agent.py -v` 全量绿
+
+---
+
 ## v0.4.0 — 2026-08-13(Task 14:文档收尾 + 部署套件 + minor 清理)
 
 ### 新增

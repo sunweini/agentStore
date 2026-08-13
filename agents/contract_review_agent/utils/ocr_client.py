@@ -22,9 +22,24 @@ def get_baidu_token(api_key: str, secret_key: str) -> str:
     return resp.json()["access_token"]
 
 
+def get_token() -> str:
+    """从 common.config 读百度 OCR 凭据并换取 access_token。
+
+    缺 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY 任一返回空串(调用方据此报
+    ocr_unconfigured)。凭据只经 common.config 读取(.env / 环境变量),不进
+    git 不进日志(与 api.py 防凭据泄露约定一致)。
+    """
+    from common.config import get_env
+    api_key = get_env("BAIDU_OCR_API_KEY")
+    secret_key = get_env("BAIDU_OCR_SECRET_KEY")
+    if not api_key or not secret_key:
+        return ""
+    return get_baidu_token(api_key, secret_key)
+
+
 def ocr_image_bytes(img: bytes, token: str) -> str:
     resp = httpx.post(_OCR_URL, params={"access_token": token},
-                      data={"image": base64.b64encode(img)}, timeout=60)
+                      data={"image": base64.b64encode(img).decode("ascii")}, timeout=60)
     resp.raise_for_status()
     data = resp.json()
     words = [w["words"] for w in data.get("words_result", [])]

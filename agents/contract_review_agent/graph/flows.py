@@ -2,13 +2,13 @@
 
 图结构(设计 §3,与 sentiment 同风格):
   START → parse → review → verify → summarize → END
-  parse:      文件解析层(docx / pdf 文本层 / 无文本层 OCR 标记)→ Document{chapters[]}
+  parse:      文件解析层(docx / pdf 文本层 / 无文本层走百度云端 OCR)→ Document{chapters[]}
   review:     逐章检索法条 → LLM(temperature=0.1)审核 → chapter_reviews
   verify:     引用校验层(核心反幻觉):条号存在 + 引文 fuzzy match,失败降级
   summarize:  合并 findings → 风险排序 → JSON + markdown 报告(声明法条库版本)
 
-parse 失败条件路由:needs_ocr / too_long / unsupported → END(错误写入 state["error"],
-不中断图,与 sentiment"单步失败标 error 不中断"约定一致)。
+parse 失败条件路由:too_long / unsupported / ocr_unconfigured / ocr_failed → END
+(错误写入 state["error"],不中断图,与 sentiment"单步失败标 error 不中断"约定一致)。
 
 设计见 docs/superpowers/specs/2026-08-13-contract-review-agent-design.md。
 """
@@ -37,7 +37,7 @@ def _parse_node(state: AgentState, services: dict) -> dict:
     try:
         doc = parse_document(state["_file_path"])
     except NeedsOcrError:
-        return {"error": "needs_ocr"}
+        return _ocr_parse(state)
     except ContractTooLongError:
         return {"error": "too_long"}
     except (UnsupportedTypeError, FileNotFoundError):
@@ -51,6 +51,46 @@ def _parse_node(state: AgentState, services: dict) -> dict:
                      _SERVICE, state.get("_file_name", ""), type(exc).__name__)
         return {"error": "unsupported"}
     return {"chapters": [c.model_dump() for c in doc.chapters]}
+
+
+def _ocr_parse(state: AgentState) -> dict:
+    """NeedsOcrError 分支:扫描件 pdf 走百度云端 OCR 提取文本后照常分章。
+
+    缺凭据(BAIDU_OCR_* 未配)→ ocr_unconfigured(不调 OCR);取 token 失败 /
+    OCR 调用异常 / 返回空文本 → ocr_failed。结构化日志只记 error_type 不记
+    str(exc):异常详情可能含文件内容/接口返回等敏感信息。OCR 文本质量调优
+    (识别精度/分章)为后续版本,此处复用 _looks_like_heading 启发式分章即可。
+    """
+    from agents.contract_review_agent.utils import ocr_client
+    from agents.contract_review_agent.utils.chapterizer import build_chapters
+    from agents.contract_review_agent.utils.document_parser import _looks_like_heading
+
+    try:
+        token = ocr_client.get_token()
+    except Exception as exc:
+        logger.error("service=%s event=ocr_token_failed file_name=%s error_type=%s",
+                     _SERVICE, state.get("_file_name", ""), type(exc).__name__)
+        return {"error": "ocr_failed"}
+    if not token:
+        return {"error": "ocr_unconfigured"}
+    try:
+        text = ocr_client.ocr_pdf_pages(state["_file_path"], token)
+    except Exception as exc:
+        logger.error("service=%s event=ocr_failed file_name=%s error_type=%s",
+                     _SERVICE, state.get("_file_name", ""), type(exc).__name__)
+        return {"error": "ocr_failed"}
+    if not text or not text.strip():
+        logger.warning("service=%s event=ocr_failed file_name=%s error_type=empty",
+                       _SERVICE, state.get("_file_name", ""))
+        return {"error": "ocr_failed"}
+    blocks: list[tuple[str, int]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        blocks.append((line, 1 if _looks_like_heading(line) else 0))
+    chapters = build_chapters(blocks)
+    return {"chapters": [c.model_dump() for c in chapters]}
 
 
 def _route_after_parse(state: AgentState) -> Literal["review", "end"]:

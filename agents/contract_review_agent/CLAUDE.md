@@ -27,9 +27,9 @@ START → parse → review_chapters → verify_refs → summarize → END
 | [graph/nodes.py](graph/nodes.py) | parse / review_chapters / summarize 节点(LLM 强制 JSON,temp 固定 0.1) |
 | [graph/verify.py](graph/verify.py) | **引用校验层(核心)**:条号存在 + 引文 fuzzy match(≥0.8),失败降级 suggestion;纯代码无 LLM |
 | [graph/flows.py](graph/flows.py) | 图构建:parse → review_chapters → verify_refs → summarize 顺序边 |
-| [utils/document_parser.py](utils/document_parser.py) | docx(python-docx)/ pdf(pypdf 文本层,无文本层抛 NeedsOcrError→needs_ocr)→ Document{chapters[]},≤2MB/≤5 万字校验 |
+| [utils/document_parser.py](utils/document_parser.py) | docx(python-docx)/ pdf(pypdf 文本层,无文本层抛 NeedsOcrError→流水线转百度 OCR)→ Document{chapters[]},≤2MB/≤5 万字校验 |
 | [utils/chapterizer.py](utils/chapterizer.py) | 章节树构建:标题层级识别,无标题降级单章全文 |
-| [utils/ocr_client.py](utils/ocr_client.py) | 百度智能云通用文字识别封装(**已封装待接线**;当前无文本层 pdf 返回 `needs_ocr`,OCR 接线为后续版本) |
+| [utils/ocr_client.py](utils/ocr_client.py) | 百度智能云通用文字识别封装(已接线:`get_token` 换 token + `ocr_pdf_pages` 逐页 OCR;缺凭据返回 `ocr_unconfigured`,失败 `ocr_failed`) |
 | [store/law_store.py](store/law_store.py) | 法条库:data/laws/*.md 权威真源 + Chroma 向量检索;语义检索(审核)+ 精确核验(校验层)两路径 |
 | [store/task_store.py](store/task_store.py) | 任务/报告存储(JSON 文件库,复用 sentiment scheme_store 模式) |
 | [scripts/seed_laws.py](scripts/seed_laws.py) | 法条灌库:md → 条目(条号+原文)→ Chroma,记录来源 URL + 采集日期 |
@@ -41,12 +41,12 @@ START → parse → review_chapters → verify_refs → summarize → END
 - **用户补充法条**:`POST /api/v1/laws/upload`(md/txt 纯文本)→ 解析条目灌库;条号重复覆盖(同 law_name + article_no 唯一)。
 - **改审核 prompt**:`graph/nodes.py` 的 review_chapters 节点(F1 产出的结构化 prompt 或用户审核要求 + 检索法条片段注入;ChatPromptTemplate 是 f-string 语法,JSON 样例 `{}` 转义 `{{}}`,见 dev-standards §7.2)。
 - **改引用校验阈值**:`graph/verify.py`(条号存在性 + 引文 fuzzy match 相似度阈值,difflib ratio ≥ 0.8)。
-- **接百度 OCR(后续版本)**:`utils/ocr_client.py` 已封装待接线,当前流水线不调用 OCR(无文本层 pdf 返回 `needs_ocr`)。接线时:`.env` 配 `BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`(凭据不进 git);并修复 `ocr_image_bytes` 的 base64 bytes→str(见 CHANGELOG follow-up)。
+- **配百度 OCR**:`.env` 配 `BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`(凭据不进 git);扫描件(无文本层 pdf)自动走百度云端 OCR 分章后照常审核;缺凭据返回 `ocr_unconfigured`,OCR 失败返回 `ocr_failed`。
 - **配独立计费/鉴权**:`.env` 的 `MYSQL_URL`(agentstore 库,独立表 contract_api_keys/contract_billing_records)+ `ADMIN_APIKEY`;存储访问统一走 `common/db.py`(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。
 - **配 embedding 模型**:`.env` 的 `EMBEDDING_*` 组(默认 huggingface 本地 bge-small-zh-v1.5;换模型后必须 drop `data/contract-rag` 重灌)。
 - **跑测试**:`pytest tests/test_contract_review_agent.py -v`(解析/校验层/seed/计费/接口单测,SQLite 后端;图/端到端需外部服务)。
 - **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
-  `agents/contract_review_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v0.4.0 → 下版 v0.5);
+  `agents/contract_review_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v0.5.0 → 下版 v0.6);
   纯项目级(common/依赖)→ 根 `CHANGELOG.md` 项目级区。
 - **启动 API**:`uvicorn agents.contract_review_agent.api:app --reload`(配额/计费功能需配 MYSQL_URL)。
 
@@ -54,7 +54,7 @@ START → parse → review_chapters → verify_refs → summarize → END
 
 - **反幻觉铁律**:审核节点只允许引用检索返回的法条片段;校验层逐条核验;任何无法核验的内容不进入 statutory 结论,降级 suggestion 并在报告标注;输出报告声明法条库版本。法条文本只来自 `data/laws/` 权威真源,严禁编造。
 - **temperature**:F1 ≤ 0.2,F2 固定 0.1(经 `common/llm.py` 工厂,不直接 new)。
-- **大小限制**:文件 ≤2MB 且正文 ≤5 万字,超限明确报错 `CONTRACT_TOO_LONG`,提示分段;暂不支持超长文分段审核;非 docx/pdf 报 `UNSUPPORTED_TYPE`;扫描件(无文本层 pdf)返回 `needs_ocr`(OCR 未接线,后续版本)。
+- **大小限制**:文件 ≤2MB 且正文 ≤5 万字,超限明确报错 `CONTRACT_TOO_LONG`,提示分段;暂不支持超长文分段审核;非 docx/pdf 报 `UNSUPPORTED_TYPE`;扫描件(无文本层 pdf)自动走百度云端 OCR(需 `.env` 配 `BAIDU_OCR_*`;缺凭据 `ocr_unconfigured`,失败 `ocr_failed`)。
 - **独立计费/鉴权**:计费/鉴权不上提 common/、不跨 agent import(设计 §5 决策记录:用户明确要求"单独做,不复用")。
 - **langchain MCP 铁律**:开发前必须查 docs-langchain / reference-langchain MCP 确认 API 用法,禁止凭记忆写 API(见根 CLAUDE.md)。
 - **LLM 畸形输出重试(spec §8 承诺,待实现)**:非 JSON 输出重试(复用 sentiment 重试预算,上限 3 次);当前 review 节点无重试,见 CHANGELOG follow-up。

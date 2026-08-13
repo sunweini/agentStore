@@ -493,3 +493,106 @@ def test_status_ownership_enforced(tmp_path, monkeypatch):
                      headers={"apikey": owner}).status_code == 200
     finally:
         api_module._tasks.pop("t_own", None)
+
+
+# ---- Task 15 OCR 接线:NeedsOcrError → 百度云端 OCR → 分章(全 mock,不真调百度) ----
+
+import base64  # noqa: E402
+import agents.contract_review_agent.graph.flows as flows  # noqa: E402
+from agents.contract_review_agent.utils import ocr_client  # noqa: E402
+from agents.contract_review_agent.utils.document_parser import NeedsOcrError  # noqa: E402
+
+
+def _force_needs_ocr(path):
+    raise NeedsOcrError("PDF 无文本层,需要 OCR")
+
+
+def _ocr_state():
+    return {"_file_path": "/tmp/scan.pdf", "_file_name": "scan.pdf"}
+
+
+def _patch_needs_ocr(monkeypatch):
+    """让 parse_document 恒抛 NeedsOcrError,触发 _parse_node 的 OCR 分支。"""
+    monkeypatch.setattr(
+        "agents.contract_review_agent.utils.document_parser.parse_document",
+        _force_needs_ocr)
+
+
+def test_get_token_missing_creds_returns_empty(monkeypatch):
+    """缺 BAIDU_OCR_* 任一 → get_token 返回空串,不发起网络请求。"""
+    monkeypatch.delenv("BAIDU_OCR_API_KEY", raising=False)
+    monkeypatch.delenv("BAIDU_OCR_SECRET_KEY", raising=False)
+    assert ocr_client.get_token() == ""
+
+
+def test_get_token_with_creds(monkeypatch):
+    """配了凭据 → get_token 走 get_baidu_token 换 access_token。"""
+    monkeypatch.setenv("BAIDU_OCR_API_KEY", "ak")
+    monkeypatch.setenv("BAIDU_OCR_SECRET_KEY", "sk")
+    with patch("httpx.post") as m:
+        m.return_value.status_code = 200
+        m.return_value.json.return_value = {"access_token": "tok-abc"}
+        assert ocr_client.get_token() == "tok-abc"
+
+
+def test_ocr_image_bytes_sends_base64_str():
+    """base64 编码必须转成 str 再传(Baidu API 收 bytes 会 400;修复回归)。"""
+    with patch("httpx.post") as m:
+        m.return_value.status_code = 200
+        m.return_value.json.return_value = {"words_result": []}
+        ocr_client.ocr_image_bytes(b"\x89PNG", "tok")
+        sent = m.call_args.kwargs["data"]["image"]
+        assert isinstance(sent, str), "image 字段必须是 base64 字符串,不能是 bytes"
+        assert base64.b64decode(sent) == b"\x89PNG"
+
+
+def test_parse_node_ocr_with_token(monkeypatch):
+    """NeedsOcrError → 有 token → OCR 文本 → 启发式分章产出 chapters(不返 error)。"""
+    _patch_needs_ocr(monkeypatch)
+    monkeypatch.setattr(ocr_client, "get_token", lambda: "tok-abc")
+    monkeypatch.setattr(ocr_client, "ocr_pdf_pages",
+                        lambda path, token: "第一条 总则\n本合同受中华人民共和国法律管辖,双方因履行本合同发生争议时应友好协商解决。\n第二条 价款")
+    out = flows._parse_node(_ocr_state(), {})
+    assert out.get("error", "") == ""
+    assert out["chapters"], "OCR 文本应产出章节"
+    assert out["chapters"][0]["title"] == "第一条 总则"
+    assert "法律管辖" in out["chapters"][0]["text"]
+    assert out["chapters"][1]["title"] == "第二条 价款"
+
+
+def test_parse_node_ocr_no_token(monkeypatch):
+    """无 token(缺凭据)→ ocr_unconfigured,且不调 OCR。"""
+    _patch_needs_ocr(monkeypatch)
+    monkeypatch.setattr(ocr_client, "get_token", lambda: "")
+    called = {"n": 0}
+
+    def _should_not_call(path, token):
+        called["n"] += 1
+        raise AssertionError("无 token 不应调用 ocr_pdf_pages")
+
+    monkeypatch.setattr(ocr_client, "ocr_pdf_pages", _should_not_call)
+    out = flows._parse_node(_ocr_state(), {})
+    assert out == {"error": "ocr_unconfigured"}
+    assert called["n"] == 0
+
+
+def test_parse_node_ocr_failed_on_exception(monkeypatch):
+    """OCR 抛异常 → ocr_failed(结构化日志只记 error_type,不泄露 str(exc))。"""
+    _patch_needs_ocr(monkeypatch)
+    monkeypatch.setattr(ocr_client, "get_token", lambda: "tok-abc")
+
+    def _boom(path, token):
+        raise RuntimeError("baidu 500 secret-payload")
+
+    monkeypatch.setattr(ocr_client, "ocr_pdf_pages", _boom)
+    out = flows._parse_node(_ocr_state(), {})
+    assert out == {"error": "ocr_failed"}
+
+
+def test_parse_node_ocr_failed_on_empty(monkeypatch):
+    """OCR 返回空文本 → ocr_failed(不产出空章节)。"""
+    _patch_needs_ocr(monkeypatch)
+    monkeypatch.setattr(ocr_client, "get_token", lambda: "tok-abc")
+    monkeypatch.setattr(ocr_client, "ocr_pdf_pages", lambda path, token: "   \n  ")
+    out = flows._parse_node(_ocr_state(), {})
+    assert out == {"error": "ocr_failed"}
