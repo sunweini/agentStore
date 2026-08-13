@@ -14,6 +14,7 @@ httpx                   # agent 侧编译服务客户端(compile_client)
 python-docx             # 合同审核 agent docx 解析
 pypdf                   # 合同审核 agent pdf 文本层
 pymupdf                 # 合同审核 agent 扫描件 pdf 逐页渲染(OCR 云端识别)
+python-multipart        # FastAPI multipart 文件上传(contract review 接口必需)
 
 # 开发/测试
 pytest
