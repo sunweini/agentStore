@@ -76,6 +76,7 @@ class LawStore:
         self._client = _LawRagClient(data_dir)
         self._exact: dict[str, dict[str, str]] = {}  # law_name -> {article_no: text}
         self._domains: dict[str, str] = {}  # law_name -> domain(领域硬过滤用)
+        self._source_urls: dict[str, str] = {}  # law_name -> 来源 URL(seed/load_bundled 填)
         if laws_dir is not None:
             self.load_bundled(laws_dir)
 
@@ -90,6 +91,7 @@ class LawStore:
             articles, meta = parse_law_md(md_path.read_text(encoding="utf-8"))
             self._exact[meta["law_name"]] = {a.article_no: a.text for a in articles}
             self._domains[meta["law_name"]] = meta["domain"]
+            self._source_urls[meta["law_name"]] = meta["source_url"]
             loaded[meta["law_name"]] = {"count": len(articles), "errors": meta["errors"]}
         return loaded
 
@@ -111,6 +113,7 @@ class LawStore:
             self._add_batched(docs, metas)
         self._exact[law_name] = {a.article_no: a.text for a in articles}
         self._domains[law_name] = meta["domain"]
+        self._source_urls[law_name] = meta["source_url"]
         return {"law_name": law_name, "count": len(articles), "errors": meta["errors"]}
 
     def _add_batched(self, docs: list[str], metas: list[dict]) -> None:
@@ -150,7 +153,7 @@ class LawStore:
     def list_laws(self) -> list[dict]:
         return [
             {"law_name": name, "domain": domain,
-             "count": len(articles), "source_url": next(iter(articles.values()), "")}
+             "count": len(articles), "source_url": self._source_urls.get(name, "")}
             for name, domain, articles in self._summarize()
         ]
 

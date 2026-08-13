@@ -14,11 +14,16 @@ parse 失败条件路由:needs_ocr / too_long / unsupported → END(错误写入
 """
 from __future__ import annotations
 
+import logging
+from datetime import datetime
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
 from agents.contract_review_agent.graph.state import AgentState
+
+logger = logging.getLogger(__name__)
+_SERVICE = "contract_review_agent"
 
 
 def _parse_node(state: AgentState, services: dict) -> dict:
@@ -37,9 +42,13 @@ def _parse_node(state: AgentState, services: dict) -> dict:
         return {"error": "too_long"}
     except (UnsupportedTypeError, FileNotFoundError):
         return {"error": "unsupported"}
-    except Exception:
+    except Exception as exc:
         # 损坏/伪造文件等解析失败(python-docx/pypdf 非四种声明异常):
         # 归为不支持类型,条件路由到 END,不让未知异常中断整图。
+        # 结构化日志(OBS-CORE-001)只记 error_type 不记 str(exc):解析异常消息
+        # 可能携带文件内容/路径等敏感信息(与 api.py 防凭据泄露约定一致)。
+        logger.error("service=%s event=parse_unexpected_error file_name=%s error_type=%s",
+                     _SERVICE, state.get("_file_name", ""), type(exc).__name__)
         return {"error": "unsupported"}
     return {"chapters": [c.model_dump() for c in doc.chapters]}
 
@@ -76,7 +85,7 @@ def build_graph(law_store=None) -> Runnable:
         )
         meta = {"合同名称": state.get("_file_name", ""),
                 "法条库版本": "内置 v1",
-                "审核时间": "2026-08-13"}
+                "审核时间": datetime.now().strftime("%Y-%m-%d %H:%M")}
         reviews = state.get("chapter_reviews", [])
         return {"report": build_report(reviews, meta),
                 "report_json": build_report_json(reviews)}
