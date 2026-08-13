@@ -367,3 +367,22 @@ def test_run_review_too_long():
         assert result["error"] in ("too_long", "unsupported")
     finally:
         Path(p).unlink(missing_ok=True)
+
+
+# ---- Task 12 FastAPI 接口:TestClient 冒烟(health / 未鉴权 401/422) ----
+
+from fastapi.testclient import TestClient  # noqa: E402
+from agents.contract_review_agent.api import app  # noqa: E402
+
+
+def test_health():
+    c = TestClient(app)
+    assert c.get("/health").status_code == 200
+
+
+def test_review_requires_apikey():
+    c = TestClient(app)
+    files = {"file": ("x.docx", b"not a real docx", "application/octet-stream")}
+    r = c.post("/api/v1/contract/review", files=files,
+               data={"contract_type": "劳动合同", "prompt": "审"})
+    assert r.status_code in (401, 422)
