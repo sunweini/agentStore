@@ -32,6 +32,33 @@
   dict(seed/load_bundled 时按 law_name 填权威源 URL),list_laws 返回真 URL 而非正文首段
 - `CLAUDE.md`:启动命令 `api:create_app --factory` → `uvicorn agents.contract_review_agent.api:app --reload`
 
+### 终审修正(合并前置,终审判定"可合入,带前置修正";v0.4.0 未发布,归入本段)
+
+- **OCR 描述对齐真实实现**(API.md / CLAUDE.md):v1 扫描件(无文本层 pdf)返回
+  `needs_ocr` 错误,`utils/ocr_client.py` 已封装**待接线**,OCR 接线为后续版本;
+  删除"扫描件走百度云端 OCR"成功承诺;CLAUDE.md `POST /api/v1/laws/upload` 支持
+  格式 docx/pdf/txt → md/txt(实现仅 decode utf-8 文本);`agent.py` 架构行去掉
+  "占位"字样
+- **反幻觉 footgun 修复**(终审 finding #6,`graph/flows.py`):`build_graph(law_store=None)`
+  原为 None 时 `_verify` 透传不核验;langgraph.json 注册的 `agent.py:build_graph`
+  恰为无参调用 → 经 langgraph server 跑图会静默关闭校验层。改为 None 时缺省用
+  `_default_law_store()`(函数体内 import,避免模块级循环 import)并移除 `_verify`
+  的 None 透传分支 —— 任何路径构造的图校验层恒开启
+- **部署 seed 步骤**(deploy/):`deploy.sh` 新增第 6 步 —— 健康检查后若生产法条
+  向量库空则 `seed_laws --if-empty` 灌一次(幂等,非空跳过;失败不中断部署,仅警告);
+  `scripts/seed_laws.py` 新增 `--if-empty` 标志 + `LawStore.vector_count()`
+  (chromadb 公开 `get()` 计数,不触发嵌入);`deploy/README.md` 补充 seed/拷贝 dev
+  数据两种初始化方案与 `EMBEDDING_*` 一致前提
+
+### Follow-up(未实现,仅登记)
+
+- **OCR 接线**:`utils/ocr_client.py` 已封装待接线,当前无文本层 pdf 返回
+  `needs_ocr`。接线需:①依赖百度真实凭据(`BAIDU_OCR_*`)联调 ②修复
+  `ocr_image_bytes` 的 base64 bytes→str(`base64.b64encode` 返回 bytes,需
+  `.decode("ascii")`)后,接入流水线 `_parse_node` 的 `NeedsOcrError` 分支
+- **审核节点非 JSON 重试**:`graph/nodes.py` review 节点当前无畸形输出重试;
+  spec §8 承诺"LLM 输出非 JSON → 重试(复用 sentiment 重试预算,上限 3 次)"待实现
+
 ### 测试
 
 - `pytest tests/test_contract_review_agent.py -v` 全量绿
