@@ -1,0 +1,47 @@
+# contract-review-agent 生产 compose(自包含,不动根目录 docker-compose.yml)。
+# 用法:仓库根下 docker compose -f agents/contract_review_agent/deploy/docker-compose.yml up -d --build
+# 前置:
+#   - .env 放仓库根(LLM key / MYSQL_URL / ADMIN_APIKEY / BAIDU_OCR_* / EMBEDDING_*),
+#     rsync 不覆盖(deploy.sh 校验存在,缺失中止)。
+#   - 外部网络 deploy_default / deploy_mcp-net 需在目标机已存在(deploy_mcp-net 用于连
+#     MySQL 的 deploy-mysql-1;若目标机用其它方式连库,可去掉该网络并改 MYSQL_URL)。
+services:
+  api:
+    build:
+      context: ../../..
+      dockerfile: agents/contract_review_agent/deploy/Dockerfile
+    image: contract-review-agent:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../../.env
+    environment:
+      - LOG_DIR=/app/logs
+      # 下方为生产必需项(占位,实际值放仓库根 .env;此处不设即从 env_file 读)
+      # - MYSQL_URL=mysql://mcp:<pass>@deploy-mysql-1:3306/agentstore
+      # - ADMIN_APIKEY=sk-<管理员apikey>
+      # - BAIDU_OCR_API_KEY=<百度OCR API Key>
+      # - BAIDU_OCR_SECRET_KEY=<百度OCR Secret Key>
+      # - EMBEDDING_PROVIDER=openai-compatible
+      # - EMBEDDING_BASE_URL=http://<embedding-host>:32320
+      # - EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
+    networks:
+      - deploy_default
+      - deploy_mcp-net   # 连 MySQL(deploy-mysql-1)
+    volumes:
+      - ../../../data:/app/data
+      - /home/logs/contract-review-agent:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  deploy_default:
+    name: deploy_default
+    external: true
+  deploy_mcp-net:
+    name: deploy_mcp-net
+    external: true

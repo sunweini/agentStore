@@ -1,0 +1,26 @@
+# contract-review-agent 生产镜像精简依赖(无本地 OCR / 无 torch / 无本地 embedding)。
+# 版本锁定 = 测试环境(.venv)验证过的版本。增删依赖时同步根目录 requirements.txt 与这里。
+#
+# 说明(为什么能这么精简):
+#   - 嵌入走远程 EMBEDDING_PROVIDER=openai-compatible(openclaw memorySearch 团队
+#     服务经 langchain-openai 的 OpenAIEmbeddings 接入),不装 sentence-transformers/torch;
+#     langchain-huggingface 仅 base 依赖(huggingface-hub/tokenizers,无 torch),common/rag.py
+#     顶层 import 该包但 HuggingFaceEmbeddings 的 sentence_transformers 是懒加载。
+#   - OCR 走百度云端 API(httpx),无本地 OCR 依赖。
+#   - 法条向量库需要 Chroma:比 sentiment 镜像多 langchain-chroma/chromadb(必要,去掉即检索崩)。
+#   - 运行时路径无裸 `import langchain`,故不装 langchain 元包。
+langchain-core==1.5.3
+langchain-openai==1.4.1
+langchain-huggingface==1.2.2
+langchain-chroma==1.1.0
+chromadb==1.5.9
+langgraph==1.2.10
+python-dotenv==1.2.2
+fastapi==0.141.1
+uvicorn==0.52.1
+sse-starlette==3.4.8
+pydantic==2.13.4
+httpx==0.28.1
+python-docx==1.2.0
+pypdf==6.15.0
+pymysql==1.2.0
