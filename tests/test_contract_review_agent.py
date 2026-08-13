@@ -90,3 +90,43 @@ def test_verify_ref_exact(tmp_path):
     s = _store(tmp_path)
     assert s.verify_ref("测试劳动合同法", "第一条") == "用人单位应当依法支付劳动报酬。"
     assert s.verify_ref("测试劳动合同法", "不存在的条") is None
+
+
+# ---- Task 4 文件解析层:章节构建 + 文件解析(设计 §4.1) ----
+
+from pathlib import Path  # noqa: E402
+import tempfile  # noqa: E402
+import pytest  # noqa: E402
+from agents.contract_review_agent.utils.chapterizer import build_chapters  # noqa: E402
+from agents.contract_review_agent.utils.document_parser import (  # noqa: E402
+    parse_document, Document, UnsupportedTypeError, ContractTooLongError)
+
+
+def test_build_chapters_basic():
+    chapters = build_chapters([
+        ("第一章 总则", 1), ("本合同适用中国法律。", 0),
+        ("第二章 价款", 1), ("价款为人民币拾万元。", 0), ("按月支付。", 0),
+    ])
+    assert [c.title for c in chapters] == ["第一章 总则", "第二章 价款"]
+    assert "本合同适用中国法律。" in chapters[0].text
+    assert "按月支付。" in chapters[1].text
+    assert chapters[0].order == 1 and chapters[1].order == 2
+
+
+def test_build_chapters_flat_fallback():
+    chapters = build_chapters([("只有正文,没有标题。", 0), ("继续。", 0)])
+    assert len(chapters) == 1
+    assert chapters[0].title == "未命名章节"
+
+
+def test_parse_unsupported_type():
+    with pytest.raises(UnsupportedTypeError):
+        parse_document("a.txt")
+
+
+def test_parse_too_large():
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
+        f.write(b"\x00" * 3000)
+        p = f.name
+    with pytest.raises((ContractTooLongError, Exception)):
+        parse_document(p, max_bytes=1024)
