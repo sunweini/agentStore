@@ -283,3 +283,25 @@ def test_optimize_review_prompt_keeps_ref_guidance():
     out = optimize_review_prompt("劳动合同", "重点看违约金", llm=fake)
     assert "禁止编造" in out
     assert "引用指引" in out
+
+
+# ---- Task 10 图构建:build_graph + run_review 全流水线(设计 §4.6) ----
+
+from agents.contract_review_agent.graph.flows import build_graph  # noqa: E402
+from agents.contract_review_agent.agent import run_review  # noqa: E402
+
+
+def test_build_graph_smoke():
+    graph = build_graph()
+    assert graph is not None
+
+
+def test_run_review_too_long():
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
+        f.write(b"\x00" * 3000)
+        p = f.name
+    try:
+        result = run_review(p, "劳动合同", "请审核", law_store=None)
+        assert result["error"] in ("too_long", "unsupported")
+    finally:
+        Path(p).unlink(missing_ok=True)

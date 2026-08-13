@@ -1,16 +1,49 @@
-"""contract-review-agent 图构建入口:章节流水线(parse → review_chapters → verify_refs → summarize)。
+"""合同审核 agent 图构建入口:build_graph + run_review。
 
-图结构(设计 §3,与 sentiment 同风格 LangGraph 循环图):
-  START → parse → review_chapters → verify_refs → summarize → END
-  parse:          文件解析层(docx / pdf 文本层 / 无文本层 OCR 标记)→ Document{chapters[]}
-  review_chapters:逐章检索法条 → LLM(temperature=0.1)审核 → chapter_findings
-  verify_refs:    引用校验层(核心反幻觉):条号存在 + 引文 fuzzy match,失败降级
-  summarize:      合并 findings → 风险排序 → JSON + markdown 报告(声明法条库版本)
+- build_graph:供 langgraph.json 注册的入口(`agent.py:build_graph`),
+  返回编译后的 LangGraph 图(parse → review → verify → summarize)。
+- run_review:同步一次跑完整图(供 API/CLI 调用),返回 {report, report_json, error};
+  法条库缺省用 data/contract-rag(LawStore 懒构造,首用才建 Chroma)。
 
-待实现:
-  - build_graph():LangGraph 图构建入口(节点见 graph/nodes.py、flows.py)
-  - langgraph.json 注册入口: "./agents/contract_review_agent/agent.py:build_graph"
-  - 运行时 checkpointer / SSE 章节进度(参考 sentiment run_pipeline 模式)
-
-设计见 docs/superpowers/specs/2026-08-13-contract-review-agent-design.md。
+架构见 docs/superpowers/specs/2026-08-13-contract-review-agent-design.md。
 """
+from __future__ import annotations
+
+from pathlib import Path
+
+from agents.contract_review_agent.graph.flows import build_graph
+from agents.contract_review_agent.store.law_store import LawStore
+
+
+def _default_law_store() -> LawStore:
+    return LawStore(data_dir=Path("data/contract-rag"))
+
+
+def build_agent() -> LawStore:
+    """供 langgraph 注册的入口,返回 LawStore(图构建在 API/CLI 侧用 build_graph)。"""
+    return _default_law_store()
+
+
+def run_review(file_path: str, contract_type: str, review_prompt: str,
+               law_store: LawStore | None = None) -> dict:
+    """同步跑完整审核流程。返回 {report, report_json, error}。"""
+    store = law_store or _default_law_store()
+    graph = build_graph(law_store=store)
+    state = graph.invoke({
+        "_file_path": file_path,
+        "_file_name": Path(file_path).name,
+        "contract_type": contract_type,
+        "review_prompt": review_prompt,
+        "chapters": [],
+        "chapter_reviews": [],
+        "report": "",
+        "error": "",
+    })
+    return {
+        "report": state.get("report", ""),
+        "report_json": state.get("report_json", {}),
+        "error": state.get("error", ""),
+    }
+
+
+build_graph = build_graph  # noqa: F811  # langgraph.json 注册入口别名
