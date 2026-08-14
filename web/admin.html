@@ -1,12 +1,285 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>agentStore 管理控制台</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentStore 管理控制台</title>
+<style>
+  :root{--line:#d8d8d8;--bg:#f5f6f8;--fg:#222;--accent:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+  header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:#fff;border-bottom:1px solid var(--line)}
+  header h1{font-size:17px;margin:0;flex:1}
+  header input{width:220px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;font-family:monospace}
+  .btn{padding:6px 12px;border:1px solid var(--line);border-radius:4px;background:#fff;cursor:pointer;font-size:13px}
+  .btn:hover{background:#eef2ff}.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.danger{color:var(--bad);border-color:var(--bad)}
+  nav{display:flex;gap:4px;padding:10px 20px;background:#fff;border-bottom:1px solid var(--line)}
+  nav button{border:none;background:none;padding:8px 16px;cursor:pointer;font-size:14px;border-bottom:2px solid transparent}
+  nav button.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  main{padding:20px;max-width:1200px;margin:0 auto}
+  .tab{display:none}.tab.active{display:block}
+  table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  th{background:#fafafa;font-weight:600}
+  .badge{padding:2px 8px;border-radius:10px;font-size:12px}
+  .badge.admin{background:#fef3c7;color:#92400e}.badge.normal{background:#e0f2fe;color:#075985}
+  .badge.active{background:#dcfce7;color:#166534}.badge.deleted{background:#fee2e2;color:#991b1b}
+  .low{color:var(--bad);font-weight:600}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:16px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}
+  .card h3{margin:0 0 6px;font-size:14px}.card .num{font-size:22px;font-weight:700}
+  #chartWrap{background:#fff;border:1px solid var(--line);border-radius:8px;padding:16px;margin-top:16px}
+  .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center}
+  .modal-mask.show{display:flex}
+  .modal{background:#fff;border-radius:8px;padding:20px;width:420px;max-width:90vw}
+  .modal h3{margin:0 0 12px}.modal label{display:block;font-size:13px;margin:10px 0 4px}
+  .modal input,.modal select{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:4px}
+  .modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  #msg{font-size:13px;margin-left:8px}
+</style>
 </head>
 <body>
-  <!-- 占位骨架:Task 6 将实现三 tab(apikey 管理 / 报表 / 额度)完整前端。 -->
+<header>
   <h1>agentStore 管理控制台</h1>
+  <input id="adminKey" placeholder="管理员 apikey (ADMIN_APIKEY)" type="password">
+  <button class="btn primary" onclick="login()">登录</button>
+  <span id="msg"></span>
+</header>
+<nav>
+  <button class="active" onclick="showTab('apikey',this)">apikey 管理</button>
+  <button onclick="showTab('report',this)">报表</button>
+  <button onclick="showTab('quota',this)">额度管理</button>
+</nav>
+<main>
+  <div id="tab-apikey" class="tab active">
+    <div style="margin-bottom:12px"><button class="btn primary" onclick="openCreate()">+ 创建 apikey</button></div>
+    <table id="keyTable"><thead><tr>
+      <th>agent</th><th>apikey</th><th>角色</th><th>状态</th>
+      <th>免费额度(已用/剩余)</th><th>付费额度(已用/剩余)</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div id="tab-report" class="tab">
+    <div style="margin-bottom:12px">
+      <label>agent:<select id="repAgent"><option value="">全部</option></select></label>
+      <label>近 <input id="repDays" type="number" value="30" min="1" max="365" style="width:70px"> 天</label>
+      <button class="btn primary" onclick="loadReport()">刷新</button>
+    </div>
+    <div class="cards" id="summaryCards"></div>
+    <div id="chartWrap"><h3>按天 committed 趋势</h3><canvas id="histChart" width="1000" height="260"></canvas></div>
+  </div>
+
+  <div id="tab-quota" class="tab">
+    <div style="margin-bottom:12px">
+      批量增额度:选中 <input id="batchCount" type="number" min="1" value="10" style="width:80px"> 到
+      <select id="batchType"><option value="free">免费</option><option value="paid">付费</option></select>
+      <button class="btn primary" onclick="batchAddQuota()">应用</button>
+      <button class="btn" onclick="loadKeys()">刷新</button>
+    </div>
+    <table id="quotaTable"><thead><tr>
+      <th><input type="checkbox" onchange="toggleAll(this)"></th>
+      <th>agent</th><th>apikey</th><th>免费剩余</th><th>付费剩余</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</main>
+
+<div class="modal-mask" id="createModal">
+  <div class="modal">
+    <h3>创建 apikey</h3>
+    <label>agent<select id="mAgent"></select></label>
+    <label>角色<select id="mRole"><option value="normal">normal</option><option value="admin">admin</option></select></label>
+    <label>免费额度<input id="mFree" type="number" value="10" min="0"></label>
+    <label>付费额度<input id="mPaid" type="number" value="0" min="0"></label>
+    <div class="row">
+      <button class="btn" onclick="closeModal('createModal')">取消</button>
+      <button class="btn primary" onclick="submitCreate()">创建</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = location.origin + "/api/v1/admin";
+let token = "";
+let keys = [];
+const $ = id => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {}, { "Authorization": "Bearer " + token });
+  const r = await fetch(API + path, Object.assign({}, opts, { headers }));
+  if (r.status === 403) { $("msg").textContent = "403:需要超级管理员权限"; throw new Error("403"); }
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail || r.status;
+    throw new Error(detail);
+  }
+  return r.json();
+}
+
+function login() {
+  token = $("adminKey").value.trim();
+  api("/agents").then(a => {
+    $("msg").textContent = "登录成功:" + a.agents.length + " 个 agent";
+    loadAll();
+  }).catch(e => $("msg").textContent = "登录失败:" + e.message);
+}
+
+function showTab(name, btn) {
+  document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  btn.classList.add("active");
+  $("tab-" + name).classList.add("active");
+  if (name === "report") loadReport();
+  if (name === "quota") renderQuota();
+}
+
+function loadAll() { loadAgents(); loadKeys(); }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function loadAgents() {
+  return api("/agents").then(a => {
+    const opts = a.agents.map(x => `<option value="${esc(x.agent)}">${esc(x.agent)} (${x.key_count})</option>`).join("");
+    $("mAgent").innerHTML = opts;
+    $("repAgent").innerHTML = '<option value="">全部</option>' + opts;
+  });
+}
+
+function loadKeys() {
+  return api("/apikeys").then(d => { keys = d.keys; renderQuota(); return renderKeys(); });
+}
+
+function renderKeys() {
+  $("keyTable").querySelector("tbody").innerHTML = keys.map(k => `
+    <tr>
+      <td>${esc(k.agent)}</td>
+      <td><code>${esc(k.apikey)}</code></td>
+      <td><span class="badge ${esc(k.role)}">${esc(k.role)}</span></td>
+      <td><span class="badge ${esc(k.status)}">${esc(k.status)}</span></td>
+      <td>${k.free.used}/${k.free.remaining}</td>
+      <td>${k.paid.used}/${k.paid.remaining}</td>
+      <td>
+        <button class="btn" onclick="editKey('${esc(k.apikey)}','${esc(k.agent)}')">改 key</button>
+        <button class="btn" onclick="toggleRole('${esc(k.apikey)}','${esc(k.agent)}','${esc(k.role)}')">${k.role === "admin" ? "降为 normal" : "设为 admin"}</button>
+        <button class="btn danger" onclick="delKey('${esc(k.apikey)}','${esc(k.agent)}')">删除</button>
+      </td>
+    </tr>`).join("");
+}
+
+function openCreate() { $("createModal").classList.add("show"); }
+function closeModal(id) { $(id).classList.remove("show"); }
+function submitCreate() {
+  const body = { agent: $("mAgent").value, role: $("mRole").value,
+                 free_quota: +$("mFree").value, paid_quota: +$("mPaid").value };
+  api("/apikeys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(k => { closeModal("createModal"); $("msg").textContent = "已创建 " + k.apikey; loadKeys(); })
+    .catch(e => alert("创建失败:" + e.message));
+}
+
+function editKey(apikey, agent) {
+  const nk = prompt("新 apikey(sk- 开头 + 6-64 位字母数字)", "sk-");
+  if (!nk) return;
+  api("/apikeys", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apikey, agent, new_apikey: nk }) })
+    .then(() => { $("msg").textContent = "已换 key"; loadKeys(); }).catch(e => alert(e.message));
+}
+function toggleRole(apikey, agent, role) {
+  api("/apikeys", { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apikey, agent, role: role === "admin" ? "normal" : "admin" }) })
+    .then(() => { $("msg").textContent = "已改角色"; loadKeys(); }).catch(e => alert(e.message));
+}
+function delKey(apikey, agent) {
+  if (!confirm("确认软删 " + apikey + " ?")) return;
+  api("/apikeys", { method: "DELETE", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apikey, agent }) })
+    .then(() => { $("msg").textContent = "已删除"; loadKeys(); }).catch(e => alert(e.message));
+}
+function addQuota(apikey, agent, type) {
+  const c = +prompt("增加额度数", "10");
+  if (!c || c <= 0) return;
+  api("/apikeys/quota", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apikey, agent, type, count: c }) })
+    .then(() => { $("msg").textContent = "已增加"; loadKeys(); }).catch(e => alert(e.message));
+}
+
+function renderQuota() {
+  $("quotaTable").querySelector("tbody").innerHTML = keys.filter(k => k.status === "active").map(k => {
+    const freeR = k.free.remaining, paidR = k.paid.remaining;
+    const flag = freeR + paidR <= 5 ? ' <span class="badge deleted">低额度</span>' : "";
+    return `
+    <tr>
+      <td><input type="checkbox" value="${esc(k.apikey)}" data-agent="${esc(k.agent)}"></td>
+      <td>${esc(k.agent)}</td>
+      <td><code>${esc(k.apikey)}</code></td>
+      <td class="${freeR <= 5 ? "low" : ""}">${freeR}</td>
+      <td class="${paidR <= 5 ? "low" : ""}">${paidR}</td>
+      <td>
+        <button class="btn" onclick="addQuota('${esc(k.apikey)}','${esc(k.agent)}','free')">+免费</button>
+        <button class="btn" onclick="addQuota('${esc(k.apikey)}','${esc(k.agent)}','paid')">+付费</button>
+        ${flag}
+      </td>
+    </tr>`;
+  }).join("");
+}
+function toggleAll(cb) { document.querySelectorAll("#quotaTable tbody input[type=checkbox]").forEach(x => x.checked = cb.checked); }
+function batchAddQuota() {
+  const checked = [...document.querySelectorAll("#quotaTable tbody input[type=checkbox]:checked")];
+  if (!checked.length) return alert("请先勾选 apikey");
+  const count = +$("batchCount").value, type = $("batchType").value;
+  Promise.all(checked.map(x => api("/apikeys/quota", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apikey: x.value, agent: x.dataset.agent, type, count }) })))
+    .then(() => { $("msg").textContent = "已批量增加 " + count + " 到 " + checked.length + " 个 key"; loadKeys(); })
+    .catch(e => alert(e.message));
+}
+
+function loadReport() {
+  const agent = $("repAgent").value, days = $("repDays").value || 30;
+  Promise.all([
+    api("/report/summary" + (agent ? "?agent=" + encodeURIComponent(agent) : "")),
+    api("/report/history" + (agent ? "?agent=" + encodeURIComponent(agent) : "") + "&days=" + days),
+  ]).then(([s, h]) => { renderSummary(s); renderChart(h.series); });
+}
+
+function renderSummary(s) {
+  $("summaryCards").innerHTML = s.agents.map(a => `
+    <div class="card"><h3>${esc(a.agent)}</h3>
+      <div>key 数:<span class="num">${a.key_count}</span></div>
+      <div>免费 ${a.free_used}/${a.free_remaining}</div>
+      <div>付费 ${a.paid_used}/${a.paid_remaining}</div>
+    </div>`).join("");
+  const t = s.total;
+  $("summaryCards").insertAdjacentHTML("beforeend", `
+    <div class="card"><h3>合计</h3>
+      <div>key 数:<span class="num">${t.key_count}</span></div>
+      <div>免费 ${t.free_used}/${t.free_remaining}</div>
+      <div>付费 ${t.paid_used}/${t.paid_remaining}</div>
+    </div>`);
+}
+
+function renderChart(series) {
+  const cv = $("histChart"), ctx = cv.getContext("2d");
+  const W = cv.width = 1000, H = cv.height = 260, padL = 40, padB = 24;
+  const groups = {};
+  series.forEach(s => { (groups[s.date] = groups[s.date] || []).push(s.committed); });
+  const dates = Object.keys(groups).sort();
+  const totals = dates.map(d => groups[d].reduce((a, b) => a + b, 0));
+  const max = Math.max(1, ...totals);
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = "#d8d8d8"; ctx.fillStyle = "#222"; ctx.font = "11px sans-serif";
+  for (let i = 0; i <= 4; i++) {
+    const y = H - padB - (i / 4) * (H - padB - 20), v = Math.round(max * i / 4);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.fillText(String(v), 4, y + 4);
+  }
+  const bw = dates.length ? (W - padL - 8) / dates.length : 0;
+  dates.forEach((d, i) => {
+    const v = totals[i], bh = (v / max) * (H - padB - 20);
+    ctx.fillStyle = "#2563eb";
+    ctx.fillRect(padL + i * bw + 2, H - padB - bh, Math.max(2, bw - 4), bh);
+    ctx.fillStyle = "#222"; ctx.textAlign = "center";
+    ctx.fillText(d.slice(5), padL + i * bw + bw / 2, H - 8);
+  });
+  ctx.textAlign = "left";
+}
+</script>
 </body>
 </html>
