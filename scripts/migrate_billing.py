@@ -48,24 +48,14 @@ def _existing_bills(agent: str) -> set[str]:
 
 
 def _validate(agent: str) -> None:
-    """迁移后校验:新表行数 == 老表,每 apikey 额度四元组一致;不一致抛错。
+    """迁移后校验(幂等语义):每条老表行都有对应新表行且数据一致,不一致抛错。
 
-    校验是迁移的安全网 —— 老表保留不动(设计 §10),一旦新表数据与老表不符,
-    说明迁移/重跑出了问题,立即中止而不是静默放行,便于切表前人工核对。
+    与"新表总行数 == 老表总行数"的区别(终审 M4):部署后 agent_api_keys /
+    agent_billing_records 会有新增的普通用户/任务行(非本次迁移写入),全局计数
+    相等必然误报"行数不等" —— 改为按源行逐条断言"存在且一致"(子集校验),
+    新表额外行不在本次迁移目标内,不参与比对。老表保留不动(设计 §10),
+    新表缺/错即中止,便于切表前人工核对。
     """
-    n_old_keys = db.query("SELECT COUNT(*) n FROM api_keys")[0]["n"]
-    n_new_keys = db.query("SELECT COUNT(*) n FROM agent_api_keys WHERE agent=%s",
-                          (agent,))[0]["n"]
-    if n_new_keys != n_old_keys:
-        raise RuntimeError(
-            f"迁移校验失败: agent_api_keys 行数 {n_new_keys} != api_keys 行数 {n_old_keys}")
-    n_old_records = db.query("SELECT COUNT(*) n FROM billing_records")[0]["n"]
-    n_new_records = db.query("SELECT COUNT(*) n FROM agent_billing_records WHERE agent=%s",
-                             (agent,))[0]["n"]
-    if n_new_records != n_old_records:
-        raise RuntimeError(
-            f"迁移校验失败: agent_billing_records 行数 {n_new_records}"
-            f" != billing_records 行数 {n_old_records}")
     for old in db.query(f"SELECT apikey, {','.join(_QUOTA_COLS)} FROM api_keys"):
         new = db.query(
             f"SELECT {','.join(_QUOTA_COLS)} FROM agent_api_keys "
@@ -77,6 +67,21 @@ def _validate(agent: str) -> None:
             raise RuntimeError(
                 f"迁移校验失败: apikey={old['apikey']} 额度四元组"
                 f"(free_quota/free_used/paid_quota/paid_used) 不一致")
+    for old in db.query("SELECT apikey, group_id, status, quota_type, "
+                        "created_at, committed_at FROM billing_records"):
+        new = db.query(
+            "SELECT apikey, status, quota_type, created_at, committed_at "
+            "FROM agent_billing_records WHERE agent=%s AND bill_no=%s",
+            (agent, old["group_id"]))
+        if not new:
+            raise RuntimeError(
+                f"迁移校验失败: agent_billing_records 缺 bill_no={old['group_id']} agent={agent}")
+        row = new[0]
+        for col in ("apikey", "status", "quota_type", "created_at", "committed_at"):
+            if row[col] != old[col]:
+                raise RuntimeError(
+                    f"迁移校验失败: bill_no={old['group_id']} 字段 {col} 不一致"
+                    f"(新 {row[col]!r} != 老 {old[col]!r})")
 
 
 def migrate(source_agent: str = "sentiment", dry_run: bool = True) -> dict:
@@ -84,10 +89,13 @@ def migrate(source_agent: str = "sentiment", dry_run: bool = True) -> dict:
 
     keys/records = 源表行数(迁移范围);inserted_keys/inserted_records = 本次实际
     写入行数(dry_run 恒 0)。已存在的 (apikey, agent) / (agent, bill_no) 跳过 → 幂等。
+    时间戳:老表 billing_records 有 created_at/committed_at 则一并迁入(保真),
+    无(None)则落新表 DEFAULT(created_at 现时 / committed_at NULL)。
     """
     keys = db.query("SELECT apikey, role, status, "
                     "free_quota, free_used, paid_quota, paid_used FROM api_keys")
-    records = db.query("SELECT apikey, group_id, status, quota_type FROM billing_records")
+    records = db.query("SELECT apikey, group_id, status, quota_type, "
+                       "created_at, committed_at FROM billing_records")
     inserted_keys = inserted_records = 0
     if not dry_run:
         existing_keys = _existing_keys(source_agent)
@@ -105,10 +113,17 @@ def migrate(source_agent: str = "sentiment", dry_run: bool = True) -> dict:
         for r in records:
             if r["group_id"] in existing_bills:
                 continue  # 幂等:该 (agent, bill_no) 已迁入,跳过
+            cols = ["apikey", "agent", "bill_no", "status", "quota_type"]
+            vals = [r["apikey"], source_agent, r["group_id"], r["status"], r["quota_type"]]
+            # 老表时间戳有则带(保真),无则落新表 DEFAULT(统一兼容 SQLite/MySQL)
+            for col in ("created_at", "committed_at"):
+                if r.get(col):
+                    cols.append(col)
+                    vals.append(r[col])
             db.execute(
-                "INSERT INTO agent_billing_records (apikey, agent, bill_no, status, quota_type) "
-                "VALUES (%s,%s,%s,%s,%s)",
-                (r["apikey"], source_agent, r["group_id"], r["status"], r["quota_type"]))
+                f"INSERT INTO agent_billing_records ({','.join(cols)}) "
+                f"VALUES ({','.join(['%s'] * len(vals))})",
+                tuple(vals))
             inserted_records += 1
         _validate(source_agent)
     return {

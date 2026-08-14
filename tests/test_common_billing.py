@@ -337,3 +337,47 @@ def test_migrate_dry_run_no_write(tmp_path, monkeypatch):
     # dry-run 只统计不写
     assert db.query("SELECT COUNT(*) n FROM agent_api_keys")[0]["n"] == 0
     assert db.query("SELECT COUNT(*) n FROM agent_billing_records")[0]["n"] == 0
+
+
+def test_migrate_rerun_ignores_new_rows(tmp_path, monkeypatch):
+    """M4-①:部署后新用户/任务行出现时重跑不误报"行数不等"(校验幂等子集语义)。"""
+    _sqlite_env(tmp_path, monkeypatch)
+    db.execute("INSERT INTO api_keys (apikey, role, status, free_quota, paid_quota, "
+               "free_used, paid_used) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+               ("k1", "normal", "active", 10, 0, 0, 0))
+    db.execute("INSERT INTO billing_records (apikey, group_id, status) VALUES (%s,%s,%s)",
+               ("k1", "g1", "committed"))
+    from scripts.migrate_billing import migrate
+    migrate(dry_run=False)
+    # 模拟部署后新用户注册 + 新任务(不在迁移源表内)
+    db.execute("INSERT INTO agent_api_keys (apikey, agent, free_quota, paid_quota) "
+               "VALUES (%s,%s,%s,%s)", ("sk-newuser", "sentiment", 10, 0))
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status) "
+               "VALUES (%s,%s,%s,%s)", ("sk-newuser", "sentiment", "g-new", "pending"))
+    # 重跑:不因新表额外行误报,仍通过校验
+    migrate(dry_run=False)
+
+
+def test_migrate_preserves_timestamps(tmp_path, monkeypatch):
+    """M4-②:老表 created_at/committed_at 迁移保真(有则带,无则 DEFAULT)。"""
+    _sqlite_env(tmp_path, monkeypatch)
+    db.execute("INSERT INTO api_keys (apikey, role, status, free_quota, paid_quota, "
+               "free_used, paid_used) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+               ("k1", "normal", "active", 10, 0, 0, 0))
+    db.execute("INSERT INTO billing_records (apikey, group_id, status, quota_type, "
+               "created_at, committed_at) VALUES (%s,%s,%s,%s,%s,%s)",
+               ("k1", "g1", "committed", "free", "2026-08-01 09:30:00", "2026-08-02 10:00:00"))
+    from scripts.migrate_billing import migrate
+    migrate(dry_run=False)
+    rec = db.query("SELECT created_at, committed_at FROM agent_billing_records "
+                   "WHERE agent='sentiment' AND bill_no='g1'")[0]
+    assert rec["created_at"] == "2026-08-01 09:30:00"
+    assert rec["committed_at"] == "2026-08-02 10:00:00"
+    # 无 committed_at 的记录 → 落 DEFAULT(NULL)
+    db.execute("INSERT INTO billing_records (apikey, group_id, status, created_at) "
+               "VALUES (%s,%s,%s,%s)", ("k1", "g2", "pending", "2026-08-03 08:00:00"))
+    migrate(dry_run=False)
+    rec2 = db.query("SELECT created_at, committed_at FROM agent_billing_records "
+                    "WHERE agent='sentiment' AND bill_no='g2'")[0]
+    assert rec2["created_at"] == "2026-08-03 08:00:00"
+    assert rec2["committed_at"] is None
