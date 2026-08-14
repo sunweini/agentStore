@@ -19,7 +19,7 @@ import pytest
 
 from agents.sentiment_query_agent.graph.nodes import _extract_json
 from agents.sentiment_query_agent.store import converter, scheme_store
-from common import auth, billing, db
+from common import apikey_mgmt, auth, billing, db
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -305,3 +305,56 @@ def test_add_quota(sqlite_db):
     row = db.query("SELECT free_quota, paid_quota FROM agent_api_keys "
                    "WHERE apikey='sk-usertest123' AND agent='sentiment'")[0]
     assert row["free_quota"] == 15 and row["paid_quota"] == 3
+
+
+# ===== 4. 全局账单接口 GET /api/v1/billing/usage_all(公共组件 Task 8) =====
+# TestClient 走 FastAPI 全链路(sqlite_db fixture 建表 + ADMIN_APIKEY=sk-admintest123)。
+# 启动事件 ensure_admin('sentiment') 把 sk-admintest123 铸为 sentiment 管理员(幂等)。
+
+from fastapi.testclient import TestClient  # noqa: E402
+from agents.sentiment_query_agent.api import app as sentiment_app  # noqa: E402
+
+
+def _seed_apikey_for_agent(apikey, agent, free=10, paid=0, role="normal"):
+    """跨 agent 造普通用户行(全局账单接口验证多 agent 场景)。"""
+    db.execute(
+        "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "
+        "VALUES (%s, %s, %s, 'active', %s, %s)",
+        (apikey, agent, role, free, paid),
+    )
+
+
+def test_usage_all_endpoint_admin_sees_all_agents(sqlite_db):
+    """全局账单:管理员 200,返回所有 agent 的普通用户账单(含 agent 维度)。"""
+    apikey_mgmt.ensure_admin("sentiment")  # sk-admintest123(ADMIN_APIKEY)→ sentiment 管理员
+    _seed_apikey_for_agent("sk-senti-user", "sentiment", free=10, paid=0)
+    _seed_apikey_for_agent("sk-contract-user", "contract", free=20, paid=5)
+    with TestClient(sentiment_app) as c:
+        r = c.get("/api/v1/billing/usage_all",
+                  headers={"Authorization": "Bearer sk-admintest123"})
+    assert r.status_code == 200
+    assert [u["agent"] for u in r.json()["usage"]] == ["sentiment", "contract"]
+    by_key = {u["apikey"]: u for u in r.json()["usage"]}
+    assert by_key["sk-contract-user"]["paid"]["total"] == 5
+
+
+def test_usage_all_endpoint_admin_agent_filter(sqlite_db):
+    """agent 过滤:指定 agent 只返回该 agent 账单。"""
+    apikey_mgmt.ensure_admin("sentiment")
+    _seed_apikey_for_agent("sk-senti-user", "sentiment", free=10, paid=0)
+    _seed_apikey_for_agent("sk-contract-user", "contract", free=20, paid=5)
+    with TestClient(sentiment_app) as c:
+        r = c.get("/api/v1/billing/usage_all", params={"agent": "contract"},
+                  headers={"Authorization": "Bearer sk-admintest123"})
+    assert r.status_code == 200
+    assert [u["apikey"] for u in r.json()["usage"]] == ["sk-contract-user"]
+    assert [u["agent"] for u in r.json()["usage"]] == ["contract"]
+
+
+def test_usage_all_endpoint_non_admin_403(sqlite_db):
+    """非管理员 → 403。"""
+    _seed_apikey()  # sk-usertest123,normal
+    with TestClient(sentiment_app) as c:
+        r = c.get("/api/v1/billing/usage_all",
+                  headers={"Authorization": "Bearer sk-usertest123"})
+    assert r.status_code == 403

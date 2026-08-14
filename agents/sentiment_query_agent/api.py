@@ -433,6 +433,18 @@ async def billing_usage_api(user: str = Depends(_user)):
     return {"role": "normal", **billing.usage(user, _AGENT)}
 
 
+@app.get("/api/v1/billing/usage_all")
+async def billing_usage_all_api(agent: str | None = None, user: str = Depends(_user)):
+    """全局账单:管理员看所有 agent 的账单(agent 维度)。仅管理员。
+
+    与 /billing/usage 区分:后者管理员只看当前 agent(agent='sentiment')的普通用户;
+    本接口缺省返回全部 agent(usage_all(agent=None)),agent 可选 query 参数过滤,
+    供管理后台跨 agent 对账。响应 {"usage": [<usage_all 项:apikey/agent/free/paid>]}。
+    """
+    auth.require_admin(user, _AGENT)
+    return {"usage": billing.usage_all(agent=agent)}
+
+
 @app.post("/api/v1/billing/quota/paid")
 async def add_paid_quota_api(req: QuotaChangeRequest, user: str = Depends(_user)):
     """增加付费额度。仅管理员。"""
