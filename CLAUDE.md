@@ -28,7 +28,7 @@
 - **目录**:agent 平级放 `agents/`(每个含 agent.py + utils/{state,nodes,tools}.py + prompts/),共享层在 `common/`,新 agent 在 `langgraph.json` 注册。
 - **skill 方法论供给**:每步节点绑定 `load_skill` 工具(`bind_tools(strict=True)`,最多 2 回合),LLM 需要专业指导时主动调用;运行时脚本调用放代码(方案 A),SKILL.md 文档写清脚本用法(知识层)。详见 dev-standards §7.3。
 - **每个 agent 必须有独立 CLAUDE.md**:`agents/<agent>/CLAUDE.md`,写清本 agent 的职责、架构、常用操作(加工具/改提示词/接真实业务)、约束。在 agent 目录工作时自动加载。
-- **部署命名规范(必守)**:docker compose 项目名 = `deploy-<agent>`(如 contract 为 `deploy-contract-review-agent`),**禁止**用 "deploy" 等通用名 —— 同机 sentiment / mcp-gateway 共用 "deploy" 项目,容器名会冲突(曾发生 deploy-api-1 被 contract 镜像覆盖、线上 sentiment 8000 中断事故)。端口按 agent 隔离(sentiment 8000,contract 8000/测试 8001)。
+- **部署命名规范(必守)**:docker compose 项目名 = `deploy-<agent>`(如 contract 为 `deploy-contract-review-agent`),**禁止**用 "deploy" 等通用名 —— 同机 sentiment / mcp-gateway 共用 "deploy" 项目,容器名会冲突(曾发生 deploy-api-1 被 contract 镜像覆盖、线上 sentiment 8000 中断事故)。端口按 agent 隔离(sentiment 8000,contract 生产 8002/测试 8001)。
 
 ## 项目状态
 

@@ -99,7 +99,7 @@ pre.out .md b{color:#FFD77A}
 
 </div>
 <script>
-const API = location.port ? `http://${location.hostname}:8001` : location.origin;
+const API = location.port ? `http://${location.hostname}:${location.port}` : location.origin;
 let curTaskId = null;
 
 function $(id){ return document.getElementById(id); }

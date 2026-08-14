@@ -9,7 +9,7 @@
 |---|---|
 | `Dockerfile` | api 镜像(build context = 仓库根,勿在本目录直接 build) |
 | `requirements-agent.txt` | 精简依赖(无本地 OCR / 无 torch;含 python-docx/pypdf + Chroma 向量库) |
-| `docker-compose.yml` | api(8000),自包含,不动根 compose |
+| `docker-compose.yml` | api(CONTRACT_PORT 环境变量驱动,生产 8002/测试 8001),自包含,不动根 compose |
 | `init_tables.sql` | MySQL 建 `contract_*` 两表(老,回滚用)+ `agent_api_keys` / `agent_billing_records`(统一表,agent='contract') |
 | `deploy.sh` | rsync 上机 → build → up → 健康检查 → 法条向量库 seed(空则灌) |
 
@@ -67,7 +67,7 @@ schema,(apikey, agent) 复合主键,额度按 agent 维度隔离);老表 `contra
 
 ## 端口
 
-- 8000:API(合同审核 11 接口,鉴权 apikey 头)
+- 8002:API 生产(合同审核 11 接口,鉴权 apikey 头;测试 8001)
 
 ## 日志与数据
 
