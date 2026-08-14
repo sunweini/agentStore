@@ -133,7 +133,7 @@ function showTab(name, btn) {
 }
 
 function loadAll() { loadAgents(); loadKeys(); }
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function esc(s) { return String(s).replace(/[&<>"'`]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c])); }
 
 function loadAgents() {
   return api("/agents").then(a => {
@@ -144,7 +144,7 @@ function loadAgents() {
 }
 
 function loadKeys() {
-  return api("/apikeys").then(d => { keys = d.keys; renderQuota(); return renderKeys(); });
+  return api("/apikeys").then(d => { keys = d.keys; bindTableActions(); renderQuota(); return renderKeys(); });
 }
 
 function renderKeys() {
@@ -157,9 +157,9 @@ function renderKeys() {
       <td>${k.free.used}/${k.free.remaining}</td>
       <td>${k.paid.used}/${k.paid.remaining}</td>
       <td>
-        <button class="btn" onclick="editKey('${esc(k.apikey)}','${esc(k.agent)}')">改 key</button>
-        <button class="btn" onclick="toggleRole('${esc(k.apikey)}','${esc(k.agent)}','${esc(k.role)}')">${k.role === "admin" ? "降为 normal" : "设为 admin"}</button>
-        <button class="btn danger" onclick="delKey('${esc(k.apikey)}','${esc(k.agent)}')">删除</button>
+        <button class="btn js-edit-key" data-apikey="${esc(k.apikey)}" data-agent="${esc(k.agent)}">改 key</button>
+        <button class="btn js-toggle-role" data-apikey="${esc(k.apikey)}" data-agent="${esc(k.agent)}" data-role="${esc(k.role)}">${k.role === "admin" ? "降为 normal" : "设为 admin"}</button>
+        <button class="btn danger js-del-key" data-apikey="${esc(k.apikey)}" data-agent="${esc(k.agent)}">删除</button>
       </td>
     </tr>`).join("");
 }
@@ -200,6 +200,18 @@ function addQuota(apikey, agent, type) {
     .then(() => { $("msg").textContent = "已增加"; loadKeys(); }).catch(e => alert(e.message));
 }
 
+function bindTableActions() {
+  const keyBody = $("keyTable").querySelector("tbody");
+  keyBody.querySelectorAll("button.js-edit-key").forEach(b =>
+    b.addEventListener("click", () => editKey(b.dataset.apikey, b.dataset.agent)));
+  keyBody.querySelectorAll("button.js-toggle-role").forEach(b =>
+    b.addEventListener("click", () => toggleRole(b.dataset.apikey, b.dataset.agent, b.dataset.role)));
+  keyBody.querySelectorAll("button.js-del-key").forEach(b =>
+    b.addEventListener("click", () => delKey(b.dataset.apikey, b.dataset.agent)));
+  $("quotaTable").querySelectorAll("tbody button.js-add-quota").forEach(b =>
+    b.addEventListener("click", () => addQuota(b.dataset.apikey, b.dataset.agent, b.dataset.type)));
+}
+
 function renderQuota() {
   $("quotaTable").querySelector("tbody").innerHTML = keys.filter(k => k.status === "active").map(k => {
     const freeR = k.free.remaining, paidR = k.paid.remaining;
@@ -212,8 +224,8 @@ function renderQuota() {
       <td class="${freeR <= 5 ? "low" : ""}">${freeR}</td>
       <td class="${paidR <= 5 ? "low" : ""}">${paidR}</td>
       <td>
-        <button class="btn" onclick="addQuota('${esc(k.apikey)}','${esc(k.agent)}','free')">+免费</button>
-        <button class="btn" onclick="addQuota('${esc(k.apikey)}','${esc(k.agent)}','paid')">+付费</button>
+        <button class="btn js-add-quota" data-apikey="${esc(k.apikey)}" data-agent="${esc(k.agent)}" data-type="free">+免费</button>
+        <button class="btn js-add-quota" data-apikey="${esc(k.apikey)}" data-agent="${esc(k.agent)}" data-type="paid">+付费</button>
         ${flag}
       </td>
     </tr>`;
@@ -233,10 +245,14 @@ function batchAddQuota() {
 
 function loadReport() {
   const agent = $("repAgent").value, days = $("repDays").value || 30;
-  Promise.all([
-    api("/report/summary" + (agent ? "?agent=" + encodeURIComponent(agent) : "")),
-    api("/report/history" + (agent ? "?agent=" + encodeURIComponent(agent) : "") + "&days=" + days),
-  ]).then(([s, h]) => { renderSummary(s); renderChart(h.series); });
+  const sQs = new URLSearchParams(), hQs = new URLSearchParams({ days });
+  if (agent) { sQs.set("agent", agent); hQs.set("agent", agent); }
+  const sq = sQs.toString(), hq = hQs.toString();
+  return Promise.all([
+    api("/report/summary" + (sq ? "?" + sq : "")),
+    api("/report/history" + (hq ? "?" + hq : "")),
+  ]).then(([s, h]) => { renderSummary(s); renderChart(h.series); })
+    .catch(e => $("msg").textContent = "报表加载失败:" + e.message);
 }
 
 function renderSummary(s) {
