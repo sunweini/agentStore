@@ -115,6 +115,18 @@ def test_usage_all_filters_agent(tmp_path, monkeypatch):
     assert [u["agent"] for u in billing.usage_all(agent="sentiment")] == ["sentiment"]
 
 
+def test_usage_all_sorted(tmp_path, monkeypatch):
+    """M5:usage_all 返回顺序确定(ORDER BY agent, apikey)。"""
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k2", "sentiment")
+    _seed("k1", "sentiment")
+    _seed("a1", "contract")
+    rows = billing.usage_all()
+    assert [(u["agent"], u["apikey"]) for u in rows] == [
+        ("contract", "a1"), ("sentiment", "k1"), ("sentiment", "k2"),
+    ]
+
+
 def test_create_apikey_roles(tmp_path, monkeypatch):
     _sqlite_env(tmp_path, monkeypatch)
     k = billing_mgmt.create_apikey("contract", "tester")

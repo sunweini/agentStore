@@ -101,6 +101,7 @@ def usage_all(agent: str | None = None) -> list[dict]:
     if agent:
         sql += " AND agent=%s"
         params = (agent,)
+    sql += " ORDER BY agent, apikey"  # 确定性顺序(终审 M5),便于对账/分页
     rows = db.query(sql, params)
     return [{"apikey": r["apikey"], "agent": r["agent"],
              "free": {"total": r["free_quota"], "used": r["free_used"],

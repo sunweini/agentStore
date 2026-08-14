@@ -334,7 +334,8 @@ def test_usage_all_endpoint_admin_sees_all_agents(sqlite_db):
         r = c.get("/api/v1/billing/usage_all",
                   headers={"Authorization": "Bearer sk-admintest123"})
     assert r.status_code == 200
-    assert [u["agent"] for u in r.json()["usage"]] == ["sentiment", "contract"]
+    # 顺序确定(ORDER BY agent, apikey):contract < sentiment
+    assert [u["agent"] for u in r.json()["usage"]] == ["contract", "sentiment"]
     by_key = {u["apikey"]: u for u in r.json()["usage"]}
     assert by_key["sk-contract-user"]["paid"]["total"] == 5
 
