@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from common import billing
+from common import apikey_mgmt as billing_mgmt
 from common import db
 
 
@@ -111,3 +112,31 @@ def test_usage_all_filters_agent(tmp_path, monkeypatch):
     _seed("k2", "contract")
     assert {u["agent"] for u in billing.usage_all()} >= {"sentiment", "contract"}
     assert [u["agent"] for u in billing.usage_all(agent="sentiment")] == ["sentiment"]
+
+
+def test_create_apikey_roles(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    k = billing_mgmt.create_apikey("contract", "tester")
+    assert k["apikey"].startswith("sk-")
+    with pytest.raises(ValueError):
+        billing_mgmt.create_apikey("contract", "x", role="superadmin")
+
+
+def test_ensure_admin_idempotent(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    billing_mgmt.ensure_admin("sentiment")
+    billing_mgmt.ensure_admin("sentiment")
+    rows = db.query("SELECT * FROM agent_api_keys WHERE role='admin' AND agent='sentiment'")
+    assert len(rows) == 1 and rows[0]["free_quota"] == 99999999
+
+
+def test_deactivate_rule(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    admin = billing_mgmt.create_apikey("sentiment", "admin", role="admin")["apikey"]
+    other_admin = billing_mgmt.create_apikey("sentiment", "a2", role="admin")["apikey"]
+    user = billing_mgmt.create_apikey("sentiment", "u")["apikey"]
+    billing_mgmt.deactivate_apikey("sentiment", user, admin)      # admin 停用普通用户 OK
+    billing_mgmt.deactivate_apikey("sentiment", other_admin, admin)  # admin 目标可停用
+    with pytest.raises(Exception) as e:
+        billing_mgmt.deactivate_apikey("sentiment", admin, admin)  # 不可停用自己
+    assert getattr(e.value, "status_code", None) == 403
