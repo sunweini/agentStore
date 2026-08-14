@@ -21,6 +21,10 @@ sentiment-query-agent 与 contract-review-agent 各自实现了一套**逐字相
   "流水线失败不释放 pending 占满并发槽位" 漏洞)。用户已确认接受。
 - cancel_pending:**带 apikey+agent 过滤**(采纳 contract 更严谨实现)。
 - 管理接口:**现有接口一律不变**(生产已上线),新增**单独**全局账单接口。
+- apikey 停用规则:**统一 contract 规则** —— 管理员可停用任何 apikey(含 admin 目标),
+  仅不可停用自己(防误删自身凭据)。采纳理由:能清理违规/误建 admin;公共
+  `ensure_admin(agent)` 幂等(读 ADMIN_APIKEY 可重建),无"全停死"风险;
+  contract 已实现且有测试。sentiment 现行为(admin 不可删)随之改变,已确认。
 - 存量迁移:迁移脚本 dry-run 先行,sentiment 生产数据迁入,幂等。
 
 ## 2.5 影响面与兼容性保证(原 agent 不受影响)
