@@ -64,6 +64,10 @@ def commit(apikey: str, agent: str, bill_no: str) -> None:
         key = rows[0] if rows else None
         if key is None:
             raise RuntimeError("apikey 不存在")
+        if key["free_used"] >= key["free_quota"] and key["paid_used"] >= key["paid_quota"]:
+            # free/paid 双耗尽:并发下继续扣会超扣超过额度。抛 HTTPException → 事务回滚
+            # (已 committed 的 UPDATE 一并回滚),commit() 外层还原 403(终审 M7)。
+            raise HTTPException(status_code=403, detail="额度不足,请联系管理员充值")
         if key["free_used"] < key["free_quota"]:
             exec("UPDATE agent_api_keys SET free_used=free_used+1 WHERE apikey=%s AND agent=%s",
                  (apikey, agent))
@@ -75,7 +79,14 @@ def commit(apikey: str, agent: str, bill_no: str) -> None:
         exec("UPDATE agent_billing_records SET quota_type=%s "
              "WHERE apikey=%s AND agent=%s AND bill_no=%s",
              (quota_type, apikey, agent, bill_no))
-    _do()
+    try:
+        _do()
+    except RuntimeError as exc:
+        # 事务包装把事务内异常统一包成 RuntimeError:还原 403(额度不足)等 HTTPException
+        # 语义 —— 事务已回滚,状态一致(终审 M7 防超扣)。非 HTTPException 的失败原样抛。
+        if isinstance(exc.__cause__, HTTPException):
+            raise exc.__cause__ from exc
+        raise
 
 
 def cancel_pending(apikey: str, agent: str, bill_no: str) -> None:

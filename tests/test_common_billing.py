@@ -129,6 +129,28 @@ def test_cancel_filters_apikey(tmp_path, monkeypatch):
     assert billing.usage("k1", "sentiment")["pending_count"] == 0
 
 
+def test_commit_both_exhausted_403_no_overdraw(tmp_path, monkeypatch):
+    """M7:free+paid 都耗尽后 commit → 403,不超扣(事务回滚)。
+
+    场景:free_quota=1/paid_quota=0。commit b1 用掉唯一免费额度后,双耗尽;
+    此时仍可 create_pending(模拟并发/额度被调减后残留的 pending),再 commit
+    应 403,paid_used 保持 0(不超扣),b2 记录不落 committed(事务回滚)。
+    """
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed(free=1, paid=0)
+    billing.create_pending("k1", "sentiment", "b1")
+    billing.commit("k1", "sentiment", "b1")  # 用掉唯一免费额度 → free_used=1
+    billing.create_pending("k1", "sentiment", "b2")  # 额度耗尽后残留的 pending
+    with pytest.raises(Exception) as e:
+        billing.commit("k1", "sentiment", "b2")  # 双耗尽 → 403
+    assert getattr(e.value, "status_code", None) == 403
+    u = billing.usage("k1", "sentiment")
+    assert u["free"]["used"] == 1 and u["paid"]["used"] == 0  # 不超扣
+    # 事务回滚:该记录未被误标 committed,仍是 pending
+    assert db.query("SELECT status FROM agent_billing_records "
+                    "WHERE agent=%s AND bill_no=%s", ("sentiment", "b2"))[0]["status"] == "pending"
+
+
 def test_usage_all_filters_agent(tmp_path, monkeypatch):
     _sqlite_env(tmp_path, monkeypatch)
     _seed("k1", "sentiment")
