@@ -19,10 +19,8 @@ START → parse → review_chapters → verify_refs → summarize → END
 | 文件 | 职责 |
 |---|---|
 | [agent.py](agent.py) | 图构建入口:`build_graph()`(已实现,langgraph.json 注册入口;含 `run_review` / `_default_law_store`) |
-| [api.py](api.py) | FastAPI:review/status/result/stop/prompt/laws/apikeys 8 接口 + 独立 apikey 配额计费 |
-| [auth.py](auth.py) | 独立 apikey 鉴权(contract 独立体系,不复用 sentiment)+ 管理员校验 |
-| [billing.py](billing.py) | 独立配额与计费(contract_api_keys/contract_billing_records 表),按次扣费 |
-| [apikey_mgmt.py](apikey_mgmt.py) | 独立 apikey 管理:创建/修改/删除(软删)+ 管理员初始化 |
+| [api.py](api.py) | FastAPI:review/status/result/stop/prompt/laws/apikeys 8 接口 + 公共计费组件(agent='contract') |
+| 计费/鉴权/apikey 管理 | 公共组件 [`common/billing.py`](../../common/billing.py) / [`common/auth.py`](../../common/auth.py) / [`common/apikey_mgmt.py`](../../common/apikey_mgmt.py)(agent='contract',统一表 agent_api_keys/agent_billing_records) |
 | [graph/state.py](graph/state.py) | AgentState + finding 模型(原文引用/风险类型/建议/法律依据/confidence) |
 | [graph/nodes.py](graph/nodes.py) | parse / review_chapters / summarize 节点(LLM 强制 JSON,temp 固定 0.1) |
 | [graph/verify.py](graph/verify.py) | **引用校验层(核心)**:条号存在 + 引文 fuzzy match(≥0.8),失败降级 suggestion;纯代码无 LLM |
@@ -42,7 +40,11 @@ START → parse → review_chapters → verify_refs → summarize → END
 - **改审核 prompt**:`graph/nodes.py` 的 review_chapters 节点(F1 产出的结构化 prompt 或用户审核要求 + 检索法条片段注入;ChatPromptTemplate 是 f-string 语法,JSON 样例 `{}` 转义 `{{}}`,见 dev-standards §7.2)。
 - **改引用校验阈值**:`graph/verify.py`(条号存在性 + 引文 fuzzy match 相似度阈值,difflib ratio ≥ 0.8)。
 - **配百度 OCR**:`.env` 配 `BAIDU_OCR_API_KEY` / `BAIDU_OCR_SECRET_KEY`(凭据不进 git);扫描件(无文本层 pdf)自动走百度云端 OCR 分章后照常审核;缺凭据返回 `ocr_unconfigured`,OCR 失败返回 `ocr_failed`。
-- **配独立计费/鉴权**:`.env` 的 `MYSQL_URL`(agentstore 库,独立表 contract_api_keys/contract_billing_records)+ `ADMIN_APIKEY`;存储访问统一走 `common/db.py`(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。
+- **配配额/鉴权(公共组件)**:`.env` 的 `MYSQL_URL`(agentstore 库,统一表
+  agent_api_keys/agent_billing_records,agent='contract')+ `ADMIN_APIKEY`;api.py
+  调 `common.billing` / `common.auth` / `common.apikey_mgmt`(agent='contract'),生产
+  MySQL 建表走 `deploy/init_tables.sql`(含 agent_* 两表);存储访问统一走
+  `common/db.py`(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。
 - **配 embedding 模型**:`.env` 的 `EMBEDDING_*` 组(默认 huggingface 本地 bge-small-zh-v1.5;换模型后必须 drop `data/contract-rag` 重灌)。
 - **跑测试**:`pytest tests/test_contract_review_agent.py -v`(解析/校验层/seed/计费/接口单测,SQLite 后端;图/端到端需外部服务)。
 - **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
@@ -56,7 +58,11 @@ START → parse → review_chapters → verify_refs → summarize → END
 - **反幻觉铁律**:审核节点只允许引用检索返回的法条片段;校验层逐条核验;任何无法核验的内容不进入 statutory 结论,降级 suggestion 并在报告标注;输出报告声明法条库版本。法条文本只来自 `data/laws/` 权威真源,严禁编造。
 - **temperature**:F1 ≤ 0.2,F2 固定 0.1(经 `common/llm.py` 工厂,不直接 new)。
 - **大小限制**:文件 ≤2MB 且正文 ≤5 万字,超限明确报错 `CONTRACT_TOO_LONG`,提示分段;暂不支持超长文分段审核;非 docx/pdf 报 `UNSUPPORTED_TYPE`;扫描件(无文本层 pdf)自动走百度云端 OCR(需 `.env` 配 `BAIDU_OCR_*`;缺凭据 `ocr_unconfigured`,失败 `ocr_failed`)。
-- **独立计费/鉴权**:计费/鉴权不上提 common/、不跨 agent import(设计 §5 决策记录:用户明确要求"单独做,不复用")。
+- **计费/鉴权走公共组件**:api.py 调 `common.billing` / `common.auth` /
+  `common.apikey_mgmt`,agent 固定 'contract',统一表 agent_api_keys /
+  agent_billing_records((apikey, agent) 复合主键,与 sentiment 同表同 schema,
+  额度按 agent 维度隔离);接口端点/参数/返回不变。本 agent 不再有独立
+  billing.py / auth.py / apikey_mgmt.py(v0.8.0 已删)。
 - **langchain MCP 铁律**:开发前必须查 docs-langchain / reference-langchain MCP 确认 API 用法,禁止凭记忆写 API(见根 CLAUDE.md)。
 - **LLM 畸形输出重试(spec §8 承诺,待实现)**:非 JSON 输出重试(复用 sentiment 重试预算,上限 3 次);当前 review 节点无重试,见 CHANGELOG follow-up。
 - 用户标识(apikey)只进日志/计费,不进 span label(OTel 高基数约束,OBS-CORE-003)。

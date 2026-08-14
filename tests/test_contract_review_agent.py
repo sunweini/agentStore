@@ -423,19 +423,20 @@ def test_optimize_review_prompt_keeps_ref_guidance():
 
 # ---- Task 11 独立计费/鉴权:SQLite 临时库,不碰生产 MySQL(设计 §5) ----
 
-from agents.contract_review_agent.billing import (  # noqa: E402
-    init_db, create_pending, commit, cancel_pending, check_quota, usage)
-from agents.contract_review_agent.apikey_mgmt import create_apikey  # noqa: E402
+from common import db  # noqa: E402
+from common.billing import (  # noqa: E402
+    create_pending, commit, cancel_pending, check_quota, usage)
+from common.apikey_mgmt import create_apikey  # noqa: E402
 
 
 def test_billing_flow(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test.db"))
-    init_db()
-    key = create_apikey("tester")["apikey"]
-    create_pending(key, "task1")
-    commit(key, "task1")
-    u = usage(key)
+    db.init_tables()
+    key = create_apikey("contract", "tester")["apikey"]
+    create_pending(key, "contract", "task1")
+    commit(key, "contract", "task1")
+    u = usage(key, "contract")
     assert u["free"]["used"] == 1
     assert u["pending_count"] == 0
 
@@ -443,43 +444,42 @@ def test_billing_flow(tmp_path, monkeypatch):
 def test_commit_then_cancel_frees_pending(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test2.db"))
-    init_db()
-    key = create_apikey("tester2")["apikey"]
-    create_pending(key, "t2")
-    cancel_pending(key, "t2")
-    assert usage(key)["pending_count"] == 0
+    db.init_tables()
+    key = create_apikey("contract", "tester2")["apikey"]
+    create_pending(key, "contract", "t2")
+    cancel_pending(key, "contract", "t2")
+    assert usage(key, "contract")["pending_count"] == 0
 
 
 # ---- Task 11 安全加固(审查 Important):create_apikey role 校验 + 允许停用 admin ----
 
 from fastapi import HTTPException  # noqa: E402
-from agents.contract_review_agent.apikey_mgmt import (  # noqa: E402
-    create_apikey, deactivate_apikey)
-from agents.contract_review_agent.auth import check_apikey  # noqa: E402
+from common.apikey_mgmt import create_apikey, deactivate_apikey  # noqa: E402
+from common.auth import check_apikey  # noqa: E402
 
 
 def test_create_apikey_rejects_bad_role(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test3.db"))
-    init_db()
+    db.init_tables()
     with pytest.raises(ValueError):
-        create_apikey("hacker", role="superadmin")
+        create_apikey("contract", "hacker", role="superadmin")
 
 
 def test_admin_can_deactivate_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "test4.db"))
-    init_db()
-    admin1 = create_apikey("admin1", role="admin")["apikey"]
-    admin2 = create_apikey("admin2", role="admin")["apikey"]
+    db.init_tables()
+    admin1 = create_apikey("contract", "admin1", role="admin")["apikey"]
+    admin2 = create_apikey("contract", "admin2", role="admin")["apikey"]
     # 管理员可软删另一个管理员(堵住"被铸 admin 永不可停用"的后门)
-    deactivate_apikey(admin2, admin1)
+    deactivate_apikey("contract", admin2, admin1)
     with pytest.raises(HTTPException) as exc:
-        check_apikey(admin2)
+        check_apikey(admin2, "contract")
     assert exc.value.status_code == 401
     # 但不能停用自己
     with pytest.raises(HTTPException) as exc2:
-        deactivate_apikey(admin1, admin1)
+        deactivate_apikey("contract", admin1, admin1)
     assert exc2.value.status_code == 403
 
 
@@ -531,8 +531,8 @@ def test_review_background_exception_fallback(tmp_path, monkeypatch):
     """run_review 抛异常 → 任务转 failed(不 stuck running)+ cancel_pending 被调(审查 Critical #1)。"""
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "api.db"))
-    init_db()
-    key = create_apikey("api_tester")["apikey"]
+    db.init_tables()
+    key = create_apikey("contract", "api_tester")["apikey"]
 
     import agents.contract_review_agent.api as api_module  # noqa: E402
     with patch("agents.contract_review_agent.agent.run_review",
@@ -545,7 +545,7 @@ def test_review_background_exception_fallback(tmp_path, monkeypatch):
                    files=files, data={"contract_type": "劳动合同", "prompt": "审"})
         assert r.status_code == 200
         assert m.called, "run_review 抛异常后应调用 cancel_pending"
-        task_id = m.call_args[0][1]
+        task_id = m.call_args[0][2]  # cancel_pending(apikey, agent, task_id) 第 3 参
 
     s = TestClient(app).get(f"/api/v1/contract/status?task_id={task_id}",
                             headers={"apikey": key})
@@ -564,9 +564,9 @@ def test_status_ownership_enforced(tmp_path, monkeypatch):
     """非本人 apikey 读他人任务 → 404(审查 Important #7,不泄露任务存在性)。"""
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "api2.db"))
-    init_db()
-    owner = create_apikey("owner")["apikey"]
-    other = create_apikey("other")["apikey"]
+    db.init_tables()
+    owner = create_apikey("contract", "owner")["apikey"]
+    other = create_apikey("contract", "other")["apikey"]
 
     import agents.contract_review_agent.api as api_module  # noqa: E402
     api_module._tasks["t_own"] = {"status": "running", "progress": 0.0,

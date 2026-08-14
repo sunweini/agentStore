@@ -5,6 +5,21 @@
 
 ---
 
+## v0.8.0 — 2026-08-14(计费切公共组件:agent_api_keys/agent_billing_records)
+
+### 重构
+
+- **计费/鉴权/apikey 管理上提公共组件**(`common.billing` / `common.auth` /
+  `common.apikey_mgmt`,agent='contract'):删除 `billing.py` / `auth.py` /
+  `apikey_mgmt.py` 三份重复实现(逐字重复),api.py 改 import 公共组件并补
+  `"contract"` 参数。存储表从 `contract_api_keys` / `contract_billing_records`
+  收敛到统一表 `agent_api_keys` / `agent_billing_records`((apikey, agent) 复合主键)。
+  接口端点/请求参数/响应结构零变化(生产/测试已上线,对接方不受影响)。
+- `deploy/init_tables.sql` 追加 `agent_api_keys` / `agent_billing_records` 两表
+  (MySQL 方言,与 `common/db.py init_tables()` 一致);老表保留不删(回滚路径)。
+
+---
+
 ## v0.7.0 — 2026-08-14(性能:必查法条相关性裁剪 + LLM 超时 + 进度回显)
 
 ### 新增

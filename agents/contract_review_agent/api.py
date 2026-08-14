@@ -13,7 +13,8 @@
   DELETE /api/v1/apikeys/{apikey} 独立 apikey 停用(管理员)
   GET  /health                   健康检查
 
-鉴权/计费走 auth.py / billing.py(独立 apikey 体系,contract 独立表,与 sentiment 隔离):
+鉴权/计费走公共组件 common.auth / common.billing(agent='contract',统一表
+  agent_api_keys / agent_billing_records):
   所有接口需 Header apikey;apikey 管理接口需管理员。
   审核完成 commit 扣 1 单位;F1 / 法条查询不计费;并发 pending 上限 5。
 
@@ -42,7 +43,7 @@ from fastapi import FastAPI, File, Form, Header, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
-from agents.contract_review_agent import billing, auth
+from common import auth, billing
 from agents.contract_review_agent.store.law_store import LawStore
 
 app = FastAPI(title="contract_review_agent")
@@ -79,7 +80,7 @@ def health():
 def _require_key(apikey: str) -> dict:
     """apikey 校验;鉴权失败记结构化日志(OBS-CORE-001/002)。"""
     try:
-        return auth.check_apikey(apikey)
+        return auth.check_apikey(apikey, "contract")
     except HTTPException as exc:
         logger.warning("service=%s event=auth_failed apikey=%s status=%s",
                        _SERVICE, _mask(apikey), exc.status_code)
@@ -89,7 +90,7 @@ def _require_key(apikey: str) -> dict:
 def _require_admin(apikey: str) -> None:
     """管理员校验;鉴权失败记结构化日志。"""
     try:
-        auth.require_admin(apikey)
+        auth.require_admin(apikey, "contract")
     except HTTPException as exc:
         logger.warning("service=%s event=auth_failed role=admin apikey=%s status=%s",
                        _SERVICE, _mask(apikey), exc.status_code)
@@ -172,7 +173,7 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
                 t["error"] = "internal_error"
                 t["result"] = None
                 t["progress"] = 1.0
-        billing.cancel_pending(apikey, task_id)
+        billing.cancel_pending(apikey, "contract", task_id)
         Path(file_path).unlink(missing_ok=True)
         return
 
@@ -187,7 +188,7 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
         return
 
     if result["error"]:
-        billing.cancel_pending(apikey, task_id)
+        billing.cancel_pending(apikey, "contract", task_id)
         logger.info("service=%s event=billing_cancel task_id=%s request_id=%s error=%s",
                     _SERVICE, task_id, request_id, result["error"])
         with _lock:
@@ -199,7 +200,7 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
         return
 
     try:
-        billing.commit(apikey, task_id)
+        billing.commit(apikey, "contract", task_id)
     except RuntimeError as exc:
         # commit 事务内 HTTPException(如 pending 不存在)被 common/db.transaction
         # 吞为 RuntimeError:转失败态,result 置空(不返回成功报告),避免 pending 悬挂。
@@ -232,7 +233,7 @@ async def review(apikey: str = Header(...), contract_type: str = Form(...),
     """提交合同审核:校验 apikey/额度/类型/大小 → 建 pending → 后台线程跑审核 → SSE 进度。"""
     request_id = uuid.uuid4().hex[:16]
     _require_key(apikey)
-    billing.check_quota(apikey)
+    billing.check_quota(apikey, "contract")
     suffix = Path(file.filename or "x.docx").suffix.lower()
     if suffix not in (".docx", ".pdf"):
         raise HTTPException(status_code=400, detail="仅支持 docx/pdf")
@@ -247,7 +248,7 @@ async def review(apikey: str = Header(...), contract_type: str = Form(...),
         with open(fd, "wb") as f:
             f.write(data)
         task_id = uuid.uuid4().hex
-        billing.create_pending(apikey, task_id)
+        billing.create_pending(apikey, "contract", task_id)
         with _lock:
             _tasks[task_id] = {"status": "running", "progress": 0.0,
                                "stage": "提交", "stage_title": "",
@@ -315,7 +316,7 @@ def stop(task_id: str, apikey: str = Header(...)):
         raise HTTPException(status_code=409, detail="任务已结束")
     with _lock:
         t["status"] = "cancelled"
-    billing.cancel_pending(apikey, task_id)
+    billing.cancel_pending(apikey, "contract", task_id)
     logger.info("service=%s event=task_stopped task_id=%s request_id=%s",
                 _SERVICE, task_id, t.get("request_id", ""))
     return {"ok": True}
@@ -324,23 +325,23 @@ def stop(task_id: str, apikey: str = Header(...)):
 @app.post("/api/v1/apikeys")
 def api_create(name: str = Form(...), admin: str = Header(...)):
     """创建 apikey(默认免费 10 / 付费 0),仅管理员。"""
-    from agents.contract_review_agent.apikey_mgmt import create_apikey
+    from common.apikey_mgmt import create_apikey
     _require_admin(admin)
-    return create_apikey(name)
+    return create_apikey("contract", name)
 
 
 @app.get("/api/v1/apikeys")
 def api_list(admin: str = Header(...)):
     """apikey 额度使用列表,仅管理员。"""
-    from agents.contract_review_agent.apikey_mgmt import admin_list
+    from common.apikey_mgmt import admin_list
     _require_admin(admin)
-    return {"apikeys": admin_list(admin)}
+    return {"apikeys": admin_list(admin, "contract")}
 
 
 @app.delete("/api/v1/apikeys/{apikey}")
 def api_delete(apikey: str, admin: str = Header(...)):
     """停用 apikey(软删),仅管理员;不可停用自己(守卫在 apikey_mgmt)。"""
-    from agents.contract_review_agent.apikey_mgmt import deactivate_apikey
+    from common.apikey_mgmt import deactivate_apikey
     _require_admin(admin)
-    deactivate_apikey(apikey, admin)
+    deactivate_apikey("contract", apikey, admin)
     return {"ok": True}
