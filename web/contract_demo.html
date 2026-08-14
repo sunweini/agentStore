@@ -68,7 +68,8 @@ pre.out .md b{color:#FFD77A}
   <div class="card">
     <h3>F2 · 合同审核</h3>
     <div class="row"><div class="lab">apikey <i>*</i></div>
-      <div><input id="apikey" type="text" placeholder="sk-... 测试环境 apikey" /></div>
+      <div><input id="apikey" type="text" value="sk-contract-test-ca65c77e2991159a" placeholder="sk-... 测试环境 apikey" />
+      <div class="hint">测试环境已预填。首次使用若无效,用管理员 apikey 重新创建。</div></div>
     </div>
     <div class="row"><div class="lab">合同文件 <i>*</i></div>
       <div><input id="file" type="file" accept=".docx,.pdf" />
@@ -137,12 +138,13 @@ async function postSSE(path, body, onEvent){
 $("f1_btn").onclick = async function(){
   const btn = this; btn.disabled = true;
   const st = $("f1_status"); st.className = "status"; st.textContent = "优化中…"; st.classList.add("run");
+  const key = $("apikey").value.trim();
+  if(!key){ st.textContent = "请先填 apikey"; st.className = "status err"; btn.disabled = false; return; }
   try{
     const fd = new FormData();
     fd.append("contract_type", $("f1_type").value);
     fd.append("prompt", $("f1_prompt").value);
-    const key = $("apikey").value.trim();
-    const resp = await fetch(`${API}/api/v1/contract/prompt`, {method:"POST", headers:key?{apikey:key}:{}, body:fd});
+    const resp = await fetch(`${API}/api/v1/contract/prompt`, {method:"POST", headers:{apikey:key}, body:fd});
     if(!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
     const j = await resp.json();
     $("f1_code").textContent = j.prompt || JSON.stringify(j);
