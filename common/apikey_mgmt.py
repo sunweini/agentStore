@@ -28,6 +28,7 @@ import secrets
 from fastapi import HTTPException
 
 from common import config, db
+from common.auth import require_admin
 from common.billing import _ADMIN_FREE_QUOTA
 
 logger = logging.getLogger(__name__)
@@ -47,18 +48,6 @@ def _get_row(apikey: str, agent: str) -> dict | None:
     rows = db.query("SELECT * FROM agent_api_keys WHERE apikey=%s AND agent=%s",
                     (apikey, agent))
     return rows[0] if rows else None
-
-
-def _require_admin(apikey: str, agent: str) -> None:
-    """管理接口校验:该 agent 下 apikey 存在 + active 且 role='admin',否则 403。
-
-    common.auth(Task 4)落位前的本地实现;语义与 contract require_admin 一致。
-    """
-    row = _get_row(apikey, agent)
-    if row is None or row["status"] != "active":
-        raise HTTPException(status_code=401, detail="apikey 无效或已删除")
-    if row["role"] != "admin":
-        raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
 def create_apikey(agent: str, name: str, role: str = "normal") -> dict:
@@ -129,7 +118,7 @@ def deactivate_apikey(agent: str, apikey: str, admin: str) -> None:
     统一 contract 规则:调用方(admin)须经 require_admin 授权;放开对 admin 目标的
     停用(堵"被铸 admin 永不可停用"后门),仅保留"不可停用自己"守卫防误删自身凭据。
     """
-    _require_admin(admin, agent)
+    require_admin(admin, agent)
     if apikey == admin:
         raise HTTPException(status_code=403, detail="不可停用自己")
     if _get_row(apikey, agent) is None:
@@ -140,7 +129,7 @@ def deactivate_apikey(agent: str, apikey: str, admin: str) -> None:
 
 def admin_list(apikey: str, agent: str) -> list[dict]:
     """管理员:查该 agent 全部 apikey 的额度使用(含 status,软删的也列出)。"""
-    _require_admin(apikey, agent)
+    require_admin(apikey, agent)
     rows = db.query(
         "SELECT apikey, agent, role, status, free_quota, free_used, paid_quota, paid_used "
         "FROM agent_api_keys WHERE agent=%s ORDER BY apikey", (agent,))

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from common import auth
 from common import billing
 from common import apikey_mgmt as billing_mgmt
 from common import db
@@ -199,3 +200,53 @@ def test_ensure_admin_rebuilds_after_deactivate(tmp_path, monkeypatch):
     admins = db.query("SELECT apikey, status FROM agent_api_keys "
                       "WHERE agent='sentiment' AND role='admin'")
     assert [a["status"] for a in admins] == ["deleted", "active"]
+
+
+# ===== 4. 公共鉴权(common/auth.py,Task 4) =====
+
+
+def test_auth_check_apikey(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment")
+    row = auth.check_apikey("k1", "sentiment")
+    assert row["apikey"] == "k1" and row["agent"] == "sentiment"
+    # 无行 → 401
+    with pytest.raises(Exception) as e:
+        auth.check_apikey("k-none", "sentiment")
+    assert getattr(e.value, "status_code", None) == 401
+    # 非 active → 401
+    db.execute("UPDATE agent_api_keys SET status='deleted' "
+               "WHERE apikey='k1' AND agent='sentiment'")
+    with pytest.raises(Exception) as e:
+        auth.check_apikey("k1", "sentiment")
+    assert getattr(e.value, "status_code", None) == 401
+
+
+def test_auth_require_admin(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment")
+    with pytest.raises(Exception) as e:
+        auth.require_admin("k1", "sentiment")  # normal → 403
+    assert getattr(e.value, "status_code", None) == 403
+    db.execute("UPDATE agent_api_keys SET role='admin' "
+               "WHERE apikey='k1' AND agent='sentiment'")
+    auth.require_admin("k1", "sentiment")  # admin → 不抛
+    with pytest.raises(Exception) as e:
+        auth.require_admin("k1", "contract")  # 无行 → 401
+    assert getattr(e.value, "status_code", None) == 401
+
+
+def test_auth_assert_owner(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment")
+    _seed("admin1", "sentiment")
+    db.execute("UPDATE agent_api_keys SET role='admin' "
+               "WHERE apikey='admin1' AND agent='sentiment'")
+    auth.assert_owner("k1", "k1")  # 本人 → 不抛
+    with pytest.raises(Exception) as e:
+        auth.assert_owner("k1", "k2")  # 非本人且未传管理员 → 403
+    assert getattr(e.value, "status_code", None) == 403
+    auth.assert_owner("k1", "k2", admin="admin1")  # 管理员放行 → 不抛
+    with pytest.raises(Exception) as e:
+        auth.assert_owner("k1", "k2", admin="k1")  # 传的管理员非 admin → 403
+    assert getattr(e.value, "status_code", None) == 403
