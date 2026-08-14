@@ -35,6 +35,8 @@
 - common/admin_api.py:mutation 端点(create/换 key/角色/软删/增额度)补结构化审计日志(apikey 一律 `_mask_apikey` 脱敏);ADMIN_APIKEY 未配置启动即告警。
 - web/admin.html:行内按钮改 tbody 一次性事件委托,quota tab 切换(不经 loadKeys)按钮不再失监听。
 - **生产部署(admin_console/)**:独立容器 `admin_console-admin-1`(端口 8003),nginx 80 端口 `/admin/` 路由反代(合并版 nginx-default.conf 覆盖 mount 源)。已上线 10.33.17.72,管理台 http://10.33.17.72/admin/。
+- **nginx 路由持久化**:admin 路由(`/admin/` + `/api/v1/admin/`)永久写进 sentiment 的 `nginx.conf` 源文件,sentiment 部署自动带上,移除覆盖 mount 源的 hack。
+- **对接文档**:contract 新增 `INTEGRATION.md`(机器可读对接规范,对标 sentiment);新增 `docs/billing-and-reporting-integration.md`(统一计费/统计接入指南,供后续接入 agent 的 AI 读)。
 - 清理终审 deferred minors:billing.report_summary 排除 admin、create_apikey docstring 补 why、admin_api 请求体字段约束 + CORS 收紧、前端低额度阈值统一 LOW_N/额度健康度总览/editKey 预校验、测试补断言。
 
 ### 2026-08-14(公共计费硬化 M1-M8)
