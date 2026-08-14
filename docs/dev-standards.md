@@ -164,3 +164,45 @@ START → <node1> ──<条件>──→ <node2>
 - **改代码后必须 taskkill 全杀再重启**:Windows 端口被旧进程占用时新进程起不来,旧进程继续服务(改了像没改)。对策:改完代码 `taskkill /F /IM python.exe`(或按 PID 树)全杀 → 重启 → 验证端口监听。
 - **PowerShell 5.1 无 BOM UTF-8 文件读乱码**:5.1 按 ANSI 读无 BOM UTF-8,脚本里中文注释/字符串乱码(有 BOM 才按 UTF-8)。对策:脚本注释用英文,或文件存带 BOM。
 - **金蝶服务器 8000 端口被占用**:金蝶默认 WebSite 占用 8000,编译服务默认端口撞车。对策:编译服务换端口(如 8001),.env 的 `COMPILE_SERVICE_URL` 同步。
+
+## 8. 新 agent 接入公共计费组件(自动适配,公共组件零改动)
+
+> 目标:新 agent 开发时按本指引接入统一计费,**不需要修改 common/billing.py 等公共组件**。
+> 公共组件按 `(apikey, agent)` 维度设计,agent 只是参数。已接入示例:sentiment(agent='sentiment')/ contract(agent='contract')。
+> 设计文档:`docs/superpowers/specs/2026-08-14-common-billing-component-design.md`。
+
+### 8.1 接入步骤(新 agent)
+
+1. **定 agent 短名**:小写英文(如 `myagent`),与容器项目名 `deploy-<agent>` 一致(见根 CLAUDE.md 部署命名规范)。
+2. **api.py import 公共组件**,所有鉴权/计费调用传 agent 参数:
+   - 鉴权:`common.auth.check_apikey(apikey, agent)`(401)/ `require_admin(apikey, agent)`(403)
+   - 计费:`common.billing.check_quota(apikey, agent)`(额度≤0 → 403)/ `create_pending(apikey, agent, bill_no)`(pending≥5 → 429)/ `commit(apikey, agent, bill_no)`(完成扣 1 单位,先免费后付费)/ `cancel_pending(apikey, agent, bill_no)`/ `usage(apikey, agent)`
+   - apikey 管理:`common.apikey_mgmt.create_apikey(agent, name, role)` / `deactivate_apikey(agent, apikey, admin)` / `ensure_admin(agent)`
+   - `bill_no` = 业务单号(任务/方案单号),各 agent 自己的 ID 即可。
+3. **计费时机**(统一语义,公共组件已实现):
+   - 提交任务 → `create_pending`
+   - 任务成功 → `commit`
+   - **失败/异常/取消 → 一律 `cancel_pending`**(公共组件已统一,不泄漏 pending 槽位)
+4. **管理员引导**:应用启动时调 `ensure_admin(agent)`(读 `.env ADMIN_APIKEY` 写入,或自动生成+日志,幂等)。
+5. **建表 + 测试**:
+   - `common/db.py init_tables()` 已建 `agent_api_keys`/`agent_billing_records`,本地/SQLite 测试直接用。
+   - 生产:`deploy/init_tables.sql` 需含 agent_* 两表(照 sentiment/contract 的 DDL 抄即可,列结构固定)。
+   - 生产首次上线前,若该 agent 有存量数据需先跑迁移(参照 `scripts/migrate_billing.py` 模式;新 agent 通常无存量,跳过)。
+
+### 8.2 验证方式
+
+- 公共组件单测:`pytest tests/test_common_billing.py -q`(扣费/并发/失败 cancel/事务,SQLite)。
+- agent 接口测试(TestClient + SQLite):
+  - 鉴权:无/无效 apikey → 401;非管理员操作 → 403
+  - 额度:free+paid 耗尽 → 403
+  - 并发:同 (apikey, agent) pending ≥5 → 429
+  - 计费:提交 create_pending → 成功 commit 扣 1 → usage free/paid 用掉正确;失败/取消 → cancel 后 pending_count 归零
+- 全量回归:`pytest tests/ -q`(确认公共组件改动不破坏其它 agent)。
+
+### 8.3 关键约束
+
+- **公共组件零改动**:新 agent 只传 agent 参数,不得新增表/改函数签名/加 if-agent 分支。若发现公共组件无法满足需求(如不同计费单位),先讨论设计再改组件(走"先设计后实现"流程)。
+- **每 agent 独立额度**:(apikey, agent) 复合主键,同 apikey 不同 agent 额度隔离。
+- **接口表面自定**:agent 对外端点/参数自定,内部计费走公共组件即可。
+- **计费单位统一**:一次 commit 扣 1 单位,先免费后付费。
+- 现有 agent 的独立计费文件(billing.py/apikey_mgmt.py/auth.py)已删除,新 agent **不要新建** —— 一律用 common。

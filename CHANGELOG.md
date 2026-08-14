@@ -25,6 +25,16 @@
 
 ## 项目级历史
 
+### 2026-08-14(新 agent 接入公共计费指引)
+
+#### 变更
+- `docs/dev-standards.md` 新增 §8「新 agent 接入公共计费组件」:接入步骤(定 agent 短名
+  → api.py 用 common.billing/auth/apikey_mgmt 传 agent 参数 → 计费时机 create_pending/
+  commit/失败 cancel → ensure_admin → 建表)+ 验证方式(公共单测 + agent 接口 + 全量回归)。
+- 根 `CLAUDE.md` 开发流程加第 3 步:新 agent 必须接入公共计费,禁止新建独立计费文件,
+  公共组件零改动(agent 只是参数)。
+- 目标:新 agent 开发自动适配公共计费,不再重复调整公共组件。
+
 ### 2026-08-14(公共计费组件:common.billing/apikey_mgmt/auth + 统一表 + 迁移脚本)
 
 #### 变更
