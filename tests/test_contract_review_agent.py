@@ -128,6 +128,37 @@ def test_domain_substring_mapping():
     assert _domain_of("未知类型") == ""
 
 
+def test_retrieve_empty_query_returns_priority(tmp_path):
+    """空正文章节(孤立标题)不做语义检索:嵌入服务拒绝空 input,只回必查法条。"""
+    from agents.contract_review_agent.store.law_store import LawStore
+
+    s = LawStore(data_dir=tmp_path / "rag")
+    s.seed("""# 中华人民共和国劳动合同法
+来源: u
+采集日期: 2026-08-13
+领域: labor
+
+## 第二十五条
+除本法第二十二条和第二十三条规定的情形外，用人单位不得与劳动者约定由劳动者承担违约金。""")
+    hits = s.retrieve("", "劳动合同", k=8)
+    assert any(h["metadata"].get("priority") for h in hits)
+
+
+def test_review_all_skips_empty_chapter(monkeypatch):
+    """空正文的孤立标题章节不进 LLM(无内容可审)。"""
+    import agents.contract_review_agent.graph.nodes as nodes_mod
+    from agents.contract_review_agent.graph.nodes import review_all
+
+    called = []
+    monkeypatch.setattr(nodes_mod, "review_chapter",
+                        lambda llm, ct, ch, rp, law_store=None: called.append(ch["title"]))
+    review_all({"chapters": [{"title": "孤立标题", "text": ""},
+                             {"title": "有内容", "text": "正文"}],
+                "contract_type": "劳动合同", "review_prompt": "审"},
+               law_store=None)
+    assert called == ["有内容"]
+
+
 def test_load_bundled_from_md_dir(tmp_path):
     """LawStore(laws_dir=...) 构造即加载 md 精确索引,不 seed 也能 verify_ref(生产运行时关键)。"""
     laws_dir = tmp_path / "laws"

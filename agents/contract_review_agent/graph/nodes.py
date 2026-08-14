@@ -87,6 +87,9 @@ def review_all(state: AgentState, law_store) -> dict:
     llm = _review_model()
     reviews = []
     for chapter in state["chapters"]:
+        # 空正文章节(如 PDF 标题启发式误判的孤立标题)无内容可审,跳过不进 LLM
+        if not (chapter.get("text") or "").strip():
+            continue
         reviews.append(review_chapter(
             llm, state.get("contract_type", ""), chapter,
             state.get("review_prompt", ""), law_store))

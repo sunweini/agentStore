@@ -175,6 +175,10 @@ class LawStore:
 
     def retrieve(self, query: str, contract_type: str = "", k: int = 8) -> list[dict]:
         priority = self._priority_fragments(contract_type)
+        # 空正文章节(如 PDF 标题启发式误判的孤立标题行)不做语义检索:
+        # 嵌入服务拒绝空 input(413 inputs cannot be empty),只回必查法条。
+        if not query or not query.strip():
+            return priority
         prio_keys = {(f["metadata"]["law_name"], f["metadata"]["article_no"])
                      for f in priority}
         rest_k = max(k - len(priority), 0)
