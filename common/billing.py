@@ -144,3 +144,44 @@ def list_pending(apikey: str, agent: str) -> list[dict]:
         "SELECT bill_no, created_at FROM agent_billing_records "
         "WHERE apikey=%s AND agent=%s AND status='pending' ORDER BY created_at DESC",
         (apikey, agent))
+
+
+def report_summary(agent: str | None = None) -> dict:
+    """按 agent 汇总额度使用(仅 active key)。"""
+    sql = ("SELECT agent, COUNT(*) AS key_count, SUM(free_used) AS free_used, "
+           "SUM(free_quota - free_used) AS free_remaining, "
+           "SUM(paid_used) AS paid_used, SUM(paid_quota - paid_used) AS paid_remaining "
+           "FROM agent_api_keys WHERE status='active'")
+    params: tuple = ()
+    if agent:
+        sql += " AND agent=%s"
+        params = (agent,)
+    sql += " GROUP BY agent ORDER BY agent"
+    rows = db.query(sql, params)
+    keys = ("key_count", "free_used", "free_remaining", "paid_used", "paid_remaining")
+    return {
+        "agents": rows,
+        "total": {k: sum(r[k] for r in rows) for k in keys},
+    }
+
+
+def report_history(agent: str | None = None, apikey: str | None = None,
+                   days: int = 30) -> dict:
+    """按天 committed 扣费趋势。cutoff 用 Python datetime 算(规避 INTERVAL 双后端差异)。"""
+    from datetime import datetime, timedelta
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    sql = ("SELECT DATE(committed_at) AS d, agent, COUNT(*) AS committed "
+           "FROM agent_billing_records WHERE status='committed' AND committed_at >= %s")
+    params: list[str] = [cutoff]
+    if agent:
+        sql += " AND agent=%s"
+        params.append(agent)
+    if apikey:
+        sql += " AND apikey=%s"
+        params.append(apikey)
+    sql += " GROUP BY DATE(committed_at), agent ORDER BY d, agent"
+    rows = db.query(sql, tuple(params))
+    return {"series": [
+        {"date": r["d"], "agent": r["agent"], "committed": r["committed"]} for r in rows
+    ]}

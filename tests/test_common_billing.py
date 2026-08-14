@@ -527,3 +527,47 @@ def test_list_agents_counts_active(tmp_path, monkeypatch):
     billing_mgmt.create_apikey("contract", "u3")
     agents = {a["agent"]: a["key_count"] for a in billing_mgmt.list_agents()}
     assert agents == {"sentiment": 2, "contract": 1}
+
+
+# ===== 8. 报表(common/billing.py,Task 4) =====
+
+
+def test_report_summary_active_only(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    db.execute("INSERT INTO agent_api_keys (apikey, agent, free_quota, free_used, paid_quota, paid_used) "
+               "VALUES (%s,%s,%s,%s,%s,%s)", ("k1", "sentiment", 10, 3, 5, 1))
+    db.execute("INSERT INTO agent_api_keys (apikey, agent, status, free_quota, free_used) "
+               "VALUES (%s,%s,%s,%s,%s)", ("k2", "sentiment", "deleted", 10, 9))  # 软删不入汇总
+    db.execute("INSERT INTO agent_api_keys (apikey, agent, free_quota, free_used) "
+               "VALUES (%s,%s,%s,%s)", ("k3", "contract", 10, 1))
+    s = billing.report_summary()
+    by_agent = {a["agent"]: a for a in s["agents"]}
+    assert by_agent["sentiment"]["key_count"] == 1  # k2 软删不计数
+    assert by_agent["sentiment"]["free_used"] == 3
+    assert by_agent["sentiment"]["free_remaining"] == 7
+    assert by_agent["sentiment"]["paid_used"] == 1 and by_agent["sentiment"]["paid_remaining"] == 4
+    assert s["total"]["key_count"] == 2
+    assert s["total"]["free_used"] == 4 and s["total"]["paid_remaining"] == 4
+
+
+def test_report_history_committed_by_day(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b1", "committed", "2026-08-01 09:00:00"))
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b2", "committed", "2026-08-01 10:00:00"))
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "contract", "b3", "committed", "2026-08-01 11:00:00"))
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status) "
+               "VALUES (%s,%s,%s,%s)", ("k1", "sentiment", "b4", "pending"))  # 非 committed 不入
+    h = billing.report_history(days=30)
+    series = {(s["date"], s["agent"]): s["committed"] for s in h["series"]}
+    assert series[("2026-08-01", "sentiment")] == 2
+    assert series[("2026-08-01", "contract")] == 1
+    # agent 过滤
+    h2 = billing.report_history(agent="sentiment", days=30)
+    assert all(s["agent"] == "sentiment" for s in h2["series"])
+    assert len(h2["series"]) == 1
+    # days=1(今天)过滤掉历史
+    h3 = billing.report_history(days=1)
+    assert all(s["date"] != "2026-08-01" for s in h3["series"])
