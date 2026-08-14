@@ -20,8 +20,34 @@ sentiment-query-agent 与 contract-review-agent 各自实现了一套**逐字相
 - 失败路径:**统一一律 cancel_pending**(采纳 contract 严谨语义,补 sentiment
   "流水线失败不释放 pending 占满并发槽位" 漏洞)。用户已确认接受。
 - cancel_pending:**带 apikey+agent 过滤**(采纳 contract 更严谨实现)。
-- 管理接口:**全局**(管理员可看所有 agent 的额度/流水)。
+- 管理接口:**现有接口一律不变**(生产已上线),新增**单独**全局账单接口。
 - 存量迁移:迁移脚本 dry-run 先行,sentiment 生产数据迁入,幂等。
+
+## 2.5 影响面与兼容性保证(原 agent 不受影响)
+
+**三不变**:
+1. **接口表面不变**:sentiment/contract 现有端点、请求参数、响应结构**零变化**
+   (sentiment 已生产,INTEGRATION.md 对接方不破坏)。
+2. **存量 apikey 继续可用**:sentiment 老 `api_keys` 行迁移到
+   `agent_api_keys(apikey, agent='sentiment')`,额度(含管理员
+   `sk-demo-hefangyuan20260810` / 99999999)继承 → 现有用户无感。
+3. **存量数据零丢失**:`billing_records` 流水迁移到 `agent_billing_records`
+   (agent='sentiment', bill_no=group_id),pending/committed 状态保留。
+
+**行为变化(2 项,均已确认)**:
+1. 流水线失败路径补 cancel_pending(sentiment 原先失败不释放 pending,统一后自动释放)。
+2. apikey 停用规则统一为 contract 版:管理员可停用任何 apikey(含 admin 目标),
+   仅不可停用自己。sentiment 原"admin 不可删(403)"放宽为可停用 —— 能清理违规/误建
+   admin;`ensure_admin` 幂等兜底,全停也可经 ADMIN_APIKEY 重建。
+
+**管理员引导兼容**:公共 `ensure_admin(agent)` 对 sentiment 沿用现有机制 —
+读 `.env` 的 `ADMIN_APIKEY`,首次启动写入 `agent_api_keys(apikey, agent='sentiment')`
+管理员行(额度 99999999)。contract 无 ADMIN_APIKEY 时自动生成管理员并记录到日志。
+
+**迁移校验与回滚**:
+- 迁移后校验:对比老表/新表行数 + 每 apikey 额度四元组(free/paid quota/used)
+  完全一致,不一致报错中止。
+- 回滚路径:老表 `api_keys`/`billing_records` 保留不动(§10),切表失败可指回老表。
 
 ## 3. 统一表结构(新建)
 
@@ -79,8 +105,8 @@ sentiment-query-agent 与 contract-review-agent 各自实现了一套**逐字相
 |---|---|
 | `create_apikey(agent, name, role="normal")` | 服务端随机 `sk-`+token,role 白名单 normal/admin,非法 ValueError |
 | `update_apikey(agent, old, new)` | 换 key:额度继承 + 流水迁移(apikey 重写) |
-| `deactivate_apikey(agent, apikey, admin)` | 软删;不可删自己;admin 目标可停用(require_admin 授权) |
-| `ensure_admin(agent)` | 每 agent 首个管理员引导(额度 99999999),幂等 |
+| `deactivate_apikey(agent, apikey, admin)` | 软删;统一 contract 规则:admin 可停用任何 apikey(含 admin 目标),仅不可停用自己(403);require_admin 授权 |
+| `ensure_admin(agent)` | 每 agent 首个管理员引导(额度 99999999),幂等;读 .env `ADMIN_APIKEY`(sentiment 兼容)/自动生成(contract) |
 
 ### `common/auth.py`
 
