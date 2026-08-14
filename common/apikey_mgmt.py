@@ -30,7 +30,7 @@ import secrets
 from fastapi import HTTPException
 
 from common import config, db
-from common.auth import require_admin
+from common.auth import is_super_admin, require_admin
 from common.billing import _ADMIN_FREE_QUOTA
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,8 @@ def deactivate_apikey(agent: str, apikey: str, admin: str) -> None:
     统一 contract 规则:调用方(admin)须经 require_admin 授权;放开对 admin 目标的
     停用(堵"被铸 admin 永不可停用"后门),仅保留"不可停用自己"守卫防误删自身凭据。
     """
-    require_admin(admin, agent)
+    if not is_super_admin(admin):
+        require_admin(admin, agent)
     if apikey == admin:
         raise HTTPException(status_code=403, detail="不可停用自己")
     if _get_row(apikey, agent) is None:
@@ -196,3 +197,18 @@ def ensure_admin(agent: str) -> None:
         "VALUES (%s, %s, 'admin', 'active', %s, %s)",
         (key, agent, _ADMIN_FREE_QUOTA, _DEFAULT_PAID_QUOTA),
     )
+
+
+def set_role(agent: str, apikey: str, role: str, admin: str) -> dict:
+    """改角色(admin↔normal)。非超管先 require_admin;不可改自己;目标不存在 404。"""
+    if role not in _ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="非法 role")
+    if not is_super_admin(admin):
+        require_admin(admin, agent)
+    if apikey == admin:
+        raise HTTPException(status_code=403, detail="不可修改自己")
+    if _get_row(apikey, agent) is None:
+        raise HTTPException(status_code=404, detail="apikey 不存在")
+    db.execute("UPDATE agent_api_keys SET role=%s WHERE apikey=%s AND agent=%s",
+               (role, apikey, agent))
+    return {"apikey": apikey, "agent": agent, "role": role}

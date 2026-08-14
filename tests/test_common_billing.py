@@ -447,3 +447,43 @@ def test_is_super_admin(tmp_path, monkeypatch):
     monkeypatch.delenv("ADMIN_APIKEY", raising=False)
     assert auth.is_super_admin("sk-super") is False  # 未配 → 恒 False(空 token 不匹配)
     assert auth.is_super_admin("") is False
+
+
+# ===== 6. 角色管理(common/apikey_mgmt.py,Task 2) =====
+
+
+def test_set_role(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    user = billing_mgmt.create_apikey("sentiment", "u")["apikey"]
+    admin = billing_mgmt.create_apikey("sentiment", "a", role="admin")["apikey"]
+    r = billing_mgmt.set_role("sentiment", user, "admin", admin)
+    assert r["role"] == "admin"
+    assert billing_mgmt._get_row(user, "sentiment")["role"] == "admin"
+    with pytest.raises(Exception) as e:
+        billing_mgmt.set_role("sentiment", user, "bogus", admin)  # 非法 role → 400
+    assert getattr(e.value, "status_code", None) == 400
+    with pytest.raises(Exception) as e:
+        billing_mgmt.set_role("sentiment", admin, "normal", admin)  # 不可改自己 → 403
+    assert getattr(e.value, "status_code", None) == 403
+    with pytest.raises(Exception) as e:
+        billing_mgmt.set_role("sentiment", "sk-nope", "normal", admin)  # 不存在 → 404
+    assert getattr(e.value, "status_code", None) == 404
+
+
+def test_set_role_normal_user_cannot_promote(tmp_path, monkeypatch):
+    """非管理员不能改他人角色(require_admin 前置)。"""
+    _sqlite_env(tmp_path, monkeypatch)
+    u1 = billing_mgmt.create_apikey("sentiment", "u1")["apikey"]
+    u2 = billing_mgmt.create_apikey("sentiment", "u2")["apikey"]
+    with pytest.raises(Exception) as e:
+        billing_mgmt.set_role("sentiment", u2, "admin", u1)  # u1 非管理员 → 403
+    assert getattr(e.value, "status_code", None) == 403
+
+
+def test_deactivate_super_admin_bypasses_agent_row(tmp_path, monkeypatch):
+    """超管放行:新 agent 无 (ADMIN_APIKEY, agent) 行也能停用(M1 修正)。"""
+    _sqlite_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("ADMIN_APIKEY", "sk-super")
+    user = billing_mgmt.create_apikey("brand_new_agent", "u")["apikey"]
+    billing_mgmt.deactivate_apikey("brand_new_agent", user, "sk-super")  # 无超管行 → 不再 401
+    assert billing_mgmt._get_row(user, "brand_new_agent")["status"] == "deleted"
