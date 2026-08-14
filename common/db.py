@@ -186,6 +186,35 @@ def init_tables() -> None:
               committed_at DATETIME NULL
             )
         """))
+        # ---- 公共计费组件统一表(Task 1):按 (apikey, agent) 维度收敛 sentiment/contract 两套 ----
+        cur.execute(_sql("""
+            CREATE TABLE IF NOT EXISTS agent_api_keys (
+              apikey      VARCHAR(128) NOT NULL,
+              agent       VARCHAR(64) NOT NULL,
+              role        VARCHAR(10) NOT NULL DEFAULT 'normal',
+              status      VARCHAR(10) NOT NULL DEFAULT 'active',
+              free_quota  INT NOT NULL DEFAULT 10,
+              paid_quota  INT NOT NULL DEFAULT 0,
+              free_used   INT NOT NULL DEFAULT 0,
+              paid_used   INT NOT NULL DEFAULT 0,
+              created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (apikey, agent)
+            )
+        """))
+        cur.execute(_sql("""
+            CREATE TABLE IF NOT EXISTS agent_billing_records (
+              id          INTEGER PRIMARY KEY AUTOINCREMENT,
+              apikey      VARCHAR(128) NOT NULL,
+              agent       VARCHAR(64) NOT NULL,
+              bill_no     VARCHAR(64) NOT NULL,
+              status      VARCHAR(10) NOT NULL DEFAULT 'pending',
+              quota_type  VARCHAR(10) NULL,
+              created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              committed_at DATETIME NULL,
+              UNIQUE (agent, bill_no)
+            )
+        """))
         conn.commit()
     finally:
         conn.close()
