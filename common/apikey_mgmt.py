@@ -132,8 +132,9 @@ def update_apikey(agent: str, old_apikey: str, new_apikey: str) -> dict:
 def deactivate_apikey(agent: str, apikey: str, admin: str) -> None:
     """软删 apikey:status='deleted',鉴权即拒绝,数据保留。
 
-    统一 contract 规则:调用方(admin)须经 require_admin 授权;放开对 admin 目标的
-    停用(堵"被铸 admin 永不可停用"后门),仅保留"不可停用自己"守卫防误删自身凭据。
+    非超管须经 require_admin 授权;超管(ADMIN_APIKEY)放行,不依赖 agent 行。
+    放开对 admin 目标的停用(堵"被铸 admin 永不可停用"后门),
+    仅保留"不可停用自己"守卫防误删自身凭据。
     """
     if not is_super_admin(admin):
         require_admin(admin, agent)
