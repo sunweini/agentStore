@@ -313,6 +313,7 @@ def test_add_quota(sqlite_db):
 # 启动事件 ensure_admin('sentiment') 把 sk-admintest123 铸为 sentiment 管理员(幂等)。
 
 from fastapi.testclient import TestClient  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
 from agents.sentiment_query_agent.api import app as sentiment_app  # noqa: E402
 
 
@@ -360,3 +361,72 @@ def test_usage_all_endpoint_non_admin_403(sqlite_db):
         r = c.get("/api/v1/billing/usage_all",
                   headers={"Authorization": "Bearer sk-usertest123"})
     assert r.status_code == 403
+
+
+# ===== 5. commit_group 计费失败兜底(终审 M8) =====
+
+
+def _make_review_group(tmp_path, group_id, owner="sk-usertest123"):
+    """在 tmp 数据目录造 review 态草稿组 + pending 计费记录,返回 group。"""
+    monkeypatch_scheme_store(tmp_path)
+    _seed_apikey()
+    group = _sample_group()
+    group["group_id"] = group_id
+    group["owner"] = owner
+    group["status"] = "review"
+    scheme_store.save_draft(group)
+    billing.create_pending(owner, "sentiment", group_id)
+    return group
+
+
+def monkeypatch_scheme_store(tmp_path):
+    """把 scheme_store 数据目录指到 tmp_path(不碰仓库 data/)。"""
+    import agents.sentiment_query_agent.store.scheme_store as sstore
+    sstore._DATA_DIR = tmp_path
+
+
+def test_commit_group_success(sqlite_db, monkeypatch, tmp_path):
+    """commit_group 成功路径:文件 committed(草稿删除)+ 计费转正式。"""
+    _make_review_group(tmp_path, "g-commit-ok")
+    with TestClient(sentiment_app) as c:
+        r = c.post("/api/v1/groups/g-commit-ok/commit",
+                   headers={"Authorization": "Bearer sk-usertest123"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "committed"
+    assert (tmp_path / "g-commit-ok.json").exists()
+    assert not (tmp_path / "g-commit-ok.draft.json").exists()
+    rec = db.query("SELECT status, quota_type FROM agent_billing_records "
+                   "WHERE agent='sentiment' AND bill_no='g-commit-ok'")[0]
+    assert rec["status"] == "committed" and rec["quota_type"] == "free"
+
+
+def test_commit_group_billing_403_reraises(sqlite_db, monkeypatch, tmp_path):
+    """M8:commit 抛 HTTPException(额度不足 403)原样上报,不吞、不改 503。"""
+    _make_review_group(tmp_path, "g-commit-403")
+
+    def _insufficient(*a, **k):
+        raise HTTPException(status_code=403, detail="额度不足,请联系管理员充值")
+
+    from common import billing as billing_mod
+    monkeypatch.setattr(billing_mod, "commit", _insufficient)
+    with TestClient(sentiment_app) as c:
+        r = c.post("/api/v1/groups/g-commit-403/commit",
+                   headers={"Authorization": "Bearer sk-usertest123"})
+    assert r.status_code == 403
+    assert "额度不足" in r.json()["detail"]
+
+
+def test_commit_group_billing_unexpected_503(sqlite_db, monkeypatch, tmp_path):
+    """M8:commit 意外失败(DB/事务 RuntimeError)→ 503 明确报错,不静默成功。"""
+    _make_review_group(tmp_path, "g-commit-503")
+
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+
+    from common import billing as billing_mod
+    monkeypatch.setattr(billing_mod, "commit", _boom)
+    with TestClient(sentiment_app) as c:
+        r = c.post("/api/v1/groups/g-commit-503/commit",
+                   headers={"Authorization": "Bearer sk-usertest123"})
+    assert r.status_code == 503
+    assert "计费" in r.json()["detail"]

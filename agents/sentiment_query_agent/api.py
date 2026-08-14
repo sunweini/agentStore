@@ -354,7 +354,17 @@ async def commit_group(group_id: str, user: str = Depends(_user)):
         raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 review(待勾选)可入库")
     group["status"] = STATUS_COMMITTED
     scheme_store.save_committed(group)
-    billing.commit(user, _AGENT, group_id)
+    try:
+        billing.commit(user, _AGENT, group_id)
+    except HTTPException:
+        # 已有明确状态码(404 计费记录不存在 / 403 额度不足)原样上报,不吞不改成 503
+        raise
+    except Exception as exc:
+        # commit 意外失败(DB 层/事务):文件已 committed 但计费未成 —— 明确报错不静默
+        # (终审 M8)。只记 error_type,绝不记 str(exc)(异常消息可能含明文 apikey,防凭据泄露)。
+        logger.error("service=sentiment-query-agent event=commit_billing_failed "
+                     "group_id=%s user=%s error_type=%s", group_id, user, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="入库计费失败,请稍后重试") from exc
     return {"group_id": group_id, "status": STATUS_COMMITTED}
 
 
