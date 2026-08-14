@@ -14,15 +14,18 @@
 
 | 文件 | 改动 |
 |---|---|
-| `common/apikey_mgmt.py` | 扩 `create_apikey` 加可选额度参数;新 `set_role`;新 `list_keys` |
+| `common/auth.py` | 新 `is_super_admin(token)`(token == ADMIN_APIKEY env,超管判定) |
+| `common/apikey_mgmt.py` | 扩 `create_apikey` 加可选额度参数;`deactivate_apikey` 改 1 行(超管放行);新 `set_role`;新 `list_keys`;新 `list_agents` |
 | `common/billing.py` | 新 `report_summary`;新 `report_history` |
 | `common/admin_api.py` | **新** FastAPI app,前缀 `/api/v1/admin/`,挂载 `web/admin.html` |
 | `web/admin.html` | **新** 单文件三 tab(原生 JS,无构建/无 CDN) |
 | `tests/test_admin_api.py` | **新** pytest,SQLite 后端 |
 
-**不改**:`agents/*/api.py`、`common/auth.py`、`common/db.py`、现有 billing/apikey_mgmt 函数、数据模型(agent_api_keys / agent_billing_records 已统一)、docker。
+**不改**:`agents/*/api.py`、`common/db.py`、现有 billing 函数、数据模型(agent_api_keys / agent_billing_records 已统一)、docker。
 
-**复用现有组件**(零改动):`create_apikey/update_apikey/deactivate_apikey/ensure_admin`(apikey_mgmt)、`add_free_quota/add_paid_quota/usage_all`(billing)、`db.py` 双后端。
+**复用现有组件**(零改动):`update_apikey`、`ensure_admin`(apikey_mgmt)、`add_free_quota/add_paid_quota/usage_all`(billing)、`db.py` 双后端。
+
+**微改**(1 行):`deactivate_apikey` 内部鉴权改为"非超管才 require_admin"(见 §5)。
 
 ## 3. 数据模型
 
@@ -39,12 +42,12 @@
 
 | 方法 | 路径 | 功能 | 转调 |
 |---|---|---|---|
-| GET | /agents | agent 下拉列表(`SELECT DISTINCT agent`,附 active key 数) | 新增 `list_agents`(billing) |
+| GET | /agents | agent 下拉列表(`SELECT DISTINCT agent`,附 active key 数) | `apikey_mgmt.list_agents`(新) |
 | GET | /apikeys?agent= | 跨 agent 全量(含 admin/软删),agent 可选过滤 | `apikey_mgmt.list_keys`(新) |
 | POST | /apikeys | 创建 `{agent, role, free_quota?, paid_quota?}`(缺省 free 10/paid 0) | `create_apikey`(扩额度参) |
 | PATCH | /apikeys | 改角色 `{apikey, agent, role}` | `set_role`(新) |
 | PUT | /apikeys | 换 key `{apikey, agent, new_apikey}` | `update_apikey`(现有) |
-| DELETE | /apikeys | 软删 `{apikey, agent}` | `deactivate_apikey`(现有) |
+| DELETE | /apikeys | 软删 `{apikey, agent}` | `deactivate_apikey`(微改) |
 | POST | /apikeys/quota | 增额度 `{apikey, agent, type: free\|paid, count}` | `add_free/paid_quota`(现有) |
 | GET | /report/summary | 按 agent 汇总(仅 active key) | `report_summary`(新) |
 | GET | /report/history | 按天 committed 扣费趋势 | `report_history`(新) |
@@ -62,6 +65,7 @@
 - 请求头 `Authorization: Bearer <ADMIN_APIKEY>`(.env 超级管理员),不等即 403。
 - **console 只对超级管理员开放**,不放大每 agent 管理员权限(防跨 agent 数据泄露)。每 agent 管理员(role=admin)仍走各 agent 现有 admin 接口,不进 console。
 - `ADMIN_APIKEY` 必配,未配 console 锁死(文档/启动日志注明)。
+- **超管放行机制**:`auth.is_super_admin(token)`(token == ADMIN_APIKEY env)。`deactivate_apikey` 微改 1 行 —— 内部鉴权 `if not is_super_admin(admin): require_admin(admin, agent)`;新 `set_role` 同模式。**超管不依赖 (ADMIN_APIKEY, agent) 行**,新 agent 无该行也能操作;每 agent 管理员路径不变(仍 require_admin)。不能靠 `ensure_admin` 兜底 —— 其幂等检查是"有任一 active admin 就跳过",不保证 ADMIN_APIKEY 行存在。
 - `set_role` 守卫:仅"不可改自己"(防锁死);admin 目标可降级/停用,与 deactivate 哲学一致 —— `ensure_admin` 幂等,现存 admin 全软删/降级时重启可重建,无"全停死"风险。
 - 换 key:`update_apikey` 现有守卫(admin key 不可换 403、软删不可换 400、冲突 409)沿用。
 
@@ -110,8 +114,8 @@
 
 ## 11. 实施步骤
 
-1. `apikey_mgmt.py` 扩展:`create_apikey` 额度参数 + 校验、`set_role`、`list_keys`(复用 admin_list 行结构)
-2. `billing.py`:`list_agents`、`report_summary`(仅 active)、`report_history`(committed 按天)
+1. `auth.py`:新 `is_super_admin(token)`;`apikey_mgmt.py` 扩展:`deactivate_apikey` 微改 1 行(超管放行)、`create_apikey` 额度参数 + 校验、`set_role`、`list_keys`/`list_agents`(复用 admin_list 行结构)
+2. `billing.py`:`report_summary`(仅 active)、`report_history`(committed 按天)
 3. `common/admin_api.py`:FastAPI app + 鉴权 + 9 接口 + 挂载 admin.html
 4. `web/admin.html`:三 tab
 5. `tests/test_admin_api.py`
@@ -127,4 +131,4 @@
 
 ## 13. CHANGELOG
 
-common/apikey_mgmt.py、common/billing.py、common/admin_api.py、web/admin.html 均属项目级 → 根 CHANGELOG.md 项目级区。
+common/auth.py、common/apikey_mgmt.py、common/billing.py、common/admin_api.py、web/admin.html 均属项目级 → 根 CHANGELOG.md 项目级区。
