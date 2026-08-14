@@ -172,7 +172,19 @@ $("run_btn").onclick = async function(){
     let started = null;
     await postSSE("/api/v1/contract/review", fd, (ev) => {
       if(ev.event === "started"){ started = ev.data; curTaskId = ev.data; $("pstep").textContent = "已提交,审核中…"; }
-      else if(ev.event === "progress"){ $("pbar").style.width = Math.min(95, Math.round(Number(ev.data)*100)) + "%"; }
+      else if(ev.event === "progress"){
+        const p = JSON.parse(ev.data || "{}");
+        $("pbar").style.width = Math.min(95, Math.round((p.progress||0)*100)) + "%";
+        const stageMap = {parse:"解析文档", review:"章节审核", verify:"核验法条引用", summarize:"生成报告"};
+        const s = stageMap[p.stage] || p.stage || "";
+        if(p.stage === "review" && p.total > 0){
+          $("pstep").textContent = `章节审核 第 ${Math.min(p.current+1, p.total)}/${p.total} 章 · ${p.title || ""}`;
+        } else if(s){
+          $("pstep").textContent = s + (p.title ? " · " + p.title : "");
+        } else {
+          $("pstep").textContent = "审核中…";
+        }
+      }
       else if(ev.event === "done"){ $("pbar").style.width = "100%"; $("pstep").textContent = "审核完成"; st.textContent = "完成"; st.className = "status ok"; }
       else if(ev.event === "failed"){ $("pbar").style.width = "100%"; $("pstep").textContent = "失败: " + ev.data; st.textContent = "失败: " + ev.data; st.className = "status err"; }
       else if(ev.event === "cancelled"){ $("pstep").textContent = "已取消"; st.textContent = "已取消"; st.className = "status err"; }

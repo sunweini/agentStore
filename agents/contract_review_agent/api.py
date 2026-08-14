@@ -30,6 +30,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import tempfile
 import threading
@@ -140,8 +141,23 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
     """
     from agents.contract_review_agent.agent import run_review
 
+    def _progress_cb(stage: str, current: int, total: int, title: str = "") -> None:
+        """章节级进度回调:更新 _tasks 的 stage/progress,SSE 据此回显。"""
+        with _lock:
+            t = _tasks.get(task_id)
+            if t is None:
+                return
+            t["progress"] = max(t.get("progress", 0.0),
+                                (current / total) if total else 0.0)
+            t["stage"] = stage
+            t["current"] = current
+            t["total"] = total
+            if title:
+                t["stage_title"] = title
+
     try:
-        result = run_review(file_path, contract_type, prompt, law_store=_law_store)
+        result = run_review(file_path, contract_type, prompt,
+                            law_store=_law_store, progress_cb=_progress_cb)
     except Exception as exc:
         # 只记异常类型不记 str(exc):异常消息可能携带凭据/文件内容等敏感信息,
         # 直落日志或 t["error"] 会经 result 端点泄露(审查 Important 凭据防护)。
@@ -234,6 +250,7 @@ async def review(apikey: str = Header(...), contract_type: str = Form(...),
         billing.create_pending(apikey, task_id)
         with _lock:
             _tasks[task_id] = {"status": "running", "progress": 0.0,
+                               "stage": "提交", "stage_title": "",
                                "result": None, "error": "", "apikey": apikey,
                                "request_id": request_id}
         logger.info("service=%s event=task_created task_id=%s request_id=%s "
@@ -254,7 +271,13 @@ async def review(apikey: str = Header(...), contract_type: str = Form(...),
                 t = _tasks.get(task_id)
             if t is None:
                 break
-            yield {"event": "progress", "data": str(t["progress"])}
+            yield {"event": "progress", "data": json.dumps({
+                "progress": t["progress"],
+                "stage": t.get("stage", ""),
+                "title": t.get("stage_title", ""),
+                "current": t.get("current", 0),
+                "total": t.get("total", 0),
+            }, ensure_ascii=False)}
             if t["status"] in ("done", "failed", "cancelled"):
                 yield {"event": t["status"], "data": str(t["error"] or "")}
                 break
@@ -265,10 +288,11 @@ async def review(apikey: str = Header(...), contract_type: str = Form(...),
 
 @app.get("/api/v1/contract/status")
 def status(task_id: str, apikey: str = Header(...)):
-    """任务状态 + 进度(仅本人任务)。"""
+    """任务状态 + 进度 + 阶段(仅本人任务)。"""
     _require_key(apikey)
     t = _task_for(task_id, apikey)
-    return {"task_id": task_id, "status": t["status"], "progress": t["progress"]}
+    return {"task_id": task_id, "status": t["status"], "progress": t["progress"],
+            "stage": t.get("stage", ""), "stage_title": t.get("stage_title", "")}
 
 
 @app.get("/api/v1/contract/result")

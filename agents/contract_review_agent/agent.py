@@ -27,13 +27,19 @@ def build_agent() -> LawStore:
 
 
 def run_review(file_path: str, contract_type: str, review_prompt: str,
-               law_store: LawStore | None = None) -> dict:
-    """同步跑完整审核流程。返回 {report, report_json, error}。"""
+               law_store: LawStore | None = None,
+               progress_cb=None) -> dict:
+    """同步跑完整审核流程。返回 {report, report_json, error}。
+
+    progress_cb(stage, current, total, title):章节级进度回调(经 AgentState
+    传给各节点),API 后台线程用它更新 _tasks 的 stage/progress 供 SSE 回显。
+    """
     store = law_store or _default_law_store()
     graph = build_graph(law_store=store)
     state = graph.invoke({
         "_file_path": file_path,
         "_file_name": Path(file_path).name,
+        "_progress_cb": progress_cb,
         "contract_type": contract_type,
         "review_prompt": review_prompt,
         "chapters": [],

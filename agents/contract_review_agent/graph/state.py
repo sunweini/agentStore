@@ -31,6 +31,7 @@ class AgentState(TypedDict):
     review_prompt: str
     _file_path: str
     _file_name: str
+    _progress_cb: object = None  # 章节级进度回调(stage, current, total, title),None 跳过
     chapters: list[dict]
     chapter_reviews: list[dict]
     report: str

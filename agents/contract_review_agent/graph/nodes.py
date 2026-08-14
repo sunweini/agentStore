@@ -84,13 +84,18 @@ def review_chapter(llm, contract_type: str, chapter: dict,
 
 
 def review_all(state: AgentState, law_store) -> dict:
+    cb = state.get("_progress_cb")
     llm = _review_model()
     reviews = []
-    for chapter in state["chapters"]:
-        # 空正文章节(如 PDF 标题启发式误判的孤立标题)无内容可审,跳过不进 LLM
-        if not (chapter.get("text") or "").strip():
-            continue
+    # 空正文章节(如 PDF 标题启发式误判的孤立标题)无内容可审,跳过不进 LLM
+    chapters = [c for c in state["chapters"] if (c.get("text") or "").strip()]
+    total = len(chapters)
+    for i, chapter in enumerate(chapters):
+        if cb:
+            cb("review", i, total, chapter.get("title", ""))
         reviews.append(review_chapter(
             llm, state.get("contract_type", ""), chapter,
             state.get("review_prompt", ""), law_store))
+    if cb and total:
+        cb("review", total, total, "")
     return {"chapter_reviews": reviews}

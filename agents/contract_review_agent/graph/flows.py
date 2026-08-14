@@ -26,6 +26,21 @@ logger = logging.getLogger(__name__)
 _SERVICE = "contract_review_agent"
 
 
+def _notify(state: AgentState, stage: str, current: int, total: int,
+            title: str = "") -> None:
+    """触发章节级进度回调(state._progress_cb,None 则跳过)。
+
+    回调由 API 后台线程传入,更新 _tasks 的 stage/progress,SSE 据此回显
+    "解析中 / 审核第 3/8 章 / 核验法条 / 生成报告"。
+    """
+    cb = state.get("_progress_cb")
+    if cb:
+        try:
+            cb(stage, current, total, title)
+        except Exception:
+            logger.error("service=%s event=progress_cb_failed", _SERVICE)
+
+
 def _parse_node(state: AgentState, services: dict) -> dict:
     """解析节点:统一捕获解析层异常,映射为明确 error 码(供条件路由到 END)。"""
     from agents.contract_review_agent.utils.document_parser import (
@@ -35,6 +50,7 @@ def _parse_node(state: AgentState, services: dict) -> dict:
         parse_document,
     )
     try:
+        _notify(state, "parse", 0, 1, "解析文档")
         doc = parse_document(state["_file_path"])
     except NeedsOcrError:
         return _ocr_parse(state)
@@ -120,6 +136,7 @@ def build_graph(law_store=None) -> Runnable:
 
     def _verify(state: AgentState) -> dict:
         from agents.contract_review_agent.graph.verify import verify_reviews
+        _notify(state, "verify", 0, 1, "核验法条引用")
         # law_store 由 build_graph 兜底为非 None(默认法条库):不再存在
         # "无 law_store 透传不核验"路径,任何构造路径校验层均开启。
         return {"chapter_reviews": verify_reviews(
@@ -130,6 +147,7 @@ def build_graph(law_store=None) -> Runnable:
             build_report,
             build_report_json,
         )
+        _notify(state, "summarize", 0, 1, "生成报告")
         meta = {"合同名称": state.get("_file_name", ""),
                 "法条库版本": "内置 v1",
                 "审核时间": datetime.now().strftime("%Y-%m-%d %H:%M")}
