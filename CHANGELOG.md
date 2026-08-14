@@ -32,6 +32,8 @@
 - common/auth.py:新 `is_super_admin`。
 - common/apikey_mgmt.py:`create_apikey` 加额度参数、新 `set_role/list_keys/list_agents`、`deactivate_apikey` 超管放行。
 - common/billing.py:新 `report_summary`(仅 active)/`report_history`(committed 按天)。
+- common/admin_api.py:mutation 端点(create/换 key/角色/软删/增额度)补结构化审计日志(apikey 一律 `_mask_apikey` 脱敏);ADMIN_APIKEY 未配置启动即告警。
+- web/admin.html:行内按钮改 tbody 一次性事件委托,quota tab 切换(不经 loadKeys)按钮不再失监听。
 
 ### 2026-08-14(公共计费硬化 M1-M8)
 

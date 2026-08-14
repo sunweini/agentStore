@@ -6,6 +6,7 @@
 """
 
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -551,24 +552,32 @@ def test_report_summary_active_only(tmp_path, monkeypatch):
 
 
 def test_report_history_committed_by_day(tmp_path, monkeypatch):
+    # 日期相对 now 动态生成(report_history cutoff = now - days,硬编码绝对日期会在
+    # 越过 cutoff 后把这行排除 → 断言 KeyError,~2.5 周后必挂)。
+    d3 = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
     _sqlite_env(tmp_path, monkeypatch)
     db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
-               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b1", "committed", "2026-08-01 09:00:00"))
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b1", "committed", f"{d3} 09:00:00"))
     db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
-               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b2", "committed", "2026-08-01 10:00:00"))
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b2", "committed", f"{d3} 10:00:00"))
     db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
-               "VALUES (%s,%s,%s,%s,%s)", ("k1", "contract", "b3", "committed", "2026-08-01 11:00:00"))
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "contract", "b3", "committed", f"{d3} 11:00:00"))
     # 非 committed 不入:带 in-range committed_at 的 pending 行,若漏掉 status 过滤会误入
     db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
-               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b4", "pending", "2026-08-01 12:00:00"))
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b4", "pending", f"{d3} 12:00:00"))
     h = billing.report_history(days=30)
     series = {(s["date"], s["agent"]): s["committed"] for s in h["series"]}
-    assert series[("2026-08-01", "sentiment")] == 2
-    assert series[("2026-08-01", "contract")] == 1
+    assert series[(d3, "sentiment")] == 2
+    assert series[(d3, "contract")] == 1
     # agent 过滤
     h2 = billing.report_history(agent="sentiment", days=30)
     assert all(s["agent"] == "sentiment" for s in h2["series"])
     assert len(h2["series"]) == 1
-    # days=1(今天)过滤掉历史
+    # days=1(今天)cutoff 排除历史:动态新日期不在、更老日期同样被排除
     h3 = billing.report_history(days=1)
-    assert all(s["date"] != "2026-08-01" for s in h3["series"])
+    assert all(s["date"] != d3 for s in h3["series"])
+    old = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b5", "committed", f"{old} 08:00:00"))
+    h4 = billing.report_history(days=30)
+    assert all(s["date"] != old for s in h4["series"])

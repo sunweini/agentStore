@@ -16,9 +16,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from common import apikey_mgmt, auth, billing
+from common import apikey_mgmt, auth, billing, config
 
 logger = logging.getLogger(__name__)
+
+# ADMIN_APIKEY 未配置时 console 锁死(超管接口一律 403),启动即告警便于运维定位
+if not config.get_env("ADMIN_APIKEY"):
+    logger.warning("service=admin_console component=admin_api event=admin_apikey_unset "
+                   "message=ADMIN_APIKEY 未配置,管理控制台接口将全部 403 拒绝")
 
 app = FastAPI(title="agentStore 管理控制台", version="0.1.0")
 
@@ -80,25 +85,40 @@ async def list_keys_api(agent: str | None = None, admin: str = Depends(_require_
 @app.post("/api/v1/admin/apikeys")
 async def create_apikey_api(req: CreateApiKeyRequest, admin: str = Depends(_require_super_admin)):
     try:
-        return apikey_mgmt.create_apikey(
+        key = apikey_mgmt.create_apikey(
             req.agent, "", role=req.role, free_quota=req.free_quota, paid_quota=req.paid_quota)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("service=admin_console component=admin_api event=apikey_created "
+                "agent=%s apikey=%s role=%s free_quota=%s paid_quota=%s",
+                req.agent, apikey_mgmt._mask_apikey(key["apikey"]), key["role"],
+                key["free_quota"], key["paid_quota"])
+    return key
 
 
 @app.patch("/api/v1/admin/apikeys")
 async def set_role_api(req: SetRoleRequest, admin: str = Depends(_require_super_admin)):
-    return apikey_mgmt.set_role(req.agent, req.apikey, req.role, admin)
+    result = apikey_mgmt.set_role(req.agent, req.apikey, req.role, admin)
+    logger.info("service=admin_console component=admin_api event=apikey_role_changed "
+                "agent=%s apikey=%s role=%s", req.agent, apikey_mgmt._mask_apikey(req.apikey), req.role)
+    return result
 
 
 @app.put("/api/v1/admin/apikeys")
 async def update_apikey_api(req: UpdateApiKeyRequest, admin: str = Depends(_require_super_admin)):
-    return apikey_mgmt.update_apikey(req.agent, req.apikey, req.new_apikey)
+    result = apikey_mgmt.update_apikey(req.agent, req.apikey, req.new_apikey)
+    logger.info("service=admin_console component=admin_api event=apikey_updated "
+                "agent=%s apikey=%s new_apikey=%s",
+                req.agent, apikey_mgmt._mask_apikey(req.apikey),
+                apikey_mgmt._mask_apikey(req.new_apikey))
+    return result
 
 
 @app.delete("/api/v1/admin/apikeys")
 async def delete_apikey_api(req: DeleteApiKeyRequest, admin: str = Depends(_require_super_admin)):
     apikey_mgmt.deactivate_apikey(req.agent, req.apikey, admin)
+    logger.info("service=admin_console component=admin_api event=apikey_deleted "
+                "agent=%s apikey=%s", req.agent, apikey_mgmt._mask_apikey(req.apikey))
     return {"apikey": req.apikey, "agent": req.agent, "deleted": True}
 
 
@@ -112,6 +132,9 @@ async def add_quota_api(req: QuotaRequest, admin: str = Depends(_require_super_a
         billing.add_paid_quota(req.apikey, req.agent, req.count)
     else:
         raise HTTPException(status_code=400, detail="type 必须为 free 或 paid")
+    logger.info("service=admin_console component=admin_api event=apikey_quota_added "
+                "agent=%s apikey=%s type=%s count=%s", req.agent,
+                apikey_mgmt._mask_apikey(req.apikey), req.type, req.count)
     return {"apikey": req.apikey, "agent": req.agent, "type": req.type, "added": req.count}
 
 

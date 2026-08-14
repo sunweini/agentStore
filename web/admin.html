@@ -144,7 +144,7 @@ function loadAgents() {
 }
 
 function loadKeys() {
-  return api("/apikeys").then(d => { keys = d.keys; renderQuota(); renderKeys(); bindTableActions(); });
+  return api("/apikeys").then(d => { keys = d.keys; renderQuota(); renderKeys(); });
 }
 
 function renderKeys() {
@@ -200,17 +200,23 @@ function addQuota(apikey, agent, type) {
     .then(() => { $("msg").textContent = "已增加"; loadKeys(); }).catch(e => alert(e.message));
 }
 
-function bindTableActions() {
-  const keyBody = $("keyTable").querySelector("tbody");
-  keyBody.querySelectorAll("button.js-edit-key").forEach(b =>
-    b.addEventListener("click", () => editKey(b.dataset.apikey, b.dataset.agent)));
-  keyBody.querySelectorAll("button.js-toggle-role").forEach(b =>
-    b.addEventListener("click", () => toggleRole(b.dataset.apikey, b.dataset.agent, b.dataset.role)));
-  keyBody.querySelectorAll("button.js-del-key").forEach(b =>
-    b.addEventListener("click", () => delKey(b.dataset.apikey, b.dataset.agent)));
-  $("quotaTable").querySelectorAll("tbody button.js-add-quota").forEach(b =>
-    b.addEventListener("click", () => addQuota(b.dataset.apikey, b.dataset.agent, b.dataset.type)));
-}
+// 一次性事件委托:tbodys 是稳定容器,render 只重建 innerHTML、从不重绑监听,
+// 行内按钮(改 key/角色/删除/+免费/+付费)由 closest 分派 —— 消除 render/rebind 耦合。
+// 首次进入模块时注册,quota tab 切进来(不经 loadKeys)按钮依然可点。
+(function bindOnce() {
+  $("keyTable").querySelector("tbody").addEventListener("click", e => {
+    const b = e.target.closest("button.js-edit-key");
+    if (b) return editKey(b.dataset.apikey, b.dataset.agent);
+    const t = e.target.closest("button.js-toggle-role");
+    if (t) return toggleRole(t.dataset.apikey, t.dataset.agent, t.dataset.role);
+    const d = e.target.closest("button.js-del-key");
+    if (d) return delKey(d.dataset.apikey, d.dataset.agent);
+  });
+  $("quotaTable").querySelector("tbody").addEventListener("click", e => {
+    const a = e.target.closest("button.js-add-quota");
+    if (a) addQuota(a.dataset.apikey, a.dataset.agent, a.dataset.type);
+  });
+})();
 
 function renderQuota() {
   $("quotaTable").querySelector("tbody").innerHTML = keys.filter(k => k.status === "active").map(k => {
