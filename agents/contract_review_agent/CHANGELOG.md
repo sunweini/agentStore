@@ -5,6 +5,30 @@
 
 ---
 
+## v0.6.0 — 2026-08-14(检索调优:必查法条注入 + 引文修复)
+
+### 新增
+
+- **`store/law_store.py`**
+  - `_PRIORITY` 必查法条清单(按领域):labor→劳动合同法 19/20/25/38/39/46/47/85 条;
+    contract→民法典 496/497/563/577/584/585/586 条。`retrieve()` 确定性注入
+    (从 `_exact` 取原文,标 `priority`),再补检索结果。修复"违约金/试用期/解除"
+    等常见审核点检索带不出对应法条、statutory 结论被阻断的问题。
+  - `_domain_of()`:合同类型子串匹配域(用户输入"买卖合同",alias 键是"买卖")。
+  - `retrieve` 默认 k 5→8,bm25_weight 0.5→0.7(关键词精确优先)。
+- **`graph/nodes.py`**
+  - `_CHAPTER_SYSTEM` 强化:法律依据每项必须含 law_name/article_no/article_text 三字段。
+  - `review_chapter` 解析兜底:LLM 漏填 law_name/article_no 时 `_repair_refs`
+    按 article_text 标点归一化匹配片段补齐,statutory 不再因 schema 校验失败
+    整章 findings 清空(静默漏审)。
+- **测试**:必查法条注入 / 域子串匹配 / 引文缺字段修复 各 +1(46 passed)。
+
+### 说明
+
+- 检索向量区分度弱(违约金在劳动域 IDF 低)靠必查清单兜底,不做嵌入模型更换。
+
+---
+
 ## v0.5.0 — 2026-08-13(Task 15:百度 OCR 接线)
 
 ### 新增

@@ -26,6 +26,25 @@ from common.rag import RagClient, _embedding_model
 
 _COLLECTION = "contract_law"
 
+# 合同类型域 → 必查法条(确定性注入,不依赖检索召回)。覆盖常见审核点:
+# 违约金/试用期/解除/经济补偿/加付赔偿金/格式条款/定金。检索向量区分度弱
+# (违约金在劳动域 IDF 低、嵌入模型对"违约金"判别不足),靠优先级保证关键
+# 法条一定出现在审核片段里,statutory 结论才可能成立。
+_PRIORITY: dict[str, dict[str, list[str]]] = {
+    "labor": {
+        "中华人民共和国劳动合同法": [
+            "第十九条", "第二十条", "第二十五条", "第三十八条",
+            "第三十九条", "第四十六条", "第四十七条", "第八十五条",
+        ],
+    },
+    "contract": {
+        "中华人民共和国民法典": [
+            "第四百九十六条", "第四百九十七条", "第五百六十三条", "第五百七十七条",
+            "第五百八十四条", "第五百八十五条", "第五百八十六条",
+        ],
+    },
+}
+
 # 嵌入服务单批上限 32(实测 >32 触发 413),取 16 留余量;超出/瞬态 424(CUDA OOM)
 # 退避重试。见 seed() 分批逻辑。
 _BATCH = 16
@@ -34,10 +53,7 @@ _TRANSIENT_STATUS = (413, 424, 429, 500, 502, 503, 504)
 
 
 def _retryable(exc: Exception) -> bool:
-    """瞬态嵌入错误可重试:HTTP 状态码 413/424/429/5xx,或连接层失败。
-
-    永久错误(校验/结构类)不带这些状态码,立即上抛不掩蔽。
-    """
+    """瞬态嵌入错误可重试:HTTP 状态码 413/424/429/5xx,或连接层失败。"""
     status = getattr(exc, "status_code", None)
     if status is None:
         status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -45,6 +61,15 @@ def _retryable(exc: Exception) -> bool:
         return True
     import httpx  # 延迟导入:仅在异常分支走网络判定
     return isinstance(exc, httpx.TransportError)
+
+
+def _domain_of(contract_type: str) -> str:
+    """合同类型 → 领域。DOMAIN_ALIASES 键是短名("买卖"),用户常输入全名
+    ("买卖合同"),子串匹配兜底:含任一别名键即命中对应域。"""
+    for key, domain in DOMAIN_ALIASES.items():
+        if key in contract_type:
+            return domain
+    return ""
 
 
 class _LawRagClient(RagClient):
@@ -96,7 +121,7 @@ class LawStore:
         return loaded
 
     def _law_names(self, contract_type: str) -> list[str]:
-        domain = DOMAIN_ALIASES.get(contract_type, "")
+        domain = _domain_of(contract_type)
         if not domain:
             return []
         laws = self.list_laws()
@@ -135,17 +160,41 @@ class LawStore:
                         raise
                     time.sleep(min(0.5 * 2 ** attempt, 8))
 
-    def retrieve(self, query: str, contract_type: str = "", k: int = 5) -> list[dict]:
+    def _priority_fragments(self, contract_type: str) -> list[dict]:
+        """域内必查法条(确定性,从 _exact 取原文,不依赖检索召回)。"""
+        domain = _domain_of(contract_type)
+        frags: list[dict] = []
+        for law_name, articles in _PRIORITY.get(domain, {}).items():
+            for no in articles:
+                text = self._exact.get(law_name, {}).get(no)
+                if text:
+                    frags.append({"text": text, "metadata": {
+                        "law_name": law_name, "article_no": no,
+                        "domain": domain, "priority": True}})
+        return frags
+
+    def retrieve(self, query: str, contract_type: str = "", k: int = 8) -> list[dict]:
+        priority = self._priority_fragments(contract_type)
+        prio_keys = {(f["metadata"]["law_name"], f["metadata"]["article_no"])
+                     for f in priority}
+        rest_k = max(k - len(priority), 0)
         names = self._law_names(contract_type)
         if not names:
-            return self._client.hybrid_search(_COLLECTION, query, k=k)
-        results: list[dict] = []
-        for name in names:
-            results += self._client.hybrid_search(
-                _COLLECTION, query, k=k, filter={"law_name": name})
-        # hybrid_search 得分为加权 RRF 融合,**越大越相关**,降序取 top-k
-        results.sort(key=lambda d: d["score"], reverse=True)
-        return results[:k]
+            results = self._client.hybrid_search(
+                _COLLECTION, query, k=k, bm25_weight=0.7)
+        else:
+            results: list[dict] = []
+            for name in names:
+                results += self._client.hybrid_search(
+                    _COLLECTION, query, k=k, bm25_weight=0.7,
+                    filter={"law_name": name})
+            # hybrid_search 得分为加权 RRF 融合,**越大越相关**,降序取 top-k
+            results.sort(key=lambda d: d["score"], reverse=True)
+        # 排除 priority 已含的,补足 rest_k
+        extra = [r for r in results
+                 if (r["metadata"].get("law_name"),
+                     r["metadata"].get("article_no")) not in prio_keys][:rest_k]
+        return priority + extra
 
     def verify_ref(self, law_name: str, article_no: str) -> str | None:
         return self._exact.get(law_name, {}).get(article_no)

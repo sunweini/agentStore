@@ -92,6 +92,42 @@ def test_verify_ref_exact(tmp_path):
     assert s.verify_ref("测试劳动合同法", "不存在的条") is None
 
 
+def test_retrieve_priority_labor_contract(tmp_path):
+    """劳动合同域必查法条确定性注入(违约金限制条,不依赖检索召回)。
+
+    用真实法条名(匹配 _PRIORITY 的"中华人民共和国劳动合同法")seed 一条
+    第二十五条,断言 retrieve 恒带出它且标 priority。
+    """
+    from agents.contract_review_agent.store.law_store import LawStore
+
+    s = LawStore(data_dir=tmp_path / "rag")
+    s.seed("""# 中华人民共和国劳动合同法
+来源: u
+采集日期: 2026-08-13
+领域: labor
+
+## 第二十条
+试用期工资不得低于本单位相同岗位最低档工资。
+
+## 第二十五条
+除本法第二十二条和第二十三条规定的情形外，用人单位不得与劳动者约定由劳动者承担违约金。""")
+    hits = s.retrieve("违约金", "劳动合同", k=8)
+    assert any(h["metadata"].get("priority") and
+               h["metadata"].get("article_no") == "第二十五条"
+               for h in hits)
+
+
+def test_domain_substring_mapping():
+    """合同类型全名("买卖合同")子串匹配到域(alias 键是短名"买卖")。"""
+    from agents.contract_review_agent.store.law_store import _domain_of
+
+    assert _domain_of("买卖合同") == "contract"
+    assert _domain_of("劳动合同") == "labor"
+    assert _domain_of("租赁合同") == "contract"
+    assert _domain_of("借款") == "contract"
+    assert _domain_of("未知类型") == ""
+
+
 def test_load_bundled_from_md_dir(tmp_path):
     """LawStore(laws_dir=...) 构造即加载 md 精确索引,不 seed 也能 verify_ref(生产运行时关键)。"""
     laws_dir = tmp_path / "laws"
@@ -217,6 +253,28 @@ def test_review_chapter_with_mock_llm():
         "title": "第一章", "text": "违约赔 5%。"}, review_prompt="请审核")
     assert review["chapter"] == "第一章"
     assert review["findings"][0]["confidence"] == "suggestion"
+
+
+def test_review_chapter_repairs_missing_ref_fields():
+    """LLM 漏填 law_name/article_no(只回 article_text)→ 按片段匹配补齐,statutory 保留。"""
+    fake = MagicMock()
+    fake.invoke.return_value.content = (
+        '{"chapter": "违约责任", "findings": [{"原文引用": "违约金50%", '
+        '"风险类型": "合规", "问题描述": "可能过高", "改进建议": "调低", '
+        '"法律依据": [{"article_text": "除本法第二十二条和第二十三条规定的情形外，'
+        '用人单位不得与劳动者约定由劳动者承担违约金。"}], "confidence": "statutory"}]}'
+    )
+    class _FakeLawStore:
+        def retrieve(self, query, contract_type, k=8):
+            return [{"text": "除本法第二十二条和第二十三条规定的情形外,"
+                              "用人单位不得与劳动者约定由劳动者承担违约金。",
+                     "metadata": {"law_name": "中华人民共和国劳动合同法",
+                                  "article_no": "第二十五条"}}]
+    review = review_chapter(fake, contract_type="劳动合同", chapter={
+        "title": "违约责任", "text": "违约金50%。"}, review_prompt="审",
+        law_store=_FakeLawStore())
+    assert review["findings"][0]["法律依据"][0]["law_name"] == "中华人民共和国劳动合同法"
+    assert review["findings"][0]["法律依据"][0]["article_no"] == "第二十五条"
 
 
 # ---- Task 7 引用校验层:逐条核验法律依据可回溯源文件原文(设计 §4.4,核心反幻觉) ----
