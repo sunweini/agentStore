@@ -22,10 +22,9 @@ _CHAPTER_SYSTEM = (
 
 
 def _review_model():
-    # request_timeout:单章 LLM 调用 120s 上限,防 DeepSeek 偶发挂起导致任务
-    # 永久 running(此前 9 章合同曾卡第 1 章 7 分钟+)。超时抛异常 → _run_task
-    # 兜底为 failed + cancel_pending,不会永久卡。
-    return get_chat_model().bind(temperature=0.1, request_timeout=120)
+    # timeout 经 common/llm 工厂构造参数(非 bind 调用参数,避免 TypeError):
+    # 单章 LLM 调用 120s 上限,防 DeepSeek 偶发挂起导致任务永久 running。
+    return get_chat_model(timeout=120).bind(temperature=0.1)
 
 
 def _norm_law_text(s: str) -> str:

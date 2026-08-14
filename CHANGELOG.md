@@ -24,6 +24,14 @@
 
 ## 项目级历史
 
+### 2026-08-14(common/llm.py 支持请求超时)
+
+#### 变更
+- `get_chat_model(provider, model_id, timeout=None)` 新增 timeout 参数,透传
+  ChatOpenAI request_timeout(None 用 OpenAI 默认 600s)。向后兼容,不影响
+  sentiment/kingdee 现有调用。合同审核单章 LLM 调用传 120s 防挂起。
+- 供应商构建器签名 `(model_id, timeout=None)`;注册表注解同步。
+
 ### 2026-08-13(common/db.py 加 contract 独立计费表)
 
 #### 变更

@@ -5,6 +5,28 @@
 
 ---
 
+## v0.7.0 — 2026-08-14(性能:必查法条相关性裁剪 + LLM 超时 + 进度回显)
+
+### 新增
+
+- **`store/law_store.py`**:`_priority_fragments(contract_type, query)` 按 2-gram
+  相关性过滤必查法条(共享 ≥2 个 2-gram 才注入)。抬头/编号类章节 0 注入、
+  社保章 1 条、试用/违约金章 4-6 条(原 8 条全量)→ 每章 prompt 减半,
+  9 章合同审核从 5-13 分钟降到 ~3-6 分钟。
+- **`common/llm.py`**(项目级):`get_chat_model(timeout=)` 支持请求超时,
+  节点单章 LLM 120s 上限,防 DeepSeek 偶发挂起永久 running。
+- **章节级进度回显**:`AgentState._progress_cb` 回调经 parse/review/verify/
+  summarize;review 每章推进 current/total;API 后台线程更新 `_tasks`
+  stage/current/total;SSE progress 事件带 JSON;`status` 接口返回 stage。
+- **测试页健壮化**:review 响应头 `X-Task-Id` 立即取 task_id;status 轮询
+  兜底(SSE 被代理缓冲也能回显);readSSE 容错;进度条 + "章节审核 第 N/M 章"。
+
+### 修复
+
+- 测试页 F2 审核对 FormData 漏发 apikey 头(422 根因)。
+
+---
+
 ## v0.6.0 — 2026-08-14(检索调优:必查法条注入 + 引文修复)
 
 ### 新增

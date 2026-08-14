@@ -14,11 +14,11 @@ from langchain_core.language_models import BaseChatModel
 
 from common import config
 
-# 供应商 → 模型构建器。新增供应商在这里注册。
-_REGISTRY: dict[str, Callable[[str], BaseChatModel]] = {}
+# 供应商 → 模型构建器(model_id, timeout?) → ChatModel。新增供应商在这里注册。
+_REGISTRY: dict[str, Callable[[str, int | None], BaseChatModel]] = {}
 
 
-def _build_openai_compatible(provider: str) -> Callable[[str], BaseChatModel]:
+def _build_openai_compatible(provider: str) -> Callable[[str, int | None], BaseChatModel]:
     """生成 OpenAI 兼容供应商(DeepSeek 等)的构建器。
 
     经 langchain-openai 的 ChatOpenAI 接入。
@@ -26,7 +26,7 @@ def _build_openai_compatible(provider: str) -> Callable[[str], BaseChatModel]:
     (OpenAI 官方可省,默认官方端点)。
     """
 
-    def _build(model_id: str) -> BaseChatModel:
+    def _build(model_id: str, timeout: int | None = None) -> BaseChatModel:
         from langchain_openai import ChatOpenAI
 
         api_key = config.provider_api_key(provider)
@@ -40,6 +40,7 @@ def _build_openai_compatible(provider: str) -> Callable[[str], BaseChatModel]:
             model=model_id,
             api_key=api_key,
             base_url=base_url or None,
+            request_timeout=timeout,  # None → OpenAI 默认(600s)
         )
 
     return _build
@@ -53,6 +54,7 @@ _REGISTRY["deepseek"] = _build_openai_compatible("deepseek")
 def get_chat_model(
     provider: str | None = None,
     model_id: str | None = None,
+    timeout: int | None = None,
 ) -> BaseChatModel:
     """供应商驱动模型工厂。
 
@@ -60,6 +62,8 @@ def get_chat_model(
         provider: 供应商名(注册表 key)。缺省用 .env 的 LLM_PROVIDER。
         model_id: 模型 ID。缺省用 LLM_MODEL / <PROVIDER>_MODEL,
                   再缺省用供应商默认模型。
+        timeout: 请求超时秒数(None 用 OpenAI 默认)。agent 可传低值防
+                 外部 LLM 挂起(如合同审核单章调用 120s)。
 
     Returns:
         配置好的 ChatModel 实例。
@@ -74,4 +78,4 @@ def get_chat_model(
             f"供应商 {provider!r} 未注册。已注册: {sorted(_REGISTRY)}。"
         )
     model_id = model_id or config.current_model(provider)
-    return builder(model_id)
+    return builder(model_id, timeout)
