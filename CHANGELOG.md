@@ -25,6 +25,14 @@
 
 ## 项目级历史
 
+### 2026-08-14(管理控制台 admin_console)
+
+#### 变更
+- 管理控制台(admin_console):跨 agent apikey 管理/角色切换/额度/报表(summary+按天 committed 趋势),`uvicorn common.admin_api:app` 起,`web/admin.html` 单文件三 tab。复用 common 计费组件,超级管理员(ADMIN_APIKEY)专用。
+- common/auth.py:新 `is_super_admin`。
+- common/apikey_mgmt.py:`create_apikey` 加额度参数、新 `set_role/list_keys/list_agents`、`deactivate_apikey` 超管放行。
+- common/billing.py:新 `report_summary`(仅 active)/`report_history`(committed 按天)。
+
 ### 2026-08-14(公共计费硬化 M1-M8)
 
 #### 变更
