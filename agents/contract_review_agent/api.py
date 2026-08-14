@@ -201,14 +201,18 @@ def _run_task(task_id: str, file_path: str, contract_type: str,
 
     try:
         billing.commit(apikey, "contract", task_id)
-    except RuntimeError as exc:
-        # commit 事务内 HTTPException(如 pending 不存在)被 common/db.transaction
-        # 吞为 RuntimeError:转失败态,result 置空(不返回成功报告),避免 pending 悬挂。
+    except (RuntimeError, HTTPException) as exc:
+        # commit 的 404(HTTPException)在事务外前置 SELECT 抛出,不再被
+        # common/db.transaction 吞成 RuntimeError:必须在此捕获,否则守护线程静默死、
+        # 任务卡 running、pending 泄漏、临时文件不删(终审 I1 回归)。
+        # RuntimeError 仍保留(事务内 UPDATE 0 行 / apikey 不存在 的竞态兜底)。
+        # 统一走 failed + cancel_pending + unlink,与文档化"任何异常兜底"意图一致。
         # ⚠️ 只记 error_type、error 字段用通用码,绝不记 str(exc):billing.commit 的
-        # RuntimeError 消息可能含明文 apikey(如 "apikey xxx 不存在"),直落日志或
+        # 异常消息可能含明文 apikey(如 "apikey xxx 不存在"),直落日志或
         # error 字段即泄露凭据(审查 Important)。
         logger.error("service=%s event=billing_commit_failed task_id=%s request_id=%s error_type=%s",
                      _SERVICE, task_id, request_id, type(exc).__name__)
+        billing.cancel_pending(apikey, "contract", task_id)
         with _lock:
             t["status"] = "failed"
             t["error"] = "billing_commit_failed"

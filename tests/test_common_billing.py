@@ -149,21 +149,21 @@ def test_update_apikey_migrates(tmp_path, monkeypatch):
     db.execute("UPDATE agent_api_keys SET free_used=1, paid_used=2 "
                "WHERE apikey=%s AND agent=%s", ("k1", "sentiment"))
     billing.create_pending("k1", "sentiment", "b1")  # pending 流水,验证 apikey 重写
-    r = billing_mgmt.update_apikey("sentiment", "k1", "k2")
-    assert r["new_apikey"] == "k2" and r["migrated"] is True
+    r = billing_mgmt.update_apikey("sentiment", "k1", "sk-new012")
+    assert r["new_apikey"] == "sk-new012" and r["migrated"] is True
     # 旧 key 失效(行已不存在 → _active_apikey 抛 401)
     with pytest.raises(Exception) as e:
         billing.usage("k1", "sentiment")
     assert getattr(e.value, "status_code", None) == 401
     # 新 key 额度/role 继承(free/paid 四元组一致,role 不变)
-    u = billing.usage("k2", "sentiment")
+    u = billing.usage("sk-new012", "sentiment")
     assert u["free"] == {"total": 5, "used": 1, "remaining": 4}
     assert u["paid"] == {"total": 3, "used": 2, "remaining": 1}
     assert u["role"] == "normal"
     # 流水 apikey 已重写为 new
     rec = db.query("SELECT apikey FROM agent_billing_records "
                    "WHERE agent=%s AND bill_no=%s", ("sentiment", "b1"))
-    assert rec[0]["apikey"] == "k2"
+    assert rec[0]["apikey"] == "sk-new012"
 
 
 def test_update_apikey_atomic(tmp_path, monkeypatch):
@@ -175,7 +175,7 @@ def test_update_apikey_atomic(tmp_path, monkeypatch):
                "BEGIN SELECT RAISE(ABORT, 'forced'); END")
     try:
         with pytest.raises(Exception):
-            billing_mgmt.update_apikey("sentiment", "k1", "k2")
+            billing_mgmt.update_apikey("sentiment", "k1", "sk-new012")
     finally:
         db.execute("DROP TRIGGER trg_fail_update")
     # 主键未改:old key 仍有效、new key 不存在、流水 apikey 仍是 k1
@@ -184,6 +184,18 @@ def test_update_apikey_atomic(tmp_path, monkeypatch):
                     ("sentiment",))[0]["apikey"] == "k1"
     assert db.query("SELECT apikey FROM agent_billing_records "
                     "WHERE agent=%s AND bill_no=%s", ("sentiment", "b1"))[0]["apikey"] == "k1"
+
+
+def test_update_apikey_rejects_bad_format(tmp_path, monkeypatch):
+    """update_apikey 对 new_apikey 加 sk- 格式校验(终审 I2:旧 sentiment 400 拒绝,
+    公共版曾丢校验直接 200 落库非法值)→ 非法 400,与 create 语义对齐。"""
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("sk-old01", "sentiment")
+    with pytest.raises(Exception) as e:
+        billing_mgmt.update_apikey("sentiment", "sk-old01", "not_a_key")
+    assert getattr(e.value, "status_code", None) == 400
+    # 落库不变:旧 key 仍在,非法新 key 未插入
+    assert billing.usage("sk-old01", "sentiment")["free"]["total"] == 10
 
 
 def test_ensure_admin_rebuilds_after_deactivate(tmp_path, monkeypatch):

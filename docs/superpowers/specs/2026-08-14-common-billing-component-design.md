@@ -38,11 +38,14 @@ sentiment-query-agent 与 contract-review-agent 各自实现了一套**逐字相
 3. **存量数据零丢失**:`billing_records` 流水迁移到 `agent_billing_records`
    (agent='sentiment', bill_no=group_id),pending/committed 状态保留。
 
-**行为变化(2 项,均已确认)**:
+**行为变化(3 项,均已确认)**:
 1. 流水线失败路径补 cancel_pending(sentiment 原先失败不释放 pending,统一后自动释放)。
 2. apikey 停用规则统一为 contract 版:管理员可停用任何 apikey(含 admin 目标),
    仅不可停用自己。sentiment 原"admin 不可删(403)"放宽为可停用 —— 能清理违规/误建
    admin;`ensure_admin` 幂等兜底,全停也可经 ADMIN_APIKEY 重建。
+3. update_apikey 不做方案组文件 owner 迁移(sentiment 原 update 会把方案组文件
+   owner 一并迁到新 key)。公共组件只管 DB 行(agent_api_keys / agent_billing_records),
+   文件 owner 迁移是 sentiment 的 agent 层业务,公共版不做 —— 已确认接受。
 
 **管理员引导兼容**:公共 `ensure_admin(agent)` 对 sentiment 沿用现有机制 —
 读 `.env` 的 `ADMIN_APIKEY`,首次启动写入 `agent_api_keys(apikey, agent='sentiment')`

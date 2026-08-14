@@ -5,7 +5,8 @@ docs/superpowers/specs/2026-08-14-common-billing-component-design.md §3/§4。
 
 - create_apikey(agent, name, role):服务端随机 `sk-`+token(不给调用方铸 key 权限),
   role 白名单 normal/admin,非法 ValueError(防任意调用方铸 admin 后门)。
-- update_apikey(agent, old, new):换 key —— 仅改主键 apikey 列,额度/status/role
+- update_apikey(agent, old, new):换 key —— 新 key 须 `sk-[A-Za-z0-9]{6,64}` 格式
+  (非法 400,与 create 语义对齐);仅改主键 apikey 列,额度/status/role
   自然继承;流水 agent_billing_records.apikey 一并重写。不做 sentiment 特有的
   方案组文件 owner 迁移(那是 agent 层业务,公共组件只管 DB 行)。
 - deactivate_apikey(agent, apikey, admin):软删(status='deleted'),统一 contract 规则
@@ -23,6 +24,7 @@ docs/superpowers/specs/2026-08-14-common-billing-component-design.md §3/§4。
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 
 from fastapi import HTTPException
@@ -86,9 +88,13 @@ def create_apikey(agent: str, name: str, role: str = "normal") -> dict:
 def update_apikey(agent: str, old_apikey: str, new_apikey: str) -> dict:
     """换 key:旧 key → 新 key,额度/status/role 继承 + 流水 apikey 重写。
 
+    新 key 须 `sk-[A-Za-z0-9]{6,64}` 格式,非法 400(与 create 语义对齐)。
     仅 UPDATE 主键列 apikey,其余列原样保留即"继承"。管理员 key 不可换(403),
     已软删 key 不可换(400)。方案组文件 owner 迁移为 sentiment 特有,公共版不做。
     """
+    if not re.fullmatch(r"sk-[A-Za-z0-9]{6,64}", new_apikey):
+        raise HTTPException(status_code=400, detail="apikey 格式:sk- 开头 + 6-64 位字母数字")
+
     old_row = _get_row(old_apikey, agent)
     if old_row is None:
         raise HTTPException(status_code=404, detail="原 apikey 不存在")

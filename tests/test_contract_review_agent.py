@@ -560,6 +560,50 @@ def test_review_background_exception_fallback(tmp_path, monkeypatch):
     assert "boom" not in str(r2.json()), "error 字段不得含异常详情(防 apikey/敏感信息泄露)"
 
 
+def test_review_commit_http404_fallback(tmp_path, monkeypatch):
+    """commit 抛 HTTPException(404)→ 任务转 failed + cancel_pending 被调(终审 I1 回归)。
+
+    billing.commit 的 404 在事务外前置 SELECT 抛 HTTPException(不再被 transaction
+    吞成 RuntimeError);守护线程必须捕获,否则线程静默死、任务卡 running、pending
+    泄漏、临时文件不删。
+    """
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "api3.db"))
+    db.init_tables()
+    key = create_apikey("contract", "api_i1")["apikey"]
+
+    import agents.contract_review_agent.api as api_module  # noqa: E402
+
+    def _fake_run_review(*a, **kw):
+        return {"error": "", "report": "ok"}
+
+    with patch("agents.contract_review_agent.agent.run_review",
+               side_effect=_fake_run_review), \
+         patch.object(api_module.billing, "commit",
+                      side_effect=HTTPException(status_code=404,
+                                                detail="计费记录不存在")), \
+         patch.object(api_module.billing, "cancel_pending",
+                      wraps=cancel_pending) as m:
+        c = TestClient(app)
+        files = {"file": ("x.docx", b"fake docx", "application/octet-stream")}
+        r = c.post("/api/v1/contract/review", headers={"apikey": key},
+                   files=files, data={"contract_type": "劳动合同", "prompt": "审"})
+        assert r.status_code == 200
+        assert m.called, "commit 抛 HTTPException 后应调用 cancel_pending"
+        task_id = m.call_args[0][2]  # cancel_pending(apikey, agent, task_id) 第 3 参
+
+    s = TestClient(app).get(f"/api/v1/contract/status?task_id={task_id}",
+                            headers={"apikey": key})
+    assert s.status_code == 200
+    assert s.json()["status"] == "failed", "commit 404 不得让任务卡 running"
+    assert s.json()["progress"] == 1.0
+    # error 字段用通用码,不得含 str(exc)(防凭据/敏感信息泄露)
+    r2 = TestClient(app).get(f"/api/v1/contract/result?task_id={task_id}",
+                             headers={"apikey": key})
+    assert r2.status_code == 200
+    assert r2.json()["result"]["error"] == "billing_commit_failed"
+
+
 def test_status_ownership_enforced(tmp_path, monkeypatch):
     """非本人 apikey 读他人任务 → 404(审查 Important #7,不泄露任务存在性)。"""
     monkeypatch.setenv("DB_BACKEND", "sqlite")
