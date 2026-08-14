@@ -63,6 +63,23 @@ def _retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+def _char_bigrams(s: str) -> set[str]:
+    """中文 2-gram:章节文本与法条关键词共现的代理匹配。"""
+    chars = [c for c in s if "一" <= c <= "鿿"]
+    return {chars[i] + chars[i + 1] for i in range(len(chars) - 1)}
+
+
+def _shares_keyword(query: str, text: str) -> bool:
+    """章节 query 与法条文本是否相关(共享 ≥2 个 2-gram)。
+
+    单 2-gram 太松("合同" 几乎每部劳动法都有,全量注入 = 无过滤);≥2 表示
+    有实质关键词共现:违约金(违约+约金)、社会保险(社会+会保+保险)、
+    试用期(试用+用期)。抬头/编号类章节与任何必查法条共享 <2 → 不注入。
+    """
+    qb, tb = _char_bigrams(query), _char_bigrams(text)
+    return len(qb & tb) >= 2
+
+
 def _domain_of(contract_type: str) -> str:
     """合同类型 → 领域。DOMAIN_ALIASES 键是短名("买卖"),用户常输入全名
     ("买卖合同"),子串匹配兜底:含任一别名键即命中对应域。"""
@@ -160,21 +177,29 @@ class LawStore:
                         raise
                     time.sleep(min(0.5 * 2 ** attempt, 8))
 
-    def _priority_fragments(self, contract_type: str) -> list[dict]:
-        """域内必查法条(确定性,从 _exact 取原文,不依赖检索召回)。"""
+    def _priority_fragments(self, contract_type: str, query: str = "") -> list[dict]:
+        """域内必查法条(确定性,从 _exact 取原文,不依赖检索召回)。
+
+        query 非空时按 2-gram 相关性过滤:只注入与章节内容共现关键词的法条,
+        无关必查法条不注入 —— 每章 prompt 体积减半、LLM 更快,且不干扰 LLM
+        聚焦本章真实问题(抬头/编号类章节无需注入全部违约金/经济补偿条款)。
+        """
         domain = _domain_of(contract_type)
         frags: list[dict] = []
         for law_name, articles in _PRIORITY.get(domain, {}).items():
             for no in articles:
                 text = self._exact.get(law_name, {}).get(no)
-                if text:
-                    frags.append({"text": text, "metadata": {
-                        "law_name": law_name, "article_no": no,
-                        "domain": domain, "priority": True}})
+                if not text:
+                    continue
+                if query and not _shares_keyword(query, text):
+                    continue
+                frags.append({"text": text, "metadata": {
+                    "law_name": law_name, "article_no": no,
+                    "domain": domain, "priority": True}})
         return frags
 
     def retrieve(self, query: str, contract_type: str = "", k: int = 8) -> list[dict]:
-        priority = self._priority_fragments(contract_type)
+        priority = self._priority_fragments(contract_type, query)
         # 空正文章节(如 PDF 标题启发式误判的孤立标题行)不做语义检索:
         # 嵌入服务拒绝空 input(413 inputs cannot be empty),只回必查法条。
         if not query or not query.strip():
