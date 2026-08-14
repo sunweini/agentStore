@@ -45,6 +45,17 @@ def _gen_apikey() -> str:
     return f"sk-{secrets.token_hex(16)}"
 
 
+def _mask_apikey(apikey: str) -> str:
+    """apikey 脱敏:保留 `sk-` 前缀 + 前 4 位 + `***` + 后 4 位,如 `sk-abcd***wxyz`。
+
+    凭据只允许以脱敏形态进日志/响应(OBS-CORE-003 敏感信息最小暴露)。过短(<12)
+    整体遮蔽为 `sk-***`,避免中段泄露。
+    """
+    if len(apikey) < 12:
+        return "sk-***"
+    return f"{apikey[:7]}***{apikey[-4:]}"
+
+
 def _get_row(apikey: str, agent: str) -> dict | None:
     """按复合主键查 agent_api_keys 行,无行返回 None。"""
     rows = db.query("SELECT * FROM agent_api_keys WHERE apikey=%s AND agent=%s",
@@ -171,14 +182,14 @@ def ensure_admin(agent: str) -> None:
     if not key:
         key = _gen_apikey()
         logger.info("service=common component=apikey_mgmt event=admin_auto_generated "
-                    "agent=%s apikey=%s role=admin", agent, key)
+                    "agent=%s apikey=%s role=admin", agent, _mask_apikey(key))
     existing = _get_row(key, agent)
     if existing is not None:
         # 该 key 已存在行(ADMIN_APIKEY 与存量 key 撞车 / 自动生成撞车理论极小)→ 跳过,
         # 避免 INSERT 撞复合主键;warning 便于排查 ADMIN_APIKEY 配错。
         logger.warning("service=common component=apikey_mgmt event=admin_key_collision "
                        "agent=%s apikey=%s existing_role=%s existing_status=%s",
-                       agent, key, existing["role"], existing["status"])
+                       agent, _mask_apikey(key), existing["role"], existing["status"])
         return
     db.execute(
         "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "

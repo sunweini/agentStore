@@ -131,6 +131,21 @@ def test_ensure_admin_idempotent(tmp_path, monkeypatch):
     assert len(rows) == 1 and rows[0]["free_quota"] == 99999999
 
 
+def test_ensure_admin_auto_gen_logs_masked_apikey(tmp_path, monkeypatch, caplog):
+    """M2:自动生成管理员时,apikey 只以脱敏形态(前 6 后 4)进日志,明文不落盘。"""
+    import logging
+    _sqlite_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("ADMIN_APIKEY", raising=False)  # 强制走自动生成路径
+    with caplog.at_level(logging.INFO, logger="common.apikey_mgmt"):
+        billing_mgmt.ensure_admin("sentiment")
+    rows = db.query("SELECT apikey FROM agent_api_keys "
+                    "WHERE agent='sentiment' AND role='admin' AND status='active'")
+    assert len(rows) == 1
+    full_key = rows[0]["apikey"]
+    assert full_key not in caplog.text            # 明文凭据不落日志
+    assert billing_mgmt._mask_apikey(full_key) in caplog.text  # 脱敏形态可见
+
+
 def test_deactivate_rule(tmp_path, monkeypatch):
     _sqlite_env(tmp_path, monkeypatch)
     admin = billing_mgmt.create_apikey("sentiment", "admin", role="admin")["apikey"]
