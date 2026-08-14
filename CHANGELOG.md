@@ -9,7 +9,7 @@
 
 | Agent | 当前版本 | CHANGELOG |
 |---|---|---|
-| sentiment-query-agent | v1.26.0 | [CHANGELOG](agents/sentiment_query_agent/CHANGELOG.md) |
+| sentiment-query-agent | v1.27.0 | [CHANGELOG](agents/sentiment_query_agent/CHANGELOG.md) |
 | contract-review-agent | v0.8.0 | [CHANGELOG](agents/contract_review_agent/CHANGELOG.md) |
 | kingdee-plugin-agent | v1.26.0 | [CHANGELOG](agents/kingdee_plugin_agent/CHANGELOG.md) |
 
@@ -24,6 +24,15 @@
 - 依赖升级 / 工作流约定 / 基建
 
 ## 项目级历史
+
+### 2026-08-14(公共计费硬化 M1-M8)
+
+#### 变更
+- `common/auth.py` `assert_owner` 加 agent 参数,管理员判定 per-agent(跨 agent 不放行)。
+- `common/apikey_mgmt.py` ensure_admin 自动生成 key 日志脱敏(前7***后4,凭据不落明文)。
+- `common/billing.py`:`commit` 前置 SELECT 与两条 UPDATE 均加 `(apikey, agent, bill_no)` 三重过滤(防跨 apikey 扣费);事务内双耗尽 guard(免费+付费用完 → 403,事务回滚防超扣);`usage_all` 加 `ORDER BY agent, apikey`(排序确定)。
+- `scripts/migrate_billing.py`:校验改逐条子集(部署后新增行不误报);迁移补 `created_at`/`committed_at`。
+- sentiment api.py `commit_group` 计费失败 try/except(HTTPException 原样/其他 503,error_type 不泄露)。
 
 ### 2026-08-14(新 agent 接入公共计费指引)
 

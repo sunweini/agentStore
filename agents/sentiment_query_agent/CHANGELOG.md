@@ -5,6 +5,16 @@
 
 ---
 
+## v1.27.0 — 2026-08-14(公共计费硬化 M1-M8)
+
+### 变更
+
+- `assert_owner` 加 agent 参数,管理员判定改 **per-agent**(跨 agent admin 不放行);api.py 调用点同步。
+- `commit_group` 的 `billing.commit` 加 try/except:HTTPException 原样上报(404/403),其他异常记 `error_type=`(不泄露)转 503 明确报错。
+- 公共组件硬化(common/billing + apikey_mgmt + migrate,项目级):apikey 日志脱敏 / commit 三重 apikey 过滤 / 双耗尽防超扣 / usage_all 排序确定 / migrate 幂等校验 + 时间戳迁移。详见根 CHANGELOG。
+
+---
+
 ## v1.26.0 — 2026-08-14(全局账单接口 usage_all)
 
 ### 新增

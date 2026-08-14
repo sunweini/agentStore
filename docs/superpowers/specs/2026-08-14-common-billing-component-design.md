@@ -102,7 +102,9 @@ sentiment-query-agent 与 contract-review-agent 各自实现了一套**逐字相
 | `commit` | `(apikey, agent, bill_no) -> None` | 事务:pending→committed,先免费后付费,quota_type 回写;无 pending → 404 |
 | `cancel_pending` | `(apikey, agent, bill_no) -> None` | 带 apikey+agent 过滤,status→cancelled |
 | `usage` | `(apikey, agent) -> dict` | free/paid total/used/remaining + pending_count |
-| `usage_all` | `(agent=None) -> list[dict]` | 管理员:所有/指定 agent 普通用户额度 |
+| `usage_all` | `(agent=None) -> list[dict]` | 管理员:所有/指定 agent 普通用户额度,**ORDER BY agent, apikey(排序确定)** |
+
+> 硬化(终审 M5-M7):`commit` 前置 SELECT 与两条 UPDATE 均按 `(apikey, agent, bill_no)` 三重过滤(防跨 apikey 扣费);事务内双耗尽 guard(免费+付费都用完 → 403,事务回滚防超扣);`usage_all` 排序确定。
 | `add_free_quota` / `add_paid_quota` | `(apikey, agent, count)` | 管理员充值 |
 | `list_pending` | `(apikey, agent) -> list[dict]` | 待完成任务 |
 
@@ -121,7 +123,7 @@ sentiment-query-agent 与 contract-review-agent 各自实现了一套**逐字相
 |---|---|
 | `check_apikey(apikey, agent) -> dict` | 无效/删除 → 401 |
 | `require_admin(apikey, agent)` | 非 admin → 403 |
-| `assert_owner(user, agent, owner)` | 资源归属,管理员放行 |
+| `assert_owner(user, owner, agent, admin=None)` | 资源归属:非本人且非本 agent 管理员 → 403;管理员按 (apikey, agent) 判定(per-agent,跨 agent 不放行) |
 
 ## 5. 存量迁移(`scripts/migrate_billing.py`)
 

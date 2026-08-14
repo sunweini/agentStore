@@ -43,7 +43,7 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - **配额开发(v1.26.0)**:调 `common.billing` / `common.auth` / `common.apikey_mgmt`(agent='sentiment',统一表 agent_api_keys/agent_billing_records);存储统一走 `common/db.py`(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。本 agent 不再有独立 billing.py / auth.py / apikey_mgmt.py(v1.25.0 已删)。
 - **跑测试**:`pytest tests/test_sentiment_query_agent.py`(脚本/store/配额/鉴权/计费单测,SQLite 后端;图/端到端需外部服务)。
 - **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
-  `agents/sentiment_query_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v1.26.0 → 下版 v1.27);
+  `agents/sentiment_query_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v1.27.0 → 下版 v1.28);
   纯项目级(common/依赖)→ 根 `CHANGELOG.md` 项目级区。
 - **启动 API**:`uvicorn agents.sentiment_query_agent.api:app --reload`(配额功能需配 MYSQL_URL)。
 
