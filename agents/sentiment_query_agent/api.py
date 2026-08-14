@@ -196,7 +196,7 @@ async def get_progress(group_id: str, user: str = Depends(_user)):
         group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
     return {
         "group_id": group_id,
         "status": group["status"],
@@ -218,7 +218,7 @@ async def get_status(group_id: str, user: str = Depends(_user)):
         group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
 
     # 当前步骤:有 running 步取其步号,否则取已出现的最大步号
     step_status = group.get("step_status", [])
@@ -258,7 +258,7 @@ async def stop_group(group_id: str, user: str = Depends(_user)):
         group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
 
     if group["status"] not in (STATUS_GENERATING, STATUS_REVIEW):
         raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 generating/review 可停止")
@@ -309,7 +309,7 @@ async def get_schemes(group_id: str, user: str = Depends(_user)):
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
     return {
         "group_id": group_id,
         "company_name": group["company_name"],
@@ -326,7 +326,7 @@ async def update_selection(group_id: str, req: SelectionRequest, user: str = Dep
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
     if group["status"] == STATUS_COMMITTED:
         raise HTTPException(status_code=409, detail="方案组已入库冻结,不可改勾选")
 
@@ -347,7 +347,7 @@ async def commit_group(group_id: str, user: str = Depends(_user)):
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
     if group["status"] == STATUS_COMMITTED:
         raise HTTPException(status_code=409, detail="已入库")
     if group["status"] != STATUS_REVIEW:
@@ -364,7 +364,7 @@ async def export_group(group_id: str, user: str = Depends(_user)):
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group.get("owner"), admin=user)
+    auth.assert_owner(user, group.get("owner"), _AGENT, admin=user)
     out = f"/tmp/{group_id}_tasks.xlsx"
     converter.export_excel(group, out)
     return FileResponse(out, filename=f"{group_id}_tasks.xlsx")

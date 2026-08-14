@@ -251,17 +251,39 @@ def test_auth_require_admin(tmp_path, monkeypatch):
 def test_auth_assert_owner(tmp_path, monkeypatch):
     _sqlite_env(tmp_path, monkeypatch)
     _seed("k1", "sentiment")
+    _seed("k2", "sentiment")
     _seed("admin1", "sentiment")
     db.execute("UPDATE agent_api_keys SET role='admin' "
                "WHERE apikey='admin1' AND agent='sentiment'")
-    auth.assert_owner("k1", "k1")  # 本人 → 不抛
+    auth.assert_owner("k1", "k1", "sentiment")  # 本人 → 不抛
     with pytest.raises(Exception) as e:
-        auth.assert_owner("k1", "k2")  # 非本人且未传管理员 → 403
+        auth.assert_owner("k1", "k2", "sentiment")  # 非本人且未传管理员 → 403
     assert getattr(e.value, "status_code", None) == 403
-    auth.assert_owner("k1", "k2", admin="admin1")  # 管理员放行 → 不抛
+    auth.assert_owner("k1", "k2", "sentiment", admin="admin1")  # 同 agent 管理员放行 → 不抛
     with pytest.raises(Exception) as e:
-        auth.assert_owner("k1", "k2", admin="k1")  # 传的管理员非 admin → 403
+        auth.assert_owner("k1", "k2", "sentiment", admin="k1")  # 传的管理员非 admin → 403
     assert getattr(e.value, "status_code", None) == 403
+
+
+def test_auth_assert_owner_admin_is_per_agent(tmp_path, monkeypatch):
+    """管理员判定按 agent 隔离:contract 的 admin 不能放行 sentiment 资源(M1)。
+
+    场景:admin_c 只在 agent='contract' 是 admin,sentiment 无该 key → 跨 agent 非管理员
+    不放行;sentiment 自己的 admin 才放行。
+    """
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment")              # 普通用户(sentiment)
+    _seed("k2", "sentiment")              # 他人资源 owner
+    _seed("admin_c", "contract")          # 仅 contract 的 admin
+    db.execute("UPDATE agent_api_keys SET role='admin' "
+               "WHERE apikey='admin_c' AND agent='contract'")
+    _seed("admin_s", "sentiment")         # sentiment 自己的 admin
+    db.execute("UPDATE agent_api_keys SET role='admin' "
+               "WHERE apikey='admin_s' AND agent='sentiment'")
+    with pytest.raises(Exception) as e:
+        auth.assert_owner("k1", "k2", "sentiment", admin="admin_c")  # 跨 agent admin → 403
+    assert getattr(e.value, "status_code", None) == 403
+    auth.assert_owner("k1", "k2", "sentiment", admin="admin_s")  # 本 agent admin → 放行
 
 
 # ===== 5. 存量迁移(scripts/migrate_billing.py,Task 5) =====

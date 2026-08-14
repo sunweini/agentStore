@@ -198,13 +198,14 @@ def _seed_apikey(apikey="sk-usertest123", free=10, paid=0, role="normal"):
 
 
 def test_auth_assert_owner(sqlite_db):
-    """归属校验(common.auth):owner 不符 → 403;管理员放行。"""
+    """归属校验(common.auth,agent='sentiment'):owner 不符 → 403;本 agent 管理员放行。"""
     _seed_apikey("sk-usertest123")
     _seed_apikey("sk-admintest123", role="admin", free=99999999)
     with pytest.raises(Exception):
-        auth.assert_owner("sk-usertest123", "other")
-    auth.assert_owner("sk-usertest123", "sk-usertest123")  # 本人不抛
-    auth.assert_owner("sk-admintest123", "other", admin="sk-admintest123")  # 管理员放行
+        auth.assert_owner("sk-usertest123", "other", "sentiment")
+    auth.assert_owner("sk-usertest123", "sk-usertest123", "sentiment")  # 本人不抛
+    # 管理员放行(per-agent:sentiment 管理员)
+    auth.assert_owner("sk-admintest123", "other", "sentiment", admin="sk-admintest123")
 
 
 def test_billing_pending_commit(sqlite_db):
