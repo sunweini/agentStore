@@ -144,7 +144,7 @@ function loadAgents() {
 }
 
 function loadKeys() {
-  return api("/apikeys").then(d => { keys = d.keys; bindTableActions(); renderQuota(); return renderKeys(); });
+  return api("/apikeys").then(d => { keys = d.keys; renderQuota(); renderKeys(); bindTableActions(); });
 }
 
 function renderKeys() {
