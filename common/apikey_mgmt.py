@@ -13,7 +13,8 @@ docs/superpowers/specs/2026-08-14-common-billing-component-design.md §3/§4。
   永不可停用"后门;ensure_admin 幂等兜底可重建,无全停死风险)。
 - admin_list(apikey, agent):管理员查该 agent 全部 apikey(含额度使用,软删的也列出)。
 - ensure_admin(agent):每 agent 首个管理员引导(额度 99999999),幂等 —— 该 agent
-  已有管理员行则跳过(迁移后旧管理员行已存在,重复启动不重复插入)。读 .env
+  已有 active 管理员行则跳过(迁移后旧管理员行已存在,重复启动不重复插入;软删的
+  admin 不计数,保证现存 admin 全被软删时能重建,无"全停死"风险)。读 .env
   `ADMIN_APIKEY`(sentiment 兼容);未配置则自动生成 sk-+token 并记结构化日志。
 
 存储访问统一走 common/db.py(MySQL 生产 / SQLite 测试双后端)。
@@ -69,17 +70,21 @@ def create_apikey(agent: str, name: str, role: str = "normal") -> dict:
     """
     if role not in _ALLOWED_ROLES:
         raise ValueError(f"非法 role: {role}(仅允许 {'/'.join(_ALLOWED_ROLES)})")
-    apikey = _gen_apikey()
-    try:
-        db.execute(
-            "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "
-            "VALUES (%s, %s, %s, 'active', %s, %s)",
-            (apikey, agent, role, _DEFAULT_FREE_QUOTA, _DEFAULT_PAID_QUOTA),
-        )
-    except RuntimeError as exc:
-        if "Duplicate" in str(exc) or "1062" in str(exc) or "UNIQUE" in str(exc):
-            return create_apikey(agent, name, role)
-        raise
+    for _ in range(3):
+        apikey = _gen_apikey()
+        try:
+            db.execute(
+                "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "
+                "VALUES (%s, %s, %s, 'active', %s, %s)",
+                (apikey, agent, role, _DEFAULT_FREE_QUOTA, _DEFAULT_PAID_QUOTA),
+            )
+            break
+        except RuntimeError as exc:
+            if "Duplicate" in str(exc) or "1062" in str(exc) or "UNIQUE" in str(exc):
+                continue  # 随机 key 撞唯一键(理论极小),限次重试
+            raise
+    else:
+        raise RuntimeError("apikey 生成冲突:3 次重试仍撞唯一键")
     return {
         "apikey": apikey,
         "name": name,
@@ -157,21 +162,28 @@ def admin_list(apikey: str, agent: str) -> list[dict]:
 def ensure_admin(agent: str) -> None:
     """每 agent 首个管理员引导(额度 99999999),幂等。
 
-    幂等语义:该 agent 已有管理员行(任意 key)即跳过 —— 迁移后旧管理员行已存在,
-    重复启动不重复插入;无 ADMIN_APIKEY 自动生成路径也靠此防重复(两次启动各生成
-    不同 key 会铸两行 admin,故必须按 agent 判重而非按 key)。
+    幂等语义:该 agent 已有 **active** 管理员行(任意 key)即跳过 —— 迁移后旧管理员行
+    已存在,重复启动不重复插入;无 ADMIN_APIKEY 自动生成路径也靠此防重复(两次启动各
+    生成不同 key 会铸两行 admin,故必须按 agent 判重而非按 key)。
+    status='active' 过滤是安全前提:软删的 admin 不计数,现存 admin 全被软删时
+    ensure_admin 可重建,否则"全停死"无法自愈(spec §2.5 契约)。
     读 .env ADMIN_APIKEY(sentiment 兼容);未配置则自动生成并记结构化日志。
     """
-    if db.query("SELECT apikey FROM agent_api_keys WHERE agent=%s AND role='admin'",
-                (agent,)):
+    if db.query("SELECT apikey FROM agent_api_keys "
+                "WHERE agent=%s AND role='admin' AND status='active'", (agent,)):
         return
     key = config.get_env("ADMIN_APIKEY")
     if not key:
         key = _gen_apikey()
         logger.info("service=common component=apikey_mgmt event=admin_auto_generated "
                     "agent=%s apikey=%s role=admin", agent, key)
-    if _get_row(key, agent) is not None:
-        # 该 key 已存在行(如普通用户恰好占用)→ 跳过,避免 INSERT 撞复合主键
+    existing = _get_row(key, agent)
+    if existing is not None:
+        # 该 key 已存在行(ADMIN_APIKEY 与存量 key 撞车 / 自动生成撞车理论极小)→ 跳过,
+        # 避免 INSERT 撞复合主键;warning 便于排查 ADMIN_APIKEY 配错。
+        logger.warning("service=common component=apikey_mgmt event=admin_key_collision "
+                       "agent=%s apikey=%s existing_role=%s existing_status=%s",
+                       agent, key, existing["role"], existing["status"])
         return
     db.execute(
         "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "

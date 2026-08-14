@@ -140,3 +140,62 @@ def test_deactivate_rule(tmp_path, monkeypatch):
     with pytest.raises(Exception) as e:
         billing_mgmt.deactivate_apikey("sentiment", admin, admin)  # 不可停用自己
     assert getattr(e.value, "status_code", None) == 403
+
+
+def test_update_apikey_migrates(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment", free=5, paid=3)
+    db.execute("UPDATE agent_api_keys SET free_used=1, paid_used=2 "
+               "WHERE apikey=%s AND agent=%s", ("k1", "sentiment"))
+    billing.create_pending("k1", "sentiment", "b1")  # pending 流水,验证 apikey 重写
+    r = billing_mgmt.update_apikey("sentiment", "k1", "k2")
+    assert r["new_apikey"] == "k2" and r["migrated"] is True
+    # 旧 key 失效(行已不存在 → _active_apikey 抛 401)
+    with pytest.raises(Exception) as e:
+        billing.usage("k1", "sentiment")
+    assert getattr(e.value, "status_code", None) == 401
+    # 新 key 额度/role 继承(free/paid 四元组一致,role 不变)
+    u = billing.usage("k2", "sentiment")
+    assert u["free"] == {"total": 5, "used": 1, "remaining": 4}
+    assert u["paid"] == {"total": 3, "used": 2, "remaining": 1}
+    assert u["role"] == "normal"
+    # 流水 apikey 已重写为 new
+    rec = db.query("SELECT apikey FROM agent_billing_records "
+                   "WHERE agent=%s AND bill_no=%s", ("sentiment", "b1"))
+    assert rec[0]["apikey"] == "k2"
+
+
+def test_update_apikey_atomic(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment")
+    billing.create_pending("k1", "sentiment", "b1")
+    # 强制流水 UPDATE 失败(SQLite 触发器 RAISE)→ 事务应整体回滚,不留半更新
+    db.execute("CREATE TRIGGER trg_fail_update BEFORE UPDATE ON agent_billing_records "
+               "BEGIN SELECT RAISE(ABORT, 'forced'); END")
+    try:
+        with pytest.raises(Exception):
+            billing_mgmt.update_apikey("sentiment", "k1", "k2")
+    finally:
+        db.execute("DROP TRIGGER trg_fail_update")
+    # 主键未改:old key 仍有效、new key 不存在、流水 apikey 仍是 k1
+    assert billing.usage("k1", "sentiment")["free"]["total"] == 10
+    assert db.query("SELECT apikey FROM agent_api_keys WHERE agent=%s",
+                    ("sentiment",))[0]["apikey"] == "k1"
+    assert db.query("SELECT apikey FROM agent_billing_records "
+                    "WHERE agent=%s AND bill_no=%s", ("sentiment", "b1"))[0]["apikey"] == "k1"
+
+
+def test_ensure_admin_rebuilds_after_deactivate(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    # 无 ADMIN_APIKEY → 自动生成首个管理员
+    billing_mgmt.ensure_admin("sentiment")
+    assert len(db.query("SELECT apikey FROM agent_api_keys "
+                        "WHERE agent='sentiment' AND role='admin' AND status='active'")) == 1
+    # 模拟管理员被软删(清理/误删;deactivate_apikey 不可停用自己,故直接 UPDATE)
+    db.execute("UPDATE agent_api_keys SET status='deleted' "
+               "WHERE agent='sentiment' AND role='admin' AND status='active'")
+    # 幂等守卫应忽略已软删的 admin → 重建出新的 active admin
+    billing_mgmt.ensure_admin("sentiment")
+    admins = db.query("SELECT apikey, status FROM agent_api_keys "
+                      "WHERE agent='sentiment' AND role='admin'")
+    assert [a["status"] for a in admins] == ["deleted", "active"]
