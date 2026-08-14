@@ -63,37 +63,32 @@ def _get_row(apikey: str, agent: str) -> dict | None:
     return rows[0] if rows else None
 
 
-def create_apikey(agent: str, name: str, role: str = "normal") -> dict:
-    """创建 apikey(默认免费 10 / 付费 0),返回 {apikey, name, role, free_quota, paid_quota}。
-
-    name 作为创建时标签仅出现在返回值中(表结构无 name 列,不落库)。
-    role 仅允许 normal/admin,非法值抛 ValueError(防任意调用方铸 admin 后门)。
-    随机 apikey 冲突(理论极小)时递归重试一次。
-    """
+def create_apikey(agent: str, name: str, role: str = "normal",
+                  free_quota: int | None = None, paid_quota: int | None = None) -> dict:
+    """创建 apikey,默认免费 10 / 付费 0;可选初始额度(负值 ValueError)。"""
     if role not in _ALLOWED_ROLES:
         raise ValueError(f"非法 role: {role}(仅允许 {'/'.join(_ALLOWED_ROLES)})")
+    fq = _DEFAULT_FREE_QUOTA if free_quota is None else free_quota
+    pq = _DEFAULT_PAID_QUOTA if paid_quota is None else paid_quota
+    if fq < 0 or pq < 0:
+        raise ValueError(f"额度不能为负: free={fq}, paid={pq}")
     for _ in range(3):
         apikey = _gen_apikey()
         try:
             db.execute(
                 "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "
                 "VALUES (%s, %s, %s, 'active', %s, %s)",
-                (apikey, agent, role, _DEFAULT_FREE_QUOTA, _DEFAULT_PAID_QUOTA),
+                (apikey, agent, role, fq, pq),
             )
             break
         except RuntimeError as exc:
             if "Duplicate" in str(exc) or "1062" in str(exc) or "UNIQUE" in str(exc):
-                continue  # 随机 key 撞唯一键(理论极小),限次重试
+                continue
             raise
     else:
         raise RuntimeError("apikey 生成冲突:3 次重试仍撞唯一键")
-    return {
-        "apikey": apikey,
-        "name": name,
-        "role": role,
-        "free_quota": _DEFAULT_FREE_QUOTA,
-        "paid_quota": _DEFAULT_PAID_QUOTA,
-    }
+    return {"apikey": apikey, "name": name, "role": role,
+            "free_quota": fq, "paid_quota": pq}
 
 
 def update_apikey(agent: str, old_apikey: str, new_apikey: str) -> dict:
@@ -146,25 +141,47 @@ def deactivate_apikey(agent: str, apikey: str, admin: str) -> None:
                "WHERE apikey=%s AND agent=%s", (apikey, agent))
 
 
+def _shape_row(r: dict) -> dict:
+    """DB 行 → 对外行结构(apikey/agent/role/status + free/paid {total,used,remaining})。
+
+    供 admin_list / list_keys 共用,保证两接口行结构一致。
+    """
+    return {
+        "apikey": r["apikey"], "agent": r["agent"], "role": r["role"], "status": r["status"],
+        "free": {"total": r["free_quota"], "used": r["free_used"],
+                 "remaining": r["free_quota"] - r["free_used"]},
+        "paid": {"total": r["paid_quota"], "used": r["paid_used"],
+                 "remaining": r["paid_quota"] - r["paid_used"]},
+    }
+
+
 def admin_list(apikey: str, agent: str) -> list[dict]:
     """管理员:查该 agent 全部 apikey 的额度使用(含 status,软删的也列出)。"""
     require_admin(apikey, agent)
     rows = db.query(
         "SELECT apikey, agent, role, status, free_quota, free_used, paid_quota, paid_used "
         "FROM agent_api_keys WHERE agent=%s ORDER BY apikey", (agent,))
-    return [
-        {
-            "apikey": r["apikey"],
-            "agent": r["agent"],
-            "role": r["role"],
-            "status": r["status"],
-            "free": {"total": r["free_quota"], "used": r["free_used"],
-                     "remaining": r["free_quota"] - r["free_used"]},
-            "paid": {"total": r["paid_quota"], "used": r["paid_used"],
-                     "remaining": r["paid_quota"] - r["paid_used"]},
-        }
-        for r in rows
-    ]
+    return [_shape_row(r) for r in rows]
+
+
+def list_keys(agent: str | None = None) -> list[dict]:
+    """跨 agent 全量 apikey(含 admin/软删)。调用方须自行鉴权(console 超级管理员)。"""
+    sql = ("SELECT apikey, agent, role, status, free_quota, free_used, "
+           "paid_quota, paid_used FROM agent_api_keys")
+    params: tuple = ()
+    if agent:
+        sql += " WHERE agent=%s"
+        params = (agent,)
+    sql += " ORDER BY agent, apikey"
+    return [_shape_row(r) for r in db.query(sql, params)]
+
+
+def list_agents() -> list[dict]:
+    """agent 下拉列表(附 active key 数),按 agent 排序。"""
+    rows = db.query(
+        "SELECT agent, COUNT(*) AS key_count FROM agent_api_keys "
+        "WHERE status='active' GROUP BY agent ORDER BY agent")
+    return [{"agent": r["agent"], "key_count": r["key_count"]} for r in rows]
 
 
 def ensure_admin(agent: str) -> None:

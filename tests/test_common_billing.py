@@ -487,3 +487,43 @@ def test_deactivate_super_admin_bypasses_agent_row(tmp_path, monkeypatch):
     user = billing_mgmt.create_apikey("brand_new_agent", "u")["apikey"]
     billing_mgmt.deactivate_apikey("brand_new_agent", user, "sk-super")  # 无超管行 → 不再 401
     assert billing_mgmt._get_row(user, "brand_new_agent")["status"] == "deleted"
+
+
+# ===== 7. create_apikey 额度参数 + list_keys/list_agents(common/apikey_mgmt.py,Task 3) =====
+
+
+def test_create_apikey_custom_quota(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    k = billing_mgmt.create_apikey("sentiment", "x", role="admin", free_quota=50, paid_quota=7)
+    assert k["free_quota"] == 50 and k["paid_quota"] == 7
+    row = billing_mgmt._get_row(k["apikey"], "sentiment")
+    assert row["free_quota"] == 50 and row["paid_quota"] == 7 and row["role"] == "admin"
+    # 缺省不变 + 向后兼容
+    k2 = billing_mgmt.create_apikey("sentiment", "y")
+    assert k2["free_quota"] == 10 and k2["paid_quota"] == 0
+    with pytest.raises(ValueError):
+        billing_mgmt.create_apikey("sentiment", "z", free_quota=-1)  # 负额度拒绝
+
+
+def test_list_keys_cross_agent_includes_all(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    admin = billing_mgmt.create_apikey("sentiment", "a1", role="admin")["apikey"]
+    u1 = billing_mgmt.create_apikey("sentiment", "u1")["apikey"]
+    u2 = billing_mgmt.create_apikey("contract", "u2")["apikey"]
+    rows = billing_mgmt.list_keys()
+    apis = {(r["agent"], r["apikey"], r["role"]) for r in rows}
+    assert ("sentiment", u1, "normal") in apis
+    assert ("sentiment", admin, "admin") in apis   # 含 admin
+    assert ("contract", u2, "normal") in apis      # 跨 agent
+    assert all(r["agent"] == "sentiment" for r in billing_mgmt.list_keys(agent="sentiment"))
+    billing_mgmt.deactivate_apikey("sentiment", u1, admin)
+    assert any(r["apikey"] == u1 and r["status"] == "deleted" for r in billing_mgmt.list_keys())  # 软删也列出
+
+
+def test_list_agents_counts_active(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    billing_mgmt.create_apikey("sentiment", "u1")
+    billing_mgmt.create_apikey("sentiment", "u2")
+    billing_mgmt.create_apikey("contract", "u3")
+    agents = {a["agent"]: a["key_count"] for a in billing_mgmt.list_agents()}
+    assert agents == {"sentiment": 2, "contract": 1}
