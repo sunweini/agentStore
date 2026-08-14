@@ -5,6 +5,35 @@
 
 ---
 
+## v1.25.0 — 2026-08-14(计费切公共组件,agent='sentiment';失败路径补 cancel_pending)
+
+### 技术变更
+
+- **计费/鉴权/apikey 管理切公共组件**:api.py 的 billing/auth/apikey_mgmt 全部改指
+  `common/billing.py` / `common/auth.py` / `common/apikey_mgmt.py`,agent 固定
+  'sentiment';统一表 agent_api_keys / agent_billing_records((apikey, agent) 复合主键,
+  与 contract 同表同 schema,额度按 agent 维度隔离);bill_no = sentiment 的 group_id。
+  本 agent 独立 billing.py / auth.py / apikey_mgmt.py 已删除(grep 无残留)。
+- **接口端点/参数/返回零变更**:INTEGRATION 对接方不受影响;测试页 web/demo.html 全流程兼容。
+- **失败路径补 cancel_pending**:runner 异常分支(原只落 failed 草稿)先
+  `billing.cancel_pending` 释放并发额度,避免 pending 槽位泄漏(与 contract 一致)。
+- **create_apikey 兼容包装 `_create_apikey_compat`**:公共 `create_apikey(agent, name, role)`
+  为服务端随机 key,与 sentiment 现有"调用方传 key"语义不兼容;api.py 层校验 sk- 格式后
+  手动插 agent_api_keys(agent='sentiment'),返回结构同旧版(apikey/free_quota=10/paid_quota=0),
+  重复 key 409。
+- **行为变化(接受)**:删除 apikey 走公共 deactivate_apikey(admin 目标可停用,contract 契约);
+  update_apikey 不再做旧文件方案迁移(该迁移已确认不做);list_pending 返回 bill_no → api.py
+  映射回 group_id 保持接口字段。
+- **init_tables.sql**:新增 agent_api_keys / agent_billing_records 两表(结构同
+  common/db.py init_tables);老表 api_keys / billing_records 保留不删(回滚路径)。
+
+### 修复
+
+- 测试 `tests/test_sentiment_query_agent.py` 计费/鉴权用例改指 common + agent='sentiment'、
+  agent_* 表,断言语义保留(含失败路径 cancel 释放额度、先免费后付费、不足拒绝等)。
+
+---
+
 ## v1.24.0 — 2026-08-12(多用户配额管理 + 资费统计,**已部署生产 10.33.17.72**)
 
 > 发布:2026-08-12 全链路测试通过(配额流程 12 项验证)。生产 MySQL(agentstore 库)建表 + 数据迁移(6 方案组 owner 用户标识→apikey)+ 管理员(sk-demo-hefangyuan20260810,额度 99999999)初始化。

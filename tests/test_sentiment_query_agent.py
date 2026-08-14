@@ -17,11 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from agents.sentiment_query_agent import billing
-from agents.sentiment_query_agent.auth import assert_owner
 from agents.sentiment_query_agent.graph.nodes import _extract_json
 from agents.sentiment_query_agent.store import converter, scheme_store
-from common import config, db
+from common import auth, billing, db
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -176,7 +174,7 @@ def test_store_save_load_roundtrip(tmp_path, monkeypatch):
     assert scheme_store.list_groups("other") == []
 
 
-# ===== 3. 鉴权/配额/计费单测(SQLite 后端) =====
+# ===== 3. 鉴权/配额/计费单测(SQLite 后端,公共组件 common,agent='sentiment') =====
 
 
 @pytest.fixture()
@@ -193,33 +191,33 @@ def sqlite_db(monkeypatch, tmp_path):
 def _seed_apikey(apikey="sk-usertest123", free=10, paid=0, role="normal"):
     from common import db
     db.execute(
-        "INSERT INTO api_keys (apikey, role, status, free_quota, paid_quota) "
-        "VALUES (%s, %s, 'active', %s, %s)",
+        "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "
+        "VALUES (%s, 'sentiment', %s, 'active', %s, %s)",
         (apikey, role, free, paid),
     )
 
 
 def test_auth_assert_owner(sqlite_db):
-    """归属校验:owner 不符 → 403;管理员放行。"""
+    """归属校验(common.auth):owner 不符 → 403;管理员放行。"""
     _seed_apikey("sk-usertest123")
     _seed_apikey("sk-admintest123", role="admin", free=99999999)
     with pytest.raises(Exception):
-        assert_owner("sk-usertest123", {"owner": "other"})
-    assert_owner("sk-usertest123", {"owner": "sk-usertest123"})  # 本人不抛
-    assert_owner("sk-admintest123", {"owner": "other"})  # 管理员放行
+        auth.assert_owner("sk-usertest123", "other")
+    auth.assert_owner("sk-usertest123", "sk-usertest123")  # 本人不抛
+    auth.assert_owner("sk-admintest123", "other", admin="sk-admintest123")  # 管理员放行
 
 
 def test_billing_pending_commit(sqlite_db):
-    """计费:创建记 pending,commit 转正式 + 扣免费额度。"""
+    """计费(common,agent='sentiment'):创建记 pending,commit 转正式 + 扣免费额度。"""
     _seed_apikey()
-    billing.create_pending("sk-usertest123", "g1")
-    rows = db.query("SELECT status FROM billing_records WHERE group_id='g1'")
+    billing.create_pending("sk-usertest123", "sentiment", "g1")
+    rows = db.query("SELECT status FROM agent_billing_records WHERE agent='sentiment' AND bill_no='g1'")
     assert rows[0]["status"] == "pending"
-    billing.commit("sk-usertest123", "g1")
-    rows = db.query("SELECT status, quota_type FROM billing_records WHERE group_id='g1'")
+    billing.commit("sk-usertest123", "sentiment", "g1")
+    rows = db.query("SELECT status, quota_type FROM agent_billing_records WHERE agent='sentiment' AND bill_no='g1'")
     assert rows[0]["status"] == "committed"
     assert rows[0]["quota_type"] == "free"
-    key = db.query("SELECT free_used FROM api_keys WHERE apikey='sk-usertest123'")[0]
+    key = db.query("SELECT free_used FROM agent_api_keys WHERE apikey='sk-usertest123' AND agent='sentiment'")[0]
     assert key["free_used"] == 1  # 免费扣 1
 
 
@@ -227,20 +225,22 @@ def test_billing_max_pending(sqlite_db):
     """防刷:超过并发上限拒绝。"""
     _seed_apikey()
     for i in range(5):
-        billing.create_pending("sk-usertest123", f"g{i}")
+        billing.create_pending("sk-usertest123", "sentiment", f"g{i}")
     with pytest.raises(Exception):
-        billing.create_pending("sk-usertest123", "g_over")
+        billing.create_pending("sk-usertest123", "sentiment", "g_over")
 
 
 def test_billing_cancel_pending_releases_quota(sqlite_db):
     """stop 任务:取消 pending 释放并发额度,不扣额度。"""
     _seed_apikey()
     for i in range(3):
-        billing.create_pending("sk-usertest123", f"g{i}")
-    billing.cancel_pending("sk-usertest123", "g1")
-    rows = db.query("SELECT group_id FROM billing_records WHERE apikey='sk-usertest123' AND status='pending'")
-    assert [r["group_id"] for r in rows] == ["g0", "g2"]
-    key = db.query("SELECT free_used FROM api_keys WHERE apikey='sk-usertest123'")[0]
+        billing.create_pending("sk-usertest123", "sentiment", f"g{i}")
+    billing.cancel_pending("sk-usertest123", "sentiment", "g1")
+    rows = db.query(
+        "SELECT bill_no FROM agent_billing_records WHERE apikey='sk-usertest123' "
+        "AND agent='sentiment' AND status='pending'")
+    assert [r["bill_no"] for r in rows] == ["g0", "g2"]
+    key = db.query("SELECT free_used FROM agent_api_keys WHERE apikey='sk-usertest123' AND agent='sentiment'")[0]
     assert key["free_used"] == 0  # 不扣额度
 
 
@@ -248,10 +248,11 @@ def test_quota_deduction_order(sqlite_db):
     """额度扣减:先免费后付费。"""
     _seed_apikey(free=2, paid=3)
     for i in range(5):
-        billing.create_pending("sk-usertest123", f"g{i}")
+        billing.create_pending("sk-usertest123", "sentiment", f"g{i}")
     for i in range(5):
-        billing.commit("sk-usertest123", f"g{i}")
-    key = db.query("SELECT free_used, paid_used FROM api_keys WHERE apikey='sk-usertest123'")[0]
+        billing.commit("sk-usertest123", "sentiment", f"g{i}")
+    key = db.query("SELECT free_used, paid_used FROM agent_api_keys "
+                   "WHERE apikey='sk-usertest123' AND agent='sentiment'")[0]
     assert key["free_used"] == 2  # 免费先用完
     assert key["paid_used"] == 3  # 再扣付费
 
@@ -259,36 +260,38 @@ def test_quota_deduction_order(sqlite_db):
 def test_quota_insufficient_rejected(sqlite_db):
     """额度不足:check_quota 拒绝。"""
     _seed_apikey(free=1, paid=0)
-    billing.check_quota("sk-usertest123")  # 还有 1 次,通过
-    billing.create_pending("sk-usertest123", "g1")
-    billing.commit("sk-usertest123", "g1")  # 用掉唯一额度
+    billing.check_quota("sk-usertest123", "sentiment")  # 还有 1 次,通过
+    billing.create_pending("sk-usertest123", "sentiment", "g1")
+    billing.commit("sk-usertest123", "sentiment", "g1")  # 用掉唯一额度
     with pytest.raises(Exception):
-        billing.check_quota("sk-usertest123")  # 0 剩余,拒绝
+        billing.check_quota("sk-usertest123", "sentiment")  # 0 剩余,拒绝
 
 
 def test_apikey_crud(sqlite_db):
-    """apikey 管理:创建(默认 10/0)/修改(资费继承)/删除(软删)。"""
-    from agents.sentiment_query_agent import apikey_mgmt
-    _seed_apikey()
-    # 创建
-    r = apikey_mgmt.create_apikey("sk-newuser123")
+    """apikey 管理(common.apikey_mgmt,agent='sentiment'):创建(默认 10/0)/换 key(资费继承)/停用(软删)。"""
+    from common.apikey_mgmt import create_apikey, deactivate_apikey, update_apikey
+    # 创建(公共版服务端随机 key,默认 10/0)
+    r = create_apikey("sentiment", "user1")
+    key = r["apikey"]
     assert r["free_quota"] == 10 and r["paid_quota"] == 0
-    # 修改:旧→新,资费继承
-    apikey_mgmt.update_apikey("sk-usertest123", "sk-renamed123")
-    row = db.query("SELECT apikey, free_quota FROM api_keys WHERE apikey='sk-renamed123'")[0]
+    # 换 key:旧→新,资费继承
+    update_apikey("sentiment", key, "sk-renamed123")
+    row = db.query("SELECT apikey, free_quota FROM agent_api_keys "
+                   "WHERE apikey='sk-renamed123' AND agent='sentiment'")[0]
     assert row["free_quota"] == 10  # 资费继承
-    assert not db.query("SELECT apikey FROM api_keys WHERE apikey='sk-usertest123'")  # 旧 key 没了
-    # 删除:软删
-    apikey_mgmt.delete_apikey("sk-renamed123")
-    row = db.query("SELECT status FROM api_keys WHERE apikey='sk-renamed123'")[0]
+    assert not db.query("SELECT apikey FROM agent_api_keys WHERE apikey=%s AND agent='sentiment'", (key,))  # 旧 key 没了
+    # 停用:软删(公共版需管理员授权;admin 目标可停用,见 common 契约)
+    admin = create_apikey("sentiment", "admin1", role="admin")["apikey"]
+    deactivate_apikey("sentiment", "sk-renamed123", admin)
+    row = db.query("SELECT status FROM agent_api_keys WHERE apikey='sk-renamed123' AND agent='sentiment'")[0]
     assert row["status"] == "deleted"
 
 
 def test_admin_usage_all(sqlite_db):
-    """管理员查全部额度。"""
+    """管理员查全部额度(agent='sentiment')。"""
     _seed_apikey("sk-a", free=10, paid=0)
     _seed_apikey("sk-b", free=10, paid=5)
-    users = billing.usage_all()
+    users = billing.usage_all(agent="sentiment")
     assert len(users) == 2
     by_key = {u["apikey"]: u for u in users}
     assert by_key["sk-b"]["paid"]["total"] == 5
@@ -297,7 +300,8 @@ def test_admin_usage_all(sqlite_db):
 def test_add_quota(sqlite_db):
     """管理员加额度。"""
     _seed_apikey()
-    billing.add_free_quota("sk-usertest123", 5)
-    billing.add_paid_quota("sk-usertest123", 3)
-    row = db.query("SELECT free_quota, paid_quota FROM api_keys WHERE apikey='sk-usertest123'")[0]
+    billing.add_free_quota("sk-usertest123", "sentiment", 5)
+    billing.add_paid_quota("sk-usertest123", "sentiment", 3)
+    row = db.query("SELECT free_quota, paid_quota FROM agent_api_keys "
+                   "WHERE apikey='sk-usertest123' AND agent='sentiment'")[0]
     assert row["free_quota"] == 15 and row["paid_quota"] == 3

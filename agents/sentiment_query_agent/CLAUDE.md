@@ -19,10 +19,8 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 | 文件 | 职责 |
 |---|---|
 | [agent.py](agent.py) | 图构建入口:`run_pipeline()` 跑完整流水线,AsyncSqliteSaver checkpointer(thread_id=group_id) |
-| [api.py](api.py) | FastAPI:提交/进度/status/方案/勾选/stop/入库/导出 + health 9 接口 + 配额资费 8 接口(v1.24.0) |
-| [auth.py](auth.py) | apikey 鉴权(MySQL)+ 管理员校验 + 资源归属(管理员放行) |
-| [billing.py](billing.py) | 配额与资费:api_keys + billing_records(MySQL),额度扣减(先免费后付费)事务原子,pending 上限 5 |
-| [apikey_mgmt.py](apikey_mgmt.py) | apikey 管理:创建(默认 10/0)/修改(资费继承+迁移)/删除(软删)+ 管理员初始化 |
+| [api.py](api.py) | FastAPI:提交/进度/status/方案/勾选/stop/入库/导出 + health 9 接口 + 配额资费 8 接口(v1.25.0) |
+| 计费/鉴权/apikey 管理 | 公共组件 [`common/billing.py`](../../common/billing.py) / [`common/auth.py`](../../common/auth.py) / [`common/apikey_mgmt.py`](../../common/apikey_mgmt.py)(agent='sentiment',统一表 agent_api_keys/agent_billing_records) |
 | [graph/state.py](graph/state.py) | 数据模型:SchemeGroup→Scheme→Track 三级 + AgentState |
 | [graph/nodes.py](graph/nodes.py) | 6 步节点:每步内联 prompt + LLM(强制 JSON)+ 调 skill 脚本标准化 |
 | [graph/flows.py](graph/flows.py) | 图构建:顺序边,单步失败标 error 不中断 |
@@ -41,8 +39,8 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - **加 skill**:复制到 `skills/`(agent 专属)或 `common/skills/`(共享),`loader.py` 的 `_AVAILABLE_SKILLS` 注册摘要。
 - **改 skill 加载方式**:`graph/nodes.py` 的 `_SKILL_HINT`(工具提示)+ `bind_tools([load_skill], strict=True)`(每步绑定);上限 2 回合在 `_step_node` 的工具循环。
 - **接真实搜索**:`tools/websearch.py` 已接 gateway MCP 池;改 `.env` 的 `MCP_GATEWAY_URL/TOKEN`。
-- **配配额存储(v1.24.0)**:`.env` 的 `MYSQL_URL`(agentstore 库)+ `ADMIN_APIKEY`(管理员,额度 99999999)。apikey 由管理员用 `POST /api/v1/apikeys` 创建,不再用 API_KEYS_JSON。
-- **配额开发**:`billing.py`(扣减逻辑)+ `apikey_mgmt.py`(apikey 管理)+ `common/db.py`(MySQL/SQLite 双后端)。
+- **配配额存储(v1.25.0)**:`.env` 的 `MYSQL_URL`(agentstore 库,统一表 agent_*)` + `ADMIN_APIKEY`(管理员,额度 99999999)。apikey 由管理员用 `POST /api/v1/apikeys` 创建,不再用 API_KEYS_JSON。
+- **配额开发(v1.25.0)**:调 `common.billing` / `common.auth` / `common.apikey_mgmt`(agent='sentiment',统一表 agent_api_keys/agent_billing_records);存储统一走 `common/db.py`(MySQL 生产 / SQLite 测试双后端),业务代码不直接连库。本 agent 不再有独立 billing.py / auth.py / apikey_mgmt.py(v1.25.0 已删)。
 - **跑测试**:`pytest tests/test_sentiment_query_agent.py`(脚本/store/配额/鉴权/计费单测,SQLite 后端;图/端到端需外部服务)。
 - **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
   `agents/sentiment_query_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v1.24.0 → 下版 v1.25);
@@ -68,5 +66,5 @@ START → step1 → step2 → step3 → step4 → step5 → step6 → END
 - 用户标识(apikey)只进日志/计费,不进 span label(OTel 高基数约束)。
 - commit 后方案组冻结,改勾选须重新生成;仅 review 状态可 commit(stopped/generating 拒绝)。
 - skill 原样保留在项目内(agent 专属),不依赖 ~/.claude/skills/。
-- **配额/资费(v1.24.0)**:apikey 即用户,存 MySQL(agentstore 库);额度扣减先免费后付费,commit 时事务原子;pending 上限 5 每 apikey;管理员(ADMIN_APIKEY)不受归属限制。数据库访问统一走 `common/db.py`(MySQL 生产/SQLite 测试),业务代码不直接连库。
-- **发布 v1.24.0 前置**:生产 MySQL 建表(init_tables.sql)→ 迁移旧数据(migrate_legacy.py dry-run→执行)→ 配 MYSQL_URL/ADMIN_APIKEY → 部署。
+- **配额/资费(v1.25.0)**:apikey 即用户,存 MySQL(agentstore 库,统一表 agent_api_keys/agent_billing_records,agent='sentiment');额度扣减先免费后付费,commit 时事务原子;pending 上限 5 每 apikey;管理员(ADMIN_APIKEY)不受归属限制。接口端点/参数/返回不变。数据库访问统一走 `common/db.py`(MySQL 生产/SQLite 测试),业务代码不直接连库。
+- **发布 v1.25.0 前置**:生产 MySQL 建表(init_tables.sql,含 agent_* 两表)→ 配 MYSQL_URL/ADMIN_APIKEY → 部署。老表 api_keys/billing_records 保留不删(回滚路径)。

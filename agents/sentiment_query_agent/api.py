@@ -2,9 +2,11 @@
 
 设计见 docs/superpowers/specs/2026-08-06-sentiment-query-agent-sentiment-query-agent-design.md §7/§8。
 
-鉴权:所有接口需 Bearer apikey(auth.authenticate 依赖)。
-归属:所有 /groups/{id}/* 校验 owner(auth.assert_owner)。
-计费:创建记 pending,commit 转正式(billing)。
+鉴权:所有接口需 Bearer apikey(common.auth.check_apikey 依赖,agent='sentiment')。
+归属:所有 /groups/{id}/* 校验 owner(common.auth.assert_owner)。
+计费:创建记 pending,commit 转正式(common.billing)。
+apikey 管理走 common.apikey_mgmt(agent='sentiment');创建接口保持"调用方传 key"
+语义,由本地兼容包装 _create_apikey_compat 适配(见下)。
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -22,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from agents.sentiment_query_agent import apikey_mgmt, auth, billing
+from common import apikey_mgmt, auth, billing, db
 from agents.sentiment_query_agent.agent import run_pipeline
 from agents.sentiment_query_agent.graph.state import (
     STATUS_COMMITTED, STATUS_GENERATING, STATUS_REVIEW, STATUS_STOPPED,
@@ -43,6 +46,8 @@ app.add_middleware(
 )
 
 logger = logging.getLogger(__name__)
+
+_AGENT = "sentiment"  # 公共计费/鉴权组件的 agent 维度(单表收敛后按 agent 隔离额度)
 
 
 def _setup_file_logging() -> None:
@@ -71,7 +76,43 @@ def _setup_file_logging() -> None:
 
 
 def _user(request: Request) -> str:
-    return auth.authenticate(request)
+    """Bearer apikey 鉴权依赖(agent='sentiment'):解析头 + common.auth 校验,无效 → 401。"""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="缺少 Authorization: Bearer <apikey>")
+    apikey = auth_header[7:].strip()
+    auth.check_apikey(apikey, _AGENT)
+    return apikey
+
+
+def _is_admin(user: str) -> bool:
+    """user 是否为 sentiment 管理员(资费查询分流)。无效/非 active → False(语义同旧 auth.is_admin)。"""
+    try:
+        return auth.check_apikey(user, _AGENT)["role"] == "admin"
+    except HTTPException:
+        return False
+
+
+def _create_apikey_compat(apikey: str) -> dict:
+    """兼容包装:保持"调用方传 key"语义(旧 POST /apikeys 行为)。
+
+    公共 create_apikey(agent, name, role) 为服务端随机 key,与 sentiment 现有
+    接口(调用方传 apikey 字符串)签名不兼容;故在 api.py 层校验 sk- 格式后手动
+    插 agent_api_keys(agent='sentiment'),返回结构与旧版一致。
+    """
+    if not re.fullmatch(r"sk-[A-Za-z0-9]{6,64}", apikey):
+        raise HTTPException(status_code=400, detail="apikey 格式:sk- 开头 + 6-64 位字母数字")
+    try:
+        db.execute(
+            "INSERT INTO agent_api_keys (apikey, agent, role, status, free_quota, paid_quota) "
+            "VALUES (%s, %s, 'normal', 'active', 10, 0)",
+            (apikey, _AGENT),
+        )
+    except RuntimeError as exc:
+        if "Duplicate" in str(exc) or "1062" in str(exc) or "UNIQUE" in str(exc):
+            raise HTTPException(status_code=409, detail="apikey 已存在") from exc
+        raise
+    return {"apikey": apikey, "free_quota": 10, "paid_quota": 0}
 
 
 class CreateGroupRequest(BaseModel):
@@ -95,9 +136,8 @@ async def _startup() -> None:
     # 提交元信息:group_id → {owner, company_name, meta, created_at}
     # 用途:checkpoint 落盘前(提交后瞬间)的归属校验与 stop 兜底
     app.state.metas = {}
-    # 确保管理员 apikey 存在(额度 99999999)
-    from agents.sentiment_query_agent import apikey_mgmt
-    apikey_mgmt.ensure_admin()
+    # 确保管理员 apikey 存在(额度 99999999,幂等)
+    apikey_mgmt.ensure_admin(_AGENT)
 
 
 @app.get("/health")
@@ -111,8 +151,8 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
     if not req.company_name.strip():
         raise HTTPException(status_code=400, detail="company_name 必填")
     group_id = uuid.uuid4().hex[:16]
-    billing.check_quota(user)          # 额度校验:free+paid remaining > 0,否则 403
-    billing.create_pending(user, group_id)  # 计费:记 pending,commit 转正式
+    billing.check_quota(user, _AGENT)          # 额度校验:free+paid remaining > 0,否则 403
+    billing.create_pending(user, _AGENT, group_id)  # 计费:记 pending,commit 转正式
 
     meta = {
         "role": req.role,
@@ -125,8 +165,9 @@ async def create_group(req: CreateGroupRequest, user: str = Depends(_user)):
             group = await run_pipeline(group_id, req.company_name, user, meta)
             scheme_store.save_draft(group)  # 完成后落草稿(未 commit)
         except Exception as exc:
-            # 任务失败:落错误草稿,进度接口可查(不静默)
+            # 任务失败:落错误草稿,进度接口可查(不静默);取消 pending 释放并发额度
             logger.error("service=sentiment-query-agent event=pipeline_failed group_id=%s error=%s", group_id, exc)
+            billing.cancel_pending(user, _AGENT, group_id)
             scheme_store.save_draft({
                 "group_id": group_id, "owner": user, "company_name": req.company_name,
                 "meta": meta, "status": "failed", "step_status": [],
@@ -155,7 +196,7 @@ async def get_progress(group_id: str, user: str = Depends(_user)):
         group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
     return {
         "group_id": group_id,
         "status": group["status"],
@@ -177,7 +218,7 @@ async def get_status(group_id: str, user: str = Depends(_user)):
         group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
 
     # 当前步骤:有 running 步取其步号,否则取已出现的最大步号
     step_status = group.get("step_status", [])
@@ -217,7 +258,7 @@ async def stop_group(group_id: str, user: str = Depends(_user)):
         group = await _load_from_checkpoint(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
 
     if group["status"] not in (STATUS_GENERATING, STATUS_REVIEW):
         raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 generating/review 可停止")
@@ -235,7 +276,7 @@ async def stop_group(group_id: str, user: str = Depends(_user)):
     group["status"] = STATUS_STOPPED
     scheme_store.save_draft(group)
     # 取消 pending 计费记录,释放并发额度(stop 未 commit 不计费)
-    billing.cancel_pending(user, group_id)
+    billing.cancel_pending(user, _AGENT, group_id)
     logger.info("service=sentiment-query-agent event=group_stopped group_id=%s user=%s", group_id, user)
     return {"group_id": group_id, "status": STATUS_STOPPED}
 
@@ -268,7 +309,7 @@ async def get_schemes(group_id: str, user: str = Depends(_user)):
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
     return {
         "group_id": group_id,
         "company_name": group["company_name"],
@@ -285,7 +326,7 @@ async def update_selection(group_id: str, req: SelectionRequest, user: str = Dep
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
     if group["status"] == STATUS_COMMITTED:
         raise HTTPException(status_code=409, detail="方案组已入库冻结,不可改勾选")
 
@@ -306,14 +347,14 @@ async def commit_group(group_id: str, user: str = Depends(_user)):
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
     if group["status"] == STATUS_COMMITTED:
         raise HTTPException(status_code=409, detail="已入库")
     if group["status"] != STATUS_REVIEW:
         raise HTTPException(status_code=409, detail=f"组状态 {group['status']},仅 review(待勾选)可入库")
     group["status"] = STATUS_COMMITTED
     scheme_store.save_committed(group)
-    billing.commit(user, group_id)
+    billing.commit(user, _AGENT, group_id)
     return {"group_id": group_id, "status": STATUS_COMMITTED}
 
 
@@ -323,7 +364,7 @@ async def export_group(group_id: str, user: str = Depends(_user)):
     group = scheme_store.load_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="方案组不存在")
-    auth.assert_owner(user, group)
+    auth.assert_owner(user, group.get("owner"), admin=user)
     out = f"/tmp/{group_id}_tasks.xlsx"
     converter.export_excel(group, out)
     return FileResponse(out, filename=f"{group_id}_tasks.xlsx")
@@ -348,60 +389,65 @@ class QuotaChangeRequest(BaseModel):
 @app.post("/api/v1/apikeys")
 async def create_apikey_api(req: CreateApiKeyRequest, user: str = Depends(_user)):
     """创建 apikey(默认免费 10/付费 0)。仅管理员。"""
-    auth.require_admin(user)
-    return apikey_mgmt.create_apikey(req.apikey)
+    auth.require_admin(user, _AGENT)
+    return _create_apikey_compat(req.apikey)
 
 
 @app.put("/api/v1/apikeys")
 async def update_apikey_api(req: UpdateApiKeyRequest, user: str = Depends(_user)):
     """修改 apikey:旧 key → 新 key,资费继承 + 历史迁移。仅管理员。"""
-    auth.require_admin(user)
-    return apikey_mgmt.update_apikey(req.old_apikey, req.new_apikey)
+    auth.require_admin(user, _AGENT)
+    return apikey_mgmt.update_apikey(_AGENT, req.old_apikey, req.new_apikey)
 
 
 @app.delete("/api/v1/apikeys/{apikey}")
 async def delete_apikey_api(apikey: str, user: str = Depends(_user)):
     """删除 apikey(软删,数据保留)。仅管理员。"""
-    auth.require_admin(user)
-    return apikey_mgmt.delete_apikey(apikey)
+    auth.require_admin(user, _AGENT)
+    apikey_mgmt.deactivate_apikey(_AGENT, apikey, user)
+    return {"apikey": apikey, "deleted": True}
 
 
 @app.get("/api/v1/apikeys/list")
 async def list_apikeys_api(user: str = Depends(_user)):
     """查所有普通用户 apikey 额度。仅管理员。"""
-    auth.require_admin(user)
-    return {"users": billing.usage_all()}
+    auth.require_admin(user, _AGENT)
+    return {"users": billing.usage_all(agent=_AGENT)}
 
 
 @app.get("/api/v1/apikeys/pending")
 async def pending_api(user: str = Depends(_user)):
     """查当前 apikey 的 pending 任务。本人。"""
-    return {"apikey": user, "pending": billing.list_pending(user)}
+    pending = [
+        {"group_id": r["bill_no"], "created_at": r["created_at"]}
+        for r in billing.list_pending(user, _AGENT)
+    ]
+    return {"apikey": user, "pending": pending}
 
 
 @app.get("/api/v1/billing/usage")
 async def billing_usage_api(user: str = Depends(_user)):
     """资费查询:普通查自己;管理员查全部。"""
-    if auth.is_admin(user):
-        return {"role": "admin", "users": billing.usage_all()}
-    return {"role": "normal", **billing.usage(user)}
+    if _is_admin(user):
+        return {"role": "admin", "users": billing.usage_all(agent=_AGENT)}
+    return {"role": "normal", **billing.usage(user, _AGENT)}
 
 
 @app.post("/api/v1/billing/quota/paid")
 async def add_paid_quota_api(req: QuotaChangeRequest, user: str = Depends(_user)):
     """增加付费额度。仅管理员。"""
-    auth.require_admin(user)
+    auth.require_admin(user, _AGENT)
     if req.count <= 0:
         raise HTTPException(status_code=400, detail="count 必须为正数")
-    billing.add_paid_quota(req.apikey, req.count)
+    billing.add_paid_quota(req.apikey, _AGENT, req.count)
     return {"apikey": req.apikey, "paid_added": req.count}
 
 
 @app.post("/api/v1/billing/quota/free")
 async def add_free_quota_api(req: QuotaChangeRequest, user: str = Depends(_user)):
     """增加免费额度。仅管理员。"""
-    auth.require_admin(user)
+    auth.require_admin(user, _AGENT)
     if req.count <= 0:
         raise HTTPException(status_code=400, detail="count 必须为正数")
-    billing.add_free_quota(req.apikey, req.count)
+    billing.add_free_quota(req.apikey, _AGENT, req.count)
     return {"apikey": req.apikey, "free_added": req.count}
