@@ -182,6 +182,8 @@ def report_history(agent: str | None = None, apikey: str | None = None,
         params.append(apikey)
     sql += " GROUP BY DATE(committed_at), agent ORDER BY d, agent"
     rows = db.query(sql, tuple(params))
+    # str(r["d"]):DATE(committed_at) 在 SQLite 返回字符串、MySQL 返回 date 对象,
+    # 归一化为字符串保证 JSON 可序列化 + date 比较稳定(双后端兼容)。
     return {"series": [
-        {"date": r["d"], "agent": r["agent"], "committed": r["committed"]} for r in rows
+        {"date": str(r["d"]), "agent": r["agent"], "committed": r["committed"]} for r in rows
     ]}

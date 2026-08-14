@@ -558,8 +558,9 @@ def test_report_history_committed_by_day(tmp_path, monkeypatch):
                "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b2", "committed", "2026-08-01 10:00:00"))
     db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
                "VALUES (%s,%s,%s,%s,%s)", ("k1", "contract", "b3", "committed", "2026-08-01 11:00:00"))
-    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status) "
-               "VALUES (%s,%s,%s,%s)", ("k1", "sentiment", "b4", "pending"))  # 非 committed 不入
+    # 非 committed 不入:带 in-range committed_at 的 pending 行,若漏掉 status 过滤会误入
+    db.execute("INSERT INTO agent_billing_records (apikey, agent, bill_no, status, committed_at) "
+               "VALUES (%s,%s,%s,%s,%s)", ("k1", "sentiment", "b4", "pending", "2026-08-01 12:00:00"))
     h = billing.report_history(days=30)
     series = {(s["date"], s["agent"]): s["committed"] for s in h["series"]}
     assert series[("2026-08-01", "sentiment")] == 2
