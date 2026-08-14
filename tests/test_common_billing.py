@@ -250,3 +250,41 @@ def test_auth_assert_owner(tmp_path, monkeypatch):
     with pytest.raises(Exception) as e:
         auth.assert_owner("k1", "k2", admin="k1")  # 传的管理员非 admin → 403
     assert getattr(e.value, "status_code", None) == 403
+
+
+# ===== 5. 存量迁移(scripts/migrate_billing.py,Task 5) =====
+# 老表 api_keys/billing_records 已由 _sqlite_env → db.init_tables() 建好(含
+# created_at/updated_at 等默认列),无需手动 CREATE,直接 INSERT 指定列造数据。
+
+
+def test_migrate_sentiment(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    db.execute("INSERT INTO api_keys (apikey, role, status, free_quota, paid_quota, "
+               "free_used, paid_used) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+               ("k1", "admin", "active", 100, 5, 2, 1))
+    db.execute("INSERT INTO billing_records (apikey, group_id, status) VALUES (%s,%s,%s)",
+               ("k1", "g1", "committed"))
+    from scripts.migrate_billing import migrate
+    stats = migrate(dry_run=False)
+    assert stats["keys"] == 1 and stats["records"] == 1
+    rows = db.query("SELECT apikey, agent, free_quota FROM agent_api_keys WHERE agent='sentiment'")
+    assert rows[0]["apikey"] == "k1" and rows[0]["free_quota"] == 100
+    rec = db.query("SELECT bill_no, status FROM agent_billing_records WHERE agent='sentiment'")
+    assert rec[0]["bill_no"] == "g1" and rec[0]["status"] == "committed"
+    # 幂等:再跑不重复
+    migrate(dry_run=False)
+    assert db.query("SELECT COUNT(*) n FROM agent_api_keys")[0]["n"] == 1
+    assert db.query("SELECT COUNT(*) n FROM agent_billing_records")[0]["n"] == 1
+
+
+def test_migrate_dry_run_no_write(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    db.execute("INSERT INTO api_keys (apikey, role, status, free_quota, paid_quota, "
+               "free_used, paid_used) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+               ("k1", "normal", "active", 10, 0, 0, 0))
+    from scripts.migrate_billing import migrate
+    stats = migrate(dry_run=True)
+    assert stats["keys"] == 1 and stats["records"] == 0
+    # dry-run 只统计不写
+    assert db.query("SELECT COUNT(*) n FROM agent_api_keys")[0]["n"] == 0
+    assert db.query("SELECT COUNT(*) n FROM agent_billing_records")[0]["n"] == 0
