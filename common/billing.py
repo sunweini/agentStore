@@ -41,16 +41,19 @@ def create_pending(apikey: str, agent: str, bill_no: str) -> None:
 
 
 def commit(apikey: str, agent: str, bill_no: str) -> None:
+    # 事务外前置 SELECT 判 pending 记录存在:无行 → 404(事务包装会把异常包成 RuntimeError,
+    # 404 语义必须在事务外触发才生效;事务内 UPDATE 0 行仍 RuntimeError 兜底防竞态)。
+    if not db.query("SELECT id FROM agent_billing_records WHERE agent=%s AND bill_no=%s",
+                    (agent, bill_no)):
+        raise HTTPException(status_code=404, detail="计费记录不存在")
+
     @db.transaction
     def _do(cur, exec) -> None:
         n = exec("UPDATE agent_billing_records SET status='committed', committed_at=NOW(), "
                  "quota_type='free' WHERE agent=%s AND bill_no=%s AND status='pending'",
                  (agent, bill_no))
         if n == 0:
-            rows = exec("SELECT id FROM agent_billing_records WHERE agent=%s AND bill_no=%s",
-                        (agent, bill_no))
-            if not rows:
-                raise HTTPException(status_code=404, detail="计费记录不存在")
+            # 前置 SELECT 已判记录存在,走到此处说明状态非 pending(已 committed/cancelled)→ 竞态兜底
             raise RuntimeError("计费记录更新失败")
         rows = exec("SELECT * FROM agent_api_keys WHERE apikey=%s AND agent=%s FOR UPDATE",
                     (apikey, agent))

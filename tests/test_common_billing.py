@@ -79,10 +79,22 @@ def test_commit_free_then_paid(tmp_path, monkeypatch):
     billing.commit("k1", "sentiment", "b1")
     u = billing.usage("k1", "sentiment")
     assert u["free"]["used"] == 1 and u["paid"]["used"] == 0
+    assert db.query("SELECT quota_type FROM agent_billing_records "
+                    "WHERE agent=%s AND bill_no=%s", ("sentiment", "b1"))[0]["quota_type"] == "free"
     billing.create_pending("k1", "sentiment", "b2")
     billing.commit("k1", "sentiment", "b2")
     u = billing.usage("k1", "sentiment")
     assert u["free"]["used"] == 1 and u["paid"]["used"] == 1
+    assert db.query("SELECT quota_type FROM agent_billing_records "
+                    "WHERE agent=%s AND bill_no=%s", ("sentiment", "b2"))[0]["quota_type"] == "paid"
+
+
+def test_commit_no_pending_404(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed()
+    with pytest.raises(Exception) as e:
+        billing.commit("k1", "sentiment", "b-none")  # 未 create_pending → 404
+    assert getattr(e.value, "status_code", None) == 404
 
 
 def test_cancel_filters_apikey(tmp_path, monkeypatch):
