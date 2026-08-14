@@ -99,6 +99,28 @@ def test_commit_no_pending_404(tmp_path, monkeypatch):
     assert getattr(e.value, "status_code", None) == 404
 
 
+def test_commit_wrong_apikey_not_cross_charge(tmp_path, monkeypatch):
+    """M6:错误 apikey 配有效 (agent, bill_no) 不扣他人/不误标(commit 按 apikey 过滤)。
+
+    场景:记录 b1 属于 k1;用 k2(同 agent 有效 key)commit b1 → 404,且
+    k1 的额度不扣、b1 保持 pending。
+    """
+    _sqlite_env(tmp_path, monkeypatch)
+    _seed("k1", "sentiment", free=5, paid=0)
+    _seed("k2", "sentiment", free=5, paid=0)
+    billing.create_pending("k1", "sentiment", "b1")
+    with pytest.raises(Exception) as e:
+        billing.commit("k2", "sentiment", "b1")  # 非记录 owner 的 apikey → 404
+    assert getattr(e.value, "status_code", None) == 404
+    # k1 额度未扣、b1 仍 pending、k2 未产生任何扣费
+    u1 = billing.usage("k1", "sentiment")
+    assert u1["free"]["used"] == 0
+    assert db.query("SELECT status FROM agent_billing_records "
+                    "WHERE agent=%s AND bill_no=%s", ("sentiment", "b1"))[0]["status"] == "pending"
+    u2 = billing.usage("k2", "sentiment")
+    assert u2["free"]["used"] == 0 and u2["pending_count"] == 0
+
+
 def test_cancel_filters_apikey(tmp_path, monkeypatch):
     _sqlite_env(tmp_path, monkeypatch)
     _seed()

@@ -43,15 +43,19 @@ def create_pending(apikey: str, agent: str, bill_no: str) -> None:
 def commit(apikey: str, agent: str, bill_no: str) -> None:
     # 事务外前置 SELECT 判 pending 记录存在:无行 → 404(事务包装会把异常包成 RuntimeError,
     # 404 语义必须在事务外触发才生效;事务内 UPDATE 0 行仍 RuntimeError 兜底防竞态)。
-    if not db.query("SELECT id FROM agent_billing_records WHERE agent=%s AND bill_no=%s",
-                    (agent, bill_no)):
+    # 按 apikey+agent+bill_no 三重过滤:防跨 apikey 命中 —— (agent, bill_no) 唯一约束
+    # 只在同 agent 内有效,调用方用他人 bill_no 配自己 apikey 若不按 apikey 过滤,
+    # 会把他人 pending 标 committed 并扣自己额度(终审 M6 安全)。
+    if not db.query("SELECT id FROM agent_billing_records "
+                    "WHERE apikey=%s AND agent=%s AND bill_no=%s",
+                    (apikey, agent, bill_no)):
         raise HTTPException(status_code=404, detail="计费记录不存在")
 
     @db.transaction
     def _do(cur, exec) -> None:
         n = exec("UPDATE agent_billing_records SET status='committed', committed_at=NOW(), "
-                 "quota_type='free' WHERE agent=%s AND bill_no=%s AND status='pending'",
-                 (agent, bill_no))
+                 "quota_type='free' WHERE apikey=%s AND agent=%s AND bill_no=%s "
+                 "AND status='pending'", (apikey, agent, bill_no))
         if n == 0:
             # 前置 SELECT 已判记录存在,走到此处说明状态非 pending(已 committed/cancelled)→ 竞态兜底
             raise RuntimeError("计费记录更新失败")
@@ -68,8 +72,9 @@ def commit(apikey: str, agent: str, bill_no: str) -> None:
             exec("UPDATE agent_api_keys SET paid_used=paid_used+1 WHERE apikey=%s AND agent=%s",
                  (apikey, agent))
             quota_type = "paid"
-        exec("UPDATE agent_billing_records SET quota_type=%s WHERE agent=%s AND bill_no=%s",
-             (quota_type, agent, bill_no))
+        exec("UPDATE agent_billing_records SET quota_type=%s "
+             "WHERE apikey=%s AND agent=%s AND bill_no=%s",
+             (quota_type, apikey, agent, bill_no))
     _do()
 
 
