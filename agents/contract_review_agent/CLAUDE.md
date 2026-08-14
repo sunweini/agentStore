@@ -48,7 +48,7 @@ START → parse → review_chapters → verify_refs → summarize → END
 - **配 embedding 模型**:`.env` 的 `EMBEDDING_*` 组(默认 huggingface 本地 bge-small-zh-v1.5;换模型后必须 drop `data/contract-rag` 重灌)。
 - **跑测试**:`pytest tests/test_contract_review_agent.py -v`(解析/校验层/seed/计费/接口单测,SQLite 后端;图/端到端需外部服务)。
 - **收尾更新 CHANGELOG**:改动归本 agent → 写本 agent 的
-  `agents/contract_review_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v0.5.0 → 下版 v0.6);
+  `agents/contract_review_agent/CHANGELOG.md`,bump 版本号(当前最大号 +1,现 v0.8.0 → 下版 v0.9);
   纯项目级(common/依赖)→ 根 `CHANGELOG.md` 项目级区。
 - **启动 API**:`uvicorn agents.contract_review_agent.api:app --reload`(配额/计费功能需配 MYSQL_URL)。
 - **部署命名规范**:compose 项目名 `deploy-contract-review-agent`(规范 `deploy-<agent>`,见根 CLAUDE.md 架构约定),端口 `CONTRACT_PORT` 环境变量驱动(生产 8000 / 测试 8001 避让 sentiment);deploy 用 `bash agents/contract_review_agent/deploy/deploy.sh`,测试环境 `PORT=8001`。详见 deploy/README.md。

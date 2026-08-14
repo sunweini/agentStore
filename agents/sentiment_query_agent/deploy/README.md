@@ -32,10 +32,25 @@
 2. **v1.24.0+ 配额前置**(一次性):
    - 生产 MySQL 建库建表:`mysql -umcp -p<pass> agentstore < agents/sentiment_query_agent/deploy/init_tables.sql`(库 agentstore 需先建,mcp 用户授权)
    - 迁移旧数据:先 dry-run 再执行 `python3 agents/sentiment_query_agent/scripts/migrate_legacy.py`(加 `--apply` 实际写库;需配 MYSQL_URL/ADMIN_APIKEY/API_KEYS_JSON 环境变量)
+   - **v1.25.0+ 另需切公共计费(统一表 agent_*)**,见下节「公共计费切换前置」—— 两段迁移都要做(先 migrate_legacy,再 migrate_billing)。
 
 3. 本地仓库根执行:`bash agents/sentiment_query_agent/deploy/deploy.sh`
 
-2. 本地仓库根执行:`bash agents/sentiment_query_agent/deploy/deploy.sh`
+## 公共计费切换前置(v1.25.0+,重要)
+
+新版本计费/鉴权走统一表 `agent_api_keys` / `agent_billing_records`(agent='sentiment',与 contract 同表同
+schema);存量数据在老表 `api_keys` / `billing_records`。**部署新版本前必须先迁移,否则现有 apikey 全 401**:
+
+1. **建表**:`mysql -umcp -p<pass> agentstore < agents/sentiment_query_agent/deploy/init_tables.sql`(已含 agent_* 两表;老表保留不删,幂等重跑无害)。
+2. **迁移存量**(先 dry-run 验证,再实迁):
+   ```bash
+   # 仓库根执行,需 MYSQL_URL 指向生产 agentstore 库
+   python3 scripts/migrate_billing.py --dry-run    # 只统计源表行数,不写库
+   python3 scripts/migrate_billing.py --apply      # 实迁 + 迁移后校验(行数 + 每 apikey 额度四元组)
+   ```
+   幂等:已迁入的 (apikey, agent) / (agent, bill_no) 自动跳过,可安全重跑。
+3. **部署**:`bash agents/sentiment_query_agent/deploy/deploy.sh`。
+4. **回滚**:老表 `api_keys` / `billing_records` 保留不删;需回滚到旧版(v1.24.0,老表存储)时,指定旧镜像 tag 重启即可(见「回滚」节)。
 
 ## 端口
 

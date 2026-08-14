@@ -1,12 +1,14 @@
 # 海外舆情检索方案生成 Agent — 接口文档
 
-版本:v1.24.0(2026-08-11)
+版本:v1.26.0(2026-08-14)
 生产地址:`http://10.33.17.72`(API 端口 `8000`,演示页端口 `80`)
 
 ## 0. 版本历史
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.26.0 | 2026-08-14 | **全局账单接口** `GET /api/v1/billing/usage_all`(管理员跨 agent 看全部账单,`?agent=` 可选过滤);现有 usage / apikeys/list 响应新增 `agent` 字段(additive);生产切换前置:migrate_billing.py 迁存量后再部署 |
+| v1.25.0 | 2026-08-14 | **计费/鉴权/apikey 管理切公共组件**(common.billing/auth/apikey_mgmt,agent='sentiment',统一表 agent_api_keys/agent_billing_records);失败路径补 cancel_pending;行为变化(admin 可停用 / update 去 owner 迁移)。接口端点/参数/返回不变 |
 | v1.24.0 | 2026-08-11 | **多用户配额与资费**:apikey 即用户,免费/付费额度,apikey 管理(创建/修改/删除),管理员,8 新接口,MySQL 存储(未部署,feature 分支) |
 | v1.2.0 | 2026-08-11 | 生产三错修复(bad_json/token超限/terms缺失);max_tokens=32768;去掉 thinking disabled;step6 risk 字段修复 |
 | v1.1.0 | 2026-08-07 | load_skill 方法论接入(每步 LLM 可调方法论,2 回合上限) |
@@ -43,6 +45,10 @@ Authorization: Bearer <apikey>
 ```
 
 **v1.24.0 起**:apikey 即用户,存 MySQL(api_keys 表),由管理员通过 `POST /api/v1/apikeys` 创建(默认免费额度 10 次)。apikey 决定**资源归属**(只能访问自己创建的方案组)与**额度**(commit 扣减)。管理员 apikey(`ADMIN_APIKEY`)额度 99999999,不受归属限制。
+
+**v1.25.0 起**:apikey 存统一表 `agent_api_keys`(agent='sentiment',与 contract 同表同 schema,(apikey, agent) 复合主键,额度按 agent 维度隔离),计费记录存 `agent_billing_records`(bill_no=group_id);计费/鉴权/apikey 管理统一走公共组件 `common.billing` / `common.auth` / `common.apikey_mgmt`。**接口端点/参数/返回不变**,仅存量存储表切换。
+
+> ⚠️ **生产切换前置(重要)**:存量 apikey 在老表 `api_keys` / `billing_records`。**部署 v1.25.0+ 前必须先迁移**:`python3 scripts/migrate_billing.py --dry-run`(验证)→ `--apply`(实迁,幂等 + 迁移后校验),把存量迁入 `agent_*` 表后再部署 —— **否则现有 apikey 全部 401**。老表保留不删(回滚路径)。
 
 **v1.24.0 前**:apikey 由 `.env` 的 `API_KEYS_JSON` 配置 apikey→用户映射(已废弃)。
 
@@ -420,13 +426,15 @@ curl -X POST http://10.33.17.72:8000/api/v1/apikeys \
 ```json
 {
   "users": [
-    {"apikey": "sk-a", "free": {"total": 10, "used": 3, "remaining": 7},
+    {"apikey": "sk-a", "agent": "sentiment", "free": {"total": 10, "used": 3, "remaining": 7},
      "paid": {"total": 5, "used": 1, "remaining": 4}},
-    {"apikey": "sk-b", "free": {"total": 10, "used": 0, "remaining": 10},
+    {"apikey": "sk-b", "agent": "sentiment", "free": {"total": 10, "used": 0, "remaining": 10},
      "paid": {"total": 0, "used": 0, "remaining": 0}}
   ]
 }
 ```
+
+> v1.25.0 起每个用户新增 `agent` 字段(additive,恒为 `sentiment`)。
 
 ---
 
@@ -453,6 +461,7 @@ curl -X POST http://10.33.17.72:8000/api/v1/apikeys \
 {
   "role": "normal",
   "apikey": "sk-a",
+  "agent": "sentiment",
   "free": {"total": 10, "used": 3, "remaining": 7},
   "paid": {"total": 5, "used": 1, "remaining": 4},
   "pending_count": 2
@@ -464,11 +473,13 @@ curl -X POST http://10.33.17.72:8000/api/v1/apikeys \
 {
   "role": "admin",
   "users": [
-    {"apikey": "sk-a", "free": {...}, "paid": {...}},
-    {"apikey": "sk-b", "free": {...}, "paid": {...}}
+    {"apikey": "sk-a", "agent": "sentiment", "free": {...}, "paid": {...}},
+    {"apikey": "sk-b", "agent": "sentiment", "free": {...}, "paid": {...}}
   ]
 }
 ```
+
+> v1.25.0 起新增 `agent` 字段(additive):普通用户响应在顶层,管理员响应的每个用户条目内(恒为 `sentiment`)。
 
 ---
 
@@ -498,6 +509,42 @@ curl -X POST http://10.33.17.72:8000/api/v1/apikeys \
 ```json
 {"apikey": "sk-a", "free_added": 5}
 ```
+
+---
+
+### 2.17 GET /api/v1/billing/usage_all — 全局账单(v1.26.0,仅管理员)
+
+管理员**跨 agent** 查看所有普通用户(role='normal' 且 active)的额度账单,供管理后台对账。与
+2.14 `/billing/usage` 区分:后者管理员只看当前 agent(sentiment)的普通用户;本接口缺省返回**全部 agent**。
+
+**请求**:`GET /api/v1/billing/usage_all`,头 `Authorization: Bearer <管理员apikey>`;可选 query 参数 `agent`(如 `?agent=contract`)仅返回该 agent。
+
+```bash
+curl http://10.33.17.72:8000/api/v1/billing/usage_all \
+  -H "Authorization: Bearer <管理员apikey>"
+```
+
+**响应 200**(真实结构,两个 agent 各一名用户):
+```json
+{
+  "usage": [
+    {"apikey": "sk-a", "agent": "sentiment",
+     "free": {"total": 10, "used": 3, "remaining": 7},
+     "paid": {"total": 5, "used": 1, "remaining": 4}},
+    {"apikey": "sk-b", "agent": "contract",
+     "free": {"total": 10, "used": 0, "remaining": 10},
+     "paid": {"total": 0, "used": 0, "remaining": 0}}
+  ]
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `usage[].apikey` | 普通用户 apikey |
+| `usage[].agent` | agent 维度(sentiment / contract / …) |
+| `usage[].free` / `paid` | 各额度 `total` / `used` / `remaining` |
+
+**错误**:`401`(apikey 无效)、`403 {"detail":"需要管理员权限"}`(非管理员)
 
 ---
 

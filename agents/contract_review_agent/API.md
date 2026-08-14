@@ -1,12 +1,13 @@
 # 合同审核 Agent — 接口文档
 
-版本:v0.5.0(2026-08-13)
+版本:v0.8.0(2026-08-14)
 部署:尚未上机生产(部署套件就绪,见 [deploy/README.md](deploy/README.md));本地/服务器 API 端口 `8000`。
 
 ## 0. 版本历史
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v0.8.0 | 2026-08-14 | **计费/鉴权/apikey 管理上提公共组件**(common.billing/auth/apikey_mgmt,agent='contract',统一表 agent_api_keys/agent_billing_records);`admin_list` 响应新增 `agent` 字段(additive) |
 | v0.5.0 | 2026-08-13 | **百度 OCR 接线**:扫描件(无文本层 pdf)自动走云端 OCR 分章后照常审核;缺凭据 `ocr_unconfigured`,失败 `ocr_failed`;`ocr_image_bytes` base64 bytes→str 修复 |
 | v0.4.0 | 2026-08-13 | **文档收尾 + 部署套件 + minor 清理**:API 文档、Dockerfile/compose/deploy.sh/init_tables.sql、审核时间动态化、法条 source_url 修正 |
 | v0.3.0 | 2026-08-13 | 内置法条种子(三法 294 条)+ 校验层运行时可用性加固(_exact 构造即加载 + seed 分批退避重试) |
@@ -36,7 +37,7 @@ POST /api/v1/contract/prompt    F1:优化审核 prompt(不计费)
 
 ### 鉴权
 
-所有 `/api/v1/*` 接口需请求头 `apikey`(contract 独立体系,存 MySQL `contract_api_keys` 表):
+所有 `/api/v1/*` 接口需请求头 `apikey`(v0.8.0 起存统一表 `agent_api_keys`,agent='contract';此前为独立 `contract_api_keys` 表):
 
 ```
 apikey: <apikey>
@@ -332,15 +333,17 @@ curl -X POST http://localhost:8000/api/v1/apikeys \
 ```json
 {
   "apikeys": [
-    {"apikey": "sk-9f3c2b1a4d5e6f7a", "role": "normal", "status": "active",
+    {"apikey": "sk-9f3c2b1a4d5e6f7a", "agent": "contract", "role": "normal", "status": "active",
      "free": {"total": 10, "used": 1, "remaining": 9},
      "paid": {"total": 0, "used": 0, "remaining": 0}},
-    {"apikey": "sk-aaaa...", "role": "admin", "status": "active",
+    {"apikey": "sk-aaaa...", "agent": "contract", "role": "admin", "status": "active",
      "free": {"total": 10, "used": 0, "remaining": 10},
      "paid": {"total": 0, "used": 0, "remaining": 0}}
   ]
 }
 ```
+
+> v0.8.0 起每个 apikey 新增 `agent` 字段(additive,恒为 `contract`)。
 
 **错误**:`401`、`403`
 

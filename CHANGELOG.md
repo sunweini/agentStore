@@ -9,7 +9,8 @@
 
 | Agent | 当前版本 | CHANGELOG |
 |---|---|---|
-| sentiment-query-agent | v1.24.0 | [CHANGELOG](agents/sentiment_query_agent/CHANGELOG.md) |
+| sentiment-query-agent | v1.26.0 | [CHANGELOG](agents/sentiment_query_agent/CHANGELOG.md) |
+| contract-review-agent | v0.8.0 | [CHANGELOG](agents/contract_review_agent/CHANGELOG.md) |
 | kingdee-plugin-agent | v1.26.0 | [CHANGELOG](agents/kingdee_plugin_agent/CHANGELOG.md) |
 
 > 每 agent 独立版本号序列,撞号消除。改动归属哪个 agent → 更新该 agent 的
@@ -23,6 +24,18 @@
 - 依赖升级 / 工作流约定 / 基建
 
 ## 项目级历史
+
+### 2026-08-14(公共计费组件:common.billing/apikey_mgmt/auth + 统一表 + 迁移脚本)
+
+#### 变更
+
+- **公共计费组件新建**(设计文档 `docs/superpowers/specs/2026-08-14-common-billing-component-design.md`):
+  - `common/billing.py`:check_quota / create_pending / commit / cancel_pending / usage / usage_all / add_free_quota / add_paid_quota,额度按 **(apikey, agent)** 维度,先免费后付费,commit 事务原子,pending 上限 5
+  - `common/apikey_mgmt.py`:create_apikey(服务端随机 key)/ update_apikey(换 key,额度/流水继承)/ deactivate_apikey(软删,统一 contract 规则:admin 目标可停用,仅"不可停用自己")/ admin_list / ensure_admin(每 agent 首个管理员引导,幂等)
+  - `common/auth.py`:check_apikey / require_admin / assert_owner
+- **单表收敛**:统一表 `agent_api_keys` / `agent_billing_records`((apikey, agent) 复合主键,agent_billing_records 以 bill_no 为业务单号);sentiment(agent='sentiment',bill_no=group_id)/ contract(agent='contract',bill_no=task_id) 同表同 schema,额度按 agent 维度隔离。`common/db.py init_tables()` 与两 agent `deploy/init_tables.sql` 同步追加。**老表 api_keys / billing_records / contract_* 保留不删(回滚路径)**。
+- **存量迁移脚本**:`scripts/migrate_billing.py` —— api_keys / billing_records → agent_api_keys / agent_billing_records(agent='sentiment');`--dry-run` 默认先行(只统计),`--apply` 实迁 + **迁移后校验**(新表行数 == 老表 + 每 apikey 额度四元组一致);check-then-insert 幂等(重跑跳过已迁行),兼容 SQLite(测试)/MySQL(生产)双后端。
+- sentiment / contract 两 agent 已接入公共组件(各自 agent 参数,接口端点/参数/返回不变),详见各 agent CHANGELOG 与 API.md。
 
 ### 2026-08-14(common/llm.py 支持请求超时)
 

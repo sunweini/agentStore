@@ -5,6 +5,29 @@
 
 ---
 
+## v1.26.0 — 2026-08-14(全局账单接口 usage_all)
+
+### 新增
+
+- **`GET /api/v1/billing/usage_all`(仅管理员)**:全局账单,管理员**跨 agent** 看所有普通用户额度
+  (`billing.usage_all(agent=None)` 缺省全部,`?agent=` 可选过滤),供管理后台对账;与 `/billing/usage`
+  区分(后者管理员只看 sentiment 当前 agent)。响应 `{"usage": [{apikey, agent, free, paid}]}`。
+- **现有 usage / apikeys/list 响应新增 `agent` 字段(additive,向后兼容)**:普通用户 usage 响应顶层、
+  管理员 users 每项、apikeys/list 每项,恒为 `"sentiment"`。
+
+### 生产切换前置(重要)
+
+- **部署前必须迁移存量**:先 `python3 scripts/migrate_billing.py --dry-run` 验证,再 `--apply` 实迁
+  (api_keys / billing_records → agent_api_keys / agent_billing_records,agent='sentiment',幂等 +
+  迁移后校验);**否则现有 apikey 全 401**。老表保留不删(回滚路径)。详见 deploy/README.md。
+
+### 文档
+
+- CLAUDE.md / API.md 同步:v1.26.0 版本号与接口数(配额资费 9 接口)、usage_all 接口文档、
+  usage 响应 agent 字段标注、生产切换前置说明。
+
+---
+
 ## v1.25.0 — 2026-08-14(计费切公共组件,agent='sentiment';失败路径补 cancel_pending)
 
 ### 技术变更

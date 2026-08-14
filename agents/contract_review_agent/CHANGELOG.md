@@ -18,6 +18,14 @@
 - `deploy/init_tables.sql` 追加 `agent_api_keys` / `agent_billing_records` 两表
   (MySQL 方言,与 `common/db.py init_tables()` 一致);老表保留不删(回滚路径)。
 
+### 收尾(Task 9 文档同步,2026-08-14)
+
+- `CLAUDE.md`:版本号修正(现 v0.8.0 → 下版 v0.9,原误标 v0.5.0)。
+- `API.md`:版本头 bump v0.8.0;`admin_list` 响应标注新增 `agent` 字段(additive,恒为 `contract`);
+  鉴权节注明存储表为统一表 `agent_api_keys`(agent='contract')。
+- `deploy/README.md`:记录生产切换步骤(建 agent_* 表 → migrate_billing.py dry-run→apply → 部署;
+  contract 无生产存量,migrate 仅迁 sentiment 老表,此步可跳过),老表 contract_* 保留可回滚。
+
 ---
 
 ## v0.7.0 — 2026-08-14(性能:必查法条相关性裁剪 + LLM 超时 + 进度回显)

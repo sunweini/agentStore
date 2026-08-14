@@ -10,7 +10,7 @@
 | `Dockerfile` | api 镜像(build context = 仓库根,勿在本目录直接 build) |
 | `requirements-agent.txt` | 精简依赖(无本地 OCR / 无 torch;含 python-docx/pypdf + Chroma 向量库) |
 | `docker-compose.yml` | api(8000),自包含,不动根 compose |
-| `init_tables.sql` | MySQL 建 `contract_api_keys` / `contract_billing_records` 两表 |
+| `init_tables.sql` | MySQL 建 `contract_*` 两表(老,回滚用)+ `agent_api_keys` / `agent_billing_records`(统一表,agent='contract') |
 | `deploy.sh` | rsync 上机 → build → up → 健康检查 → 法条向量库 seed(空则灌) |
 
 ## 首次部署
@@ -39,9 +39,23 @@
 
 2. **MySQL 建表**(一次性):`mysql -umcp -p<pass> agentstore < agents/contract_review_agent/deploy/init_tables.sql`(库 `agentstore` 需先建,mcp 用户授权;生产若已有该库,幂等重跑无害)。
 
-3. **管理员 apikey**(一次性):建表后调用 `POST /api/v1/apikeys` 需要管理员;首个管理员可直接 SQL 插入 `contract_api_keys`(role='admin'),后续管理员可用管理接口再建。
+3. **管理员 apikey**(一次性):建表后调用 `POST /api/v1/apikeys` 需要管理员;首个管理员可直接 SQL 插入统一表 `agent_api_keys`(agent='contract', role='admin'),后续管理员可用管理接口再建。
 
 4. 本地仓库根执行:`bash agents/contract_review_agent/deploy/deploy.sh`(host/port/key 可用 `REMOTE_HOST=/REMOTE_USER=/SSH_PORT=/SSH_KEY=` 环境变量覆盖)。
+
+## 公共计费统一表(v0.8.0,agent_*)
+
+新版本计费/鉴权走统一表 `agent_api_keys` / `agent_billing_records`(agent='contract',与 sentiment 同表同
+schema,(apikey, agent) 复合主键,额度按 agent 维度隔离);老表 `contract_api_keys` / `contract_billing_records`
+保留不删(回滚路径)。
+
+**生产切换步骤**:
+
+1. **建表**:`mysql -umcp -p<pass> agentstore < agents/contract_review_agent/deploy/init_tables.sql`(已含 agent_* 两表 + 老表,幂等重跑无害)。
+2. **存量迁移**:contract **当前无生产存量数据**,`scripts/migrate_billing.py` 无需执行 —— 该脚本仅迁移
+   sentiment 老表 api_keys / billing_records;若此前有 contract_* 临时/测试数据需保留,手工迁入 agent_* 即可(当前不适用)。
+3. **部署**:`bash agents/contract_review_agent/deploy/deploy.sh`。
+4. **回滚**:老表 `contract_*` 保留不删;需回滚到旧版(contract_* 表存储)时,指定旧镜像 tag 重启即可(见「回滚」节)。
 
 > ⚠️ 法条数据分两类,职责分离:
 > - **精确索引(校验层)**:内置法条源 `agents/contract_review_agent/data/laws/*.md` 随代码
