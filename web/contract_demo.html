@@ -121,8 +121,11 @@ async function readSSE(resp, onEvent){
   }
 }
 
-async function postSSE(path, body, onEvent){
-  const resp = await fetch(`${API}${path}`, {method:"POST", headers:body instanceof FormData?{}:{"Content-Type":"application/json"}, body});
+async function postSSE(path, body, onEvent, apikey){
+  const headers = {};
+  if(apikey) headers["apikey"] = apikey;
+  if(!(body instanceof FormData)) headers["Content-Type"] = "application/json";
+  const resp = await fetch(`${API}${path}`, {method:"POST", headers, body});
   if(!resp.ok){
     let msg = resp.statusText;
     try{ const j = await resp.json(); msg = j.detail || JSON.stringify(j); }catch(e){}
@@ -190,7 +193,7 @@ $("run_btn").onclick = async function(){
       else if(ev.event === "done"){ $("pbar").style.width = "100%"; $("pstep").textContent = "审核完成"; st.textContent = "完成"; st.className = "status ok"; }
       else if(ev.event === "failed"){ $("pbar").style.width = "100%"; $("pstep").textContent = "失败: " + ev.data; st.textContent = "失败: " + ev.data; st.className = "status err"; }
       else if(ev.event === "cancelled"){ $("pstep").textContent = "已取消"; st.textContent = "已取消"; st.className = "status err"; }
-    });
+    }, key);
     await loadResult(started);
   }catch(e){
     st.textContent = "失败: " + e.message; st.className = "status err"; $("pstep").textContent = "请求出错";
