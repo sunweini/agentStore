@@ -283,7 +283,7 @@ async def review(apikey: str = Header(...), contract_type: str = Form(...),
                 break
             time.sleep(0.5)
 
-    return EventSourceResponse(gen())
+    return EventSourceResponse(gen(), headers={"X-Task-Id": task_id})
 
 
 @app.get("/api/v1/contract/status")

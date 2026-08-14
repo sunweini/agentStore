@@ -116,8 +116,27 @@ async function readSSE(resp, onEvent){
     buf = parts.pop();
     for(const part of parts){
       const dataLine = part.split("\n").find(l => l.startsWith("data:"));
-      if(dataLine){ try{ onEvent(JSON.parse(dataLine.slice(5).trim())); }catch(e){} }
+      if(dataLine){
+        const raw = dataLine.slice(5).trim();
+        let ev = null;
+        try{ ev = JSON.parse(raw); }catch(e){ ev = {data: raw}; }
+        onEvent(ev);
+      }
     }
+  }
+}
+
+function applyProgress(p, st){
+  $("pbar").style.width = Math.min(95, Math.round((p.progress||0)*100)) + "%";
+  const title = p.title || p.stage_title || "";
+  const stageMap = {parse:"解析文档", review:"章节审核", verify:"核验法条引用", summarize:"生成报告"};
+  const s = stageMap[p.stage] || p.stage || "";
+  if(p.stage === "review" && p.total > 0){
+    $("pstep").textContent = `章节审核 第 ${Math.min((p.current||0)+1, p.total)}/${p.total} 章 · ${title}`;
+  } else if(s){
+    $("pstep").textContent = s + (title ? " · " + title : "");
+  } else {
+    $("pstep").textContent = "审核中…";
   }
 }
 
@@ -174,27 +193,39 @@ $("run_btn").onclick = async function(){
   fd.append("contract_type", $("type").value);
   fd.append("prompt", $("prompt").value);
   try{
-    let started = null;
-    await postSSE("/api/v1/contract/review", fd, (ev) => {
-      if(ev.event === "started"){ started = ev.data; curTaskId = ev.data; $("pstep").textContent = "已提交,审核中…"; }
-      else if(ev.event === "progress"){
-        const p = JSON.parse(ev.data || "{}");
-        $("pbar").style.width = Math.min(95, Math.round((p.progress||0)*100)) + "%";
-        const stageMap = {parse:"解析文档", review:"章节审核", verify:"核验法条引用", summarize:"生成报告"};
-        const s = stageMap[p.stage] || p.stage || "";
-        if(p.stage === "review" && p.total > 0){
-          $("pstep").textContent = `章节审核 第 ${Math.min(p.current+1, p.total)}/${p.total} 章 · ${p.title || ""}`;
-        } else if(s){
-          $("pstep").textContent = s + (p.title ? " · " + p.title : "");
-        } else {
-          $("pstep").textContent = "审核中…";
-        }
-      }
-      else if(ev.event === "done"){ $("pbar").style.width = "100%"; $("pstep").textContent = "审核完成"; st.textContent = "完成"; st.className = "status ok"; }
-      else if(ev.event === "failed"){ $("pbar").style.width = "100%"; $("pstep").textContent = "失败: " + ev.data; st.textContent = "失败: " + ev.data; st.className = "status err"; }
-      else if(ev.event === "cancelled"){ $("pstep").textContent = "已取消"; st.textContent = "已取消"; st.className = "status err"; }
-    }, key);
-    await loadResult(started);
+    const resp = await fetch(`${API}/api/v1/contract/review`, {method:"POST", headers:{apikey:key}, body:fd});
+    if(!resp.ok){
+      let msg = resp.statusText;
+      try{ const j = await resp.json(); msg = j.detail || JSON.stringify(j); }catch(e){}
+      throw new Error(`${resp.status} ${msg}`);
+    }
+    const tid = resp.headers.get("x-task-id") || "";
+    if(tid){ curTaskId = tid; }
+    // status 轮询兜底:SSE 被代理/网络缓冲时也能实时回显
+    let poll = null;
+    const pollStatus = async () => {
+      if(!curTaskId) return;
+      try{
+        const r = await fetch(`${API}/api/v1/contract/status?task_id=${curTaskId}`, {headers:{apikey:key}});
+        const t = await r.json();
+        if(t.status === "running"){ applyProgress(t, st); return; }
+        clearInterval(poll);
+        if(t.status === "done"){ $("pbar").style.width = "100%"; $("pstep").textContent = "审核完成"; st.textContent = "完成"; st.className = "status ok"; loadResult(curTaskId); }
+        else if(t.status === "failed"){ $("pstep").textContent = "失败: " + (t.error||""); st.textContent = "失败"; st.className = "status err"; }
+        else if(t.status === "cancelled"){ $("pstep").textContent = "已取消"; st.textContent = "已取消"; st.className = "status err"; }
+      }catch(e){}
+    };
+    poll = setInterval(pollStatus, 4000);
+    if(resp.headers.get("content-type")?.includes("text/event-stream")){
+      await readSSE(resp, (ev) => {
+        if(ev.event === "started"){ curTaskId = ev.data || curTaskId; $("pstep").textContent = "已提交,审核中…"; }
+        else if(ev.event === "progress"){ applyProgress(ev.data || {}, st); }
+        else if(ev.event === "done"){ clearInterval(poll); $("pbar").style.width = "100%"; $("pstep").textContent = "审核完成"; st.textContent = "完成"; st.className = "status ok"; loadResult(curTaskId); }
+        else if(ev.event === "failed"){ clearInterval(poll); $("pstep").textContent = "失败: " + ev.data; st.textContent = "失败: " + ev.data; st.className = "status err"; }
+        else if(ev.event === "cancelled"){ clearInterval(poll); $("pstep").textContent = "已取消"; st.textContent = "已取消"; st.className = "status err"; }
+      });
+    }
+    if(poll) clearInterval(poll);
   }catch(e){
     st.textContent = "失败: " + e.message; st.className = "status err"; $("pstep").textContent = "请求出错";
   }finally{ btn.disabled = false; stopBtn.disabled = true; }
