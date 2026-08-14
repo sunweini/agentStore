@@ -34,6 +34,8 @@
 - common/billing.py:新 `report_summary`(仅 active)/`report_history`(committed 按天)。
 - common/admin_api.py:mutation 端点(create/换 key/角色/软删/增额度)补结构化审计日志(apikey 一律 `_mask_apikey` 脱敏);ADMIN_APIKEY 未配置启动即告警。
 - web/admin.html:行内按钮改 tbody 一次性事件委托,quota tab 切换(不经 loadKeys)按钮不再失监听。
+- **生产部署(admin_console/)**:独立容器 `admin_console-admin-1`(端口 8003),nginx 80 端口 `/admin/` 路由反代(合并版 nginx-default.conf 覆盖 mount 源)。已上线 10.33.17.72,管理台 http://10.33.17.72/admin/。
+- 清理终审 deferred minors:billing.report_summary 排除 admin、create_apikey docstring 补 why、admin_api 请求体字段约束 + CORS 收紧、前端低额度阈值统一 LOW_N/额度健康度总览/editKey 预校验、测试补断言。
 
 ### 2026-08-14(公共计费硬化 M1-M8)
 
