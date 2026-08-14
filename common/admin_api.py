@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from common import apikey_mgmt, auth, billing, config
 
@@ -27,7 +27,10 @@ if not config.get_env("ADMIN_APIKEY"):
 
 app = FastAPI(title="agentStore 管理控制台", version="0.1.0")
 
-_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+# CORS:admin.html 由本服务同源 FileResponse 提供,浏览器同源请求不触发 CORS 预检,
+# 无需放开跨域。默认空(不跨域),仅当显式配 CORS_ORIGINS 才放开 —— 收紧默认,
+# 避免超级管理员凭据管理面被任意跨域站点访问。
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=_cors_origins,
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -42,34 +45,37 @@ def _require_super_admin(authorization: str = Header(default="")) -> str:
 
 
 class CreateApiKeyRequest(BaseModel):
-    agent: str
+    agent: str = Field(min_length=1, max_length=64)
     role: str = "normal"
+    # 负值不加 ge=0:须在 handler 内走 create_apikey 的 ValueError → 400(维持 400 语义,
+    # pydantic 的 ge 会返回 422 破坏既有测试)
     free_quota: int | None = None
     paid_quota: int | None = None
 
 
 class SetRoleRequest(BaseModel):
-    apikey: str
-    agent: str
-    role: str
+    apikey: str = Field(min_length=1, max_length=128)
+    agent: str = Field(min_length=1, max_length=64)
+    role: str = Field(min_length=1, max_length=10)
 
 
 class UpdateApiKeyRequest(BaseModel):
-    apikey: str
-    agent: str
-    new_apikey: str
+    apikey: str = Field(min_length=1, max_length=128)
+    agent: str = Field(min_length=1, max_length=64)
+    new_apikey: str = Field(min_length=1, max_length=128)
 
 
 class DeleteApiKeyRequest(BaseModel):
-    apikey: str
-    agent: str
+    apikey: str = Field(min_length=1, max_length=128)
+    agent: str = Field(min_length=1, max_length=64)
 
 
 class QuotaRequest(BaseModel):
-    apikey: str
-    agent: str
-    type: str
-    count: int
+    apikey: str = Field(min_length=1, max_length=128)
+    agent: str = Field(min_length=1, max_length=64)
+    type: str = Field(min_length=1, max_length=10)
+    # count 下界走 handler 手动校验(400),上界 le 防超 MySQL INT 上限 500
+    count: int = Field(le=1000000000)
 
 
 @app.get("/api/v1/admin/agents")

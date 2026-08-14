@@ -65,7 +65,11 @@ def _get_row(apikey: str, agent: str) -> dict | None:
 
 def create_apikey(agent: str, name: str, role: str = "normal",
                   free_quota: int | None = None, paid_quota: int | None = None) -> dict:
-    """创建 apikey,默认免费 10 / 付费 0;可选初始额度(负值 ValueError)。"""
+    """创建 apikey,默认免费 10 / 付费 0;可选初始额度(负值 ValueError)。
+
+    name 仅作创建时标签出现在返回值中(表结构无 name 列,不落库)。
+    role 白名单 normal/admin,非法 ValueError —— 防止任意调用方铸 admin 后门。
+    """
     if role not in _ALLOWED_ROLES:
         raise ValueError(f"非法 role: {role}(仅允许 {'/'.join(_ALLOWED_ROLES)})")
     fq = _DEFAULT_FREE_QUOTA if free_quota is None else free_quota

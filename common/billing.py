@@ -6,6 +6,8 @@ docs/superpowers/specs/2026-08-14-common-billing-component-design.md。
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from fastapi import HTTPException
 
 from common import db
@@ -147,11 +149,15 @@ def list_pending(apikey: str, agent: str) -> list[dict]:
 
 
 def report_summary(agent: str | None = None) -> dict:
-    """按 agent 汇总额度使用(仅 active key)。"""
+    """按 agent 汇总额度使用(仅 active 且 role='normal' key)。
+
+    排除 admin:管理员额度 99999999 是引导占位值,计入会淹没"合计"卡片、
+    可读性差,且 admin 不参与计费无对账意义。
+    """
     sql = ("SELECT agent, COUNT(*) AS key_count, SUM(free_used) AS free_used, "
            "SUM(free_quota - free_used) AS free_remaining, "
            "SUM(paid_used) AS paid_used, SUM(paid_quota - paid_used) AS paid_remaining "
-           "FROM agent_api_keys WHERE status='active'")
+           "FROM agent_api_keys WHERE status='active' AND role='normal'")
     params: tuple = ()
     if agent:
         sql += " AND agent=%s"
@@ -168,8 +174,6 @@ def report_summary(agent: str | None = None) -> dict:
 def report_history(agent: str | None = None, apikey: str | None = None,
                    days: int = 30) -> dict:
     """按天 committed 扣费趋势。cutoff 用 Python datetime 算(规避 INTERVAL 双后端差异)。"""
-    from datetime import datetime, timedelta
-
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     sql = ("SELECT DATE(committed_at) AS d, agent, COUNT(*) AS committed "
            "FROM agent_billing_records WHERE status='committed' AND committed_at >= %s")

@@ -528,6 +528,13 @@ def test_list_agents_counts_active(tmp_path, monkeypatch):
     billing_mgmt.create_apikey("contract", "u3")
     agents = {a["agent"]: a["key_count"] for a in billing_mgmt.list_agents()}
     assert agents == {"sentiment": 2, "contract": 1}
+    # 软删后 active 计数应下降:证明 WHERE status='active' 过滤生效(名不副实补齐)
+    admin = billing_mgmt.create_apikey("sentiment", "a", role="admin")["apikey"]
+    u1 = db.query("SELECT apikey FROM agent_api_keys WHERE agent='sentiment' "
+                  "AND role='normal' ORDER BY apikey")[0]["apikey"]
+    billing_mgmt.deactivate_apikey("sentiment", u1, admin)
+    agents2 = {a["agent"]: a["key_count"] for a in billing_mgmt.list_agents()}
+    assert agents2["sentiment"] == 2  # 原 2 normal + 1 admin,软删 1 normal → 剩 1 normal + 1 admin = 2
 
 
 # ===== 8. 报表(common/billing.py,Task 4) =====

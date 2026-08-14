@@ -1,8 +1,5 @@
 """管理控制台 API 测试(超级管理员,SQLite 后端)。"""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -73,6 +70,26 @@ def test_quota_add(client):
     r = client.post("/api/v1/admin/apikeys/quota", json={"apikey": k, "agent": "sentiment",
                                                          "type": "free", "count": 0}, headers=_auth())
     assert r.status_code == 400  # count 必须为正
+    r = client.post("/api/v1/admin/apikeys/quota", json={"apikey": k, "agent": "sentiment",
+                                                         "type": "premium", "count": 5}, headers=_auth())
+    assert r.status_code == 400  # type 非法
+
+
+def test_set_role_invalid_role_and_wrong_token(client):
+    k = client.post("/api/v1/admin/apikeys", json={"agent": "sentiment"}, headers=_auth()).json()["apikey"]
+    # 错误 token → 403
+    r = client.get("/api/v1/admin/agents", headers={"Authorization": "Bearer sk-wrong"})
+    assert r.status_code == 403
+    # 非法 role → 400(set_role 校验)
+    r = client.patch("/api/v1/admin/apikeys", json={"apikey": k, "agent": "sentiment", "role": "bogus"},
+                     headers=_auth())
+    assert r.status_code == 400
+
+
+def test_create_apikey_empty_agent_422(client):
+    # 空 agent → pydantic min_length=1 → 422
+    r = client.post("/api/v1/admin/apikeys", json={"agent": ""}, headers=_auth())
+    assert r.status_code == 422
 
 
 def test_report_endpoints(client):
