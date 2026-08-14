@@ -1,0 +1,8 @@
+# admin_console 生产镜像精简依赖(仅 FastAPI 栈 + pymysql,不含 langchain/llm/otel)。
+# 版本锁定对齐 sentiment deploy/requirements-agent.txt(生产已验证版本)。
+# admin_api 只依赖 common/{config,db,auth,billing,apikey_mgmt},均不碰 langchain。
+fastapi==0.141.1
+uvicorn==0.52.1
+pydantic==2.13.4
+pymysql>=1.1,<2
+python-dotenv==1.1.0

@@ -1,0 +1,32 @@
+# admin_console 生产 compose(自包含,不动根 docker-compose.yml)。
+# 项目名 deploy-admin(与 sentiment/contract 隔离,遵守部署命名规范)。
+# 用法:仓库根下 docker compose -f admin_console/docker-compose.yml up -d --build
+# 前置:.env 放仓库根(需 ADMIN_APIKEY + MYSQL_URL,与 sentiment 同 .env),rsync 不覆盖。
+services:
+  admin:
+    build:
+      context: ..
+      dockerfile: admin_console/Dockerfile
+    image: admin-console:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      # 内网端口 8003(避开 sentiment 8000 / contract 8002 / gateway 8081),nginx 反代
+      - "8003:8003"
+    env_file:
+      - ../.env
+    networks:
+      - deploy_mcp-net   # 连 MySQL(deploy-mysql-1,同 sentiment)
+      - deploy_default   # 被 deploy-nginx-1(sentiment nginx)反代访问
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  deploy_mcp-net:
+    name: deploy_mcp-net
+    external: true
+  deploy_default:
+    name: deploy_default
+    external: true
