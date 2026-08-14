@@ -437,3 +437,13 @@ def test_migrate_preserves_timestamps(tmp_path, monkeypatch):
                     "WHERE agent='sentiment' AND bill_no='g2'")[0]
     assert rec2["created_at"] == "2026-08-03 08:00:00"
     assert rec2["committed_at"] is None
+
+
+def test_is_super_admin(tmp_path, monkeypatch):
+    _sqlite_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("ADMIN_APIKEY", "sk-super")
+    assert auth.is_super_admin("sk-super") is True
+    assert auth.is_super_admin("sk-other") is False
+    monkeypatch.delenv("ADMIN_APIKEY", raising=False)
+    assert auth.is_super_admin("sk-super") is False  # 未配 → 恒 False(空 token 不匹配)
+    assert auth.is_super_admin("") is False

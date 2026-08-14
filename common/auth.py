@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from common import db
+from common import config, db
 
 
 def check_apikey(apikey: str, agent: str) -> dict:
@@ -55,3 +55,8 @@ def _is_admin(apikey: str, agent: str) -> bool:
     rows = db.query("SELECT role, status FROM agent_api_keys WHERE apikey=%s AND agent=%s "
                     "AND role='admin' AND status='active'", (apikey, agent))
     return bool(rows)
+
+
+def is_super_admin(token: str) -> bool:
+    """token 是否为全局超级管理员(.env ADMIN_APIKEY)。未配置 → 恒 False。"""
+    return token == config.get_env("ADMIN_APIKEY") and token != ""
