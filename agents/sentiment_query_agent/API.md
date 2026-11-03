@@ -1,15 +1,16 @@
 # 海外舆情检索方案生成 Agent — 接口文档
 
-版本:v1.26.0(2026-08-14)
+版本:v1.27.0(2026-08-14)
 生产地址:`http://10.33.17.72`(API 端口 `8000`,演示页端口 `80`)
 
 ## 0. 版本历史
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.27.0 | 2026-08-14 | **公共计费硬化**:`assert_owner` 加 agent 参数(管理员判定 per-agent);commit 三重 (apikey, agent, bill_no) 过滤防跨 apikey 扣费;双耗尽 guard;commit_group 计费失败分类上报(HTTPException 原样 / 其他 503)。接口端点/参数/返回不变 |
 | v1.26.0 | 2026-08-14 | **全局账单接口** `GET /api/v1/billing/usage_all`(管理员跨 agent 看全部账单,`?agent=` 可选过滤);现有 usage / apikeys/list 响应新增 `agent` 字段(additive);生产切换前置:migrate_billing.py 迁存量后再部署 |
 | v1.25.0 | 2026-08-14 | **计费/鉴权/apikey 管理切公共组件**(common.billing/auth/apikey_mgmt,agent='sentiment',统一表 agent_api_keys/agent_billing_records);失败路径补 cancel_pending;行为变化(admin 可停用 / update 去 owner 迁移)。接口端点/参数/返回不变 |
-| v1.24.0 | 2026-08-11 | **多用户配额与资费**:apikey 即用户,免费/付费额度,apikey 管理(创建/修改/删除),管理员,8 新接口,MySQL 存储(未部署,feature 分支) |
+| v1.24.0 | 2026-08-11 | **多用户配额与资费**:apikey 即用户,免费/付费额度,apikey 管理(创建/修改/删除),管理员,8 新接口,MySQL 存储 |
 | v1.2.0 | 2026-08-11 | 生产三错修复(bad_json/token超限/terms缺失);max_tokens=32768;去掉 thinking disabled;step6 risk 字段修复 |
 | v1.1.0 | 2026-08-07 | load_skill 方法论接入(每步 LLM 可调方法论,2 回合上限) |
 | v0.1.0 | 2026-08-10 | 生产部署,9 接口全链路验证 |

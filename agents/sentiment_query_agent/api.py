@@ -33,7 +33,7 @@ from agents.sentiment_query_agent.graph.state import (
 from agents.sentiment_query_agent.store import converter, scheme_store
 from common.otel import init_otel, get_tracer
 
-app = FastAPI(title="海外舆情检索方案生成 Agent", version="0.1.0")
+app = FastAPI(title="海外舆情检索方案生成 Agent", version="1.27.0")
 
 # CORS:允许前端演示页(web/demo.html)跨域访问
 # 生产用 CORS_ORIGINS 收紧(逗号分隔源,如 http://10.33.17.72);缺省 "*" 兼容测试环境

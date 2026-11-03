@@ -12,6 +12,7 @@
 - `assert_owner` 加 agent 参数,管理员判定改 **per-agent**(跨 agent admin 不放行);api.py 调用点同步。
 - `commit_group` 的 `billing.commit` 加 try/except:HTTPException 原样上报(404/403),其他异常记 `error_type=`(不泄露)转 503 明确报错。
 - 公共组件硬化(common/billing + apikey_mgmt + migrate,项目级):apikey 日志脱敏 / commit 三重 apikey 过滤 / 双耗尽防超扣 / usage_all 排序确定 / migrate 幂等校验 + 时间戳迁移。详见根 CHANGELOG。
+- 版本元数据修正(收尾遗漏补记):`api.py` FastAPI `version` 由 `0.1.0` 对齐为 `1.27.0`,API.md / INTEGRATION.md 头部版本同步;无接口行为变化。
 
 ---
 
